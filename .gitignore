@@ -1,0 +1,23 @@
+# Specs, plans and requirements live in the private sibling repo ../assistant-specs
+docs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Family data - never commit
+result.json
+**/exports/
+media/
+backups/
+*.dump
+*.sql.gz
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+.idea/
+TestResults/
