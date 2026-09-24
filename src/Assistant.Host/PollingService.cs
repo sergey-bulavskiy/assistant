@@ -41,7 +41,11 @@ public class PollingService : BackgroundService
             return;
         }
 
-        await EnsureBotStateAsync(identity, stoppingToken);
+        var ensured = await EnsureBotStateWithRetryAsync(identity, stoppingToken);
+        if (!ensured)
+        {
+            return;
+        }
 
         if (_options.Value.OwnerUserId is { } ownerId)
         {
@@ -100,11 +104,45 @@ public class PollingService : BackgroundService
     // IMessageStore is scoped (it wraps a scoped DbContext); PollingService is a singleton hosted
     // service, so it must never hold an IMessageStore field. Instead it resolves one from a fresh
     // DI scope each time it needs the store, here and in GetLastUpdateIdAsync below.
-    private async Task EnsureBotStateAsync(BotIdentity identity, CancellationToken cancellationToken)
+    //
+    // A transient DB failure here must not escape ExecuteAsync: BackgroundService's default
+    // exception behavior is to stop the whole host, so this retries with the same exponential
+    // backoff as GetMeWithRetryAsync instead of letting a single failed attempt bring the bot down.
+    private async Task<bool> EnsureBotStateWithRetryAsync(BotIdentity identity, CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var messageStore = scope.ServiceProvider.GetRequiredService<IMessageStore>();
-        await messageStore.EnsureBotStateAsync(identity, cancellationToken);
+        var backoff = _settings.MinBackoff;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var messageStore = scope.ServiceProvider.GetRequiredService<IMessageStore>();
+                await messageStore.EnsureBotStateAsync(identity, cancellationToken);
+                return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("ensureBotState failed: {ExceptionType}", ex.GetType().Name);
+
+                try
+                {
+                    await Task.Delay(backoff, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+
+                backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, _settings.MaxBackoff.TotalSeconds));
+            }
+        }
+
+        return false;
     }
 
     private async Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken)

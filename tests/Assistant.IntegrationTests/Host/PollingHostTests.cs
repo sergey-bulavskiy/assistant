@@ -209,4 +209,18 @@ public class PollingHostTests : IAsyncLifetime
 
         (await CountMessagesAsync()).ShouldBe(1);
     }
+
+    [Fact]
+    public async Task Transient_EnsureBotState_failure_does_not_stop_the_host()
+    {
+        using var factory = new AssistantWebApplicationFactory(_connectionString);
+        factory.EnsureBotStateFailures.FailNextTimes(2);
+        var client = factory.CreateClient();
+
+        factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(1, PrivateText(1, 111, "тест 1")));
+
+        await WaitForConditionAsync(() => factory.TelegramClient.SentMessages.Any(m => m.Text.StartsWith("Получил")), timeoutSeconds: 15);
+
+        (await CountMessagesAsync()).ShouldBe(1);
+    }
 }

@@ -59,11 +59,11 @@ public class FakeTelegramClient : ITelegramClient
         }
     }
 
-    public Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(long offset, int timeoutSeconds, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
+        IncomingUpdate[] result;
         lock (_lock)
         {
-            IncomingUpdate[] result;
             if (IgnoreOffset)
             {
                 result = _updates.OrderBy(u => u.UpdateId).ToArray();
@@ -73,9 +73,19 @@ public class FakeTelegramClient : ITelegramClient
             {
                 result = _updates.Where(u => u.UpdateId >= offset).OrderBy(u => u.UpdateId).ToArray();
             }
-
-            return Task.FromResult<IReadOnlyList<IncomingUpdate>>(result);
         }
+
+        if (result.Length == 0)
+        {
+            // The real Telegram long-poll blocks until an update arrives or the poll times out.
+            // Returning instantly here made PollingService spin at full speed with nothing to do,
+            // hammering Postgres for the lifetime of every test host — this delay stands in for
+            // that blocking wait. Cancellation propagates normally (no try/catch): the caller's
+            // own cancellation handling deals with it.
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+
+        return result;
     }
 
     public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken)

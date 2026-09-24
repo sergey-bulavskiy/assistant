@@ -1,5 +1,8 @@
+using Assistant.Application.Common;
+using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Host;
+using Assistant.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -13,6 +16,8 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _connectionString;
 
     public FakeTelegramClient TelegramClient { get; } = new();
+
+    public EnsureBotStateFailureInjector EnsureBotStateFailures { get; } = new();
 
     public AssistantWebApplicationFactory(string connectionString)
     {
@@ -37,7 +42,9 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
             {
                 ["ConnectionStrings:Assistant"] = _connectionString,
                 ["TELEGRAM_BOT_TOKEN"] = "test-token",
-                ["ALLOWED_USER_IDS"] = "111,222"
+                ["ALLOWED_USER_IDS"] = "111,222",
+                ["Database:MigrationMaxAttempts"] = "3",
+                ["Database:MigrationRetryDelaySeconds"] = "0.2"
             });
         });
 
@@ -51,6 +58,18 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
                 MinBackoff: TimeSpan.FromMilliseconds(20),
                 MaxBackoff: TimeSpan.FromMilliseconds(200),
                 LongPollTimeoutSeconds: 1));
+
+            // Decorate the real IMessageStore so tests can inject a transient failure into
+            // EnsureBotStateAsync (see EnsureBotStateFailureInjector / FlakyMessageStore) — every
+            // other member always delegates straight through to the real store.
+            services.RemoveAll<IMessageStore>();
+            services.AddScoped<IMessageStore>(sp =>
+            {
+                var db = sp.GetRequiredService<AssistantDbContext>();
+                var clock = sp.GetRequiredService<IClock>();
+                var inner = new MessageStore(db, clock);
+                return new FlakyMessageStore(inner, EnsureBotStateFailures);
+            });
         });
     }
 }

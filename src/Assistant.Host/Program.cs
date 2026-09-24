@@ -40,6 +40,9 @@ app.MapGet("/health", HealthEndpoint.HandleAsync);
 // are exhausted. An unhandled exception here crashes the process; under the container's restart
 // policy that means Docker restarts it and migrations are retried from scratch on the next boot —
 // this process does not keep running degraded and serving /health as 503.
+var migrationMaxAttempts = app.Configuration.GetValue("Database:MigrationMaxAttempts", 30);
+var migrationRetryDelaySeconds = app.Configuration.GetValue("Database:MigrationRetryDelaySeconds", 2.0);
+
 await DatabaseMigrator.MigrateAsync(
     async ct =>
     {
@@ -48,7 +51,9 @@ await DatabaseMigrator.MigrateAsync(
         await db.Database.MigrateAsync(ct);
     },
     app.Logger,
-    CancellationToken.None);
+    CancellationToken.None,
+    maxAttempts: migrationMaxAttempts,
+    delay: TimeSpan.FromSeconds(migrationRetryDelaySeconds));
 
 await app.RunAsync();
 return 0;
