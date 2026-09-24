@@ -6,6 +6,7 @@
     <Project Path="src/Assistant.Infrastructure/Assistant.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Assistant.IntegrationTests/Assistant.IntegrationTests.csproj" />
     <Project Path="tests/Assistant.UnitTests/Assistant.UnitTests.csproj" />
   </Folder>
 </Solution>
