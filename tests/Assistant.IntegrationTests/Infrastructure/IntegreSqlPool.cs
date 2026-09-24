@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using Assistant.Infrastructure.Persistence;
 using DotNet.Testcontainers.Builders;
@@ -20,6 +21,15 @@ public static class IntegreSqlPool
 {
     private static readonly Lazy<Task<PoolContext>> LazyContext =
         new(InitializeAsync, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    // Every test class in this assembly computes the exact same migration hash, so at suite
+    // startup they all race to create/checkout against the same not-yet-existing template.
+    // IntegreSQL (and the Postgres `CREATE DATABASE ... TEMPLATE` it issues under the hood) isn't
+    // designed to queue many concurrent racers against a template that doesn't exist yet, and can
+    // surface that as an intermittent 423/503/500 instead — so this process-local gate serializes
+    // callers per hash: only one at a time runs the POST/migrate/PUT/GET dance, the rest simply
+    // wait their turn, which (once the template is ready) is a fast no-op GET.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> TemplateGates = new();
 
     public static Task<PoolContext> GetAsync() => LazyContext.Value;
 
@@ -44,25 +54,34 @@ public static class IntegreSqlPool
 
         var hash = TemplateHash.Compute(migrationIds);
 
-        return await pool.Client.GetOrCreateTemplateConnectionStringAsync(
-            hash,
-            async templateConnectionString =>
-            {
-                var templateOptions = new DbContextOptionsBuilder<AssistantDbContext>();
-                AssistantDbContext.Configure(templateOptions, templateConnectionString);
-                await using (var templateDb = new AssistantDbContext(templateOptions.Options))
+        var gate = TemplateGates.GetOrAdd(hash, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await pool.Client.GetOrCreateTemplateConnectionStringAsync(
+                hash,
+                async templateConnectionString =>
                 {
-                    await templateDb.Database.MigrateAsync(cancellationToken);
-                }
+                    var templateOptions = new DbContextOptionsBuilder<AssistantDbContext>();
+                    AssistantDbContext.Configure(templateOptions, templateConnectionString);
+                    await using (var templateDb = new AssistantDbContext(templateOptions.Options))
+                    {
+                        await templateDb.Database.MigrateAsync(cancellationToken);
+                    }
 
-                // Npgsql keeps the physical connection to the template database alive in its
-                // client-side pool even after the DbContext is disposed. Postgres refuses
-                // `CREATE DATABASE ... TEMPLATE <template>` (what IntegreSQL does to hand out
-                // test databases) while any connection to the template database is open, so the
-                // pool must be cleared here before the template is marked ready (PUT below).
-                NpgsqlConnection.ClearAllPools();
-            },
-            cancellationToken);
+                    // Npgsql keeps the physical connection to the template database alive in its
+                    // client-side pool even after the DbContext is disposed. Postgres refuses
+                    // `CREATE DATABASE ... TEMPLATE <template>` (what IntegreSQL does to hand out
+                    // test databases) while any connection to the template database is open, so the
+                    // pool must be cleared here before the template is marked ready (PUT below).
+                    NpgsqlConnection.ClearAllPools();
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static async Task<PoolContext> InitializeAsync()
