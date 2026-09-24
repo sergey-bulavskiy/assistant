@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Assistant.Application/Assistant.Application.csproj" />
+  </ItemGroup>
+
+</Project>
