@@ -57,15 +57,34 @@ public sealed class IntegreSqlClient
 
     public async Task<string> GetTestConnectionStringAsync(string hash, CancellationToken cancellationToken)
     {
-        var response = await _http.GetAsync($"api/v1/templates/{hash}/tests", cancellationToken);
-        if (response.StatusCode != HttpStatusCode.OK)
+        // When several test classes race to create the same template (same migration hash), the
+        // POST above returns 423 Locked to everyone except the one initializing it. Until that
+        // initializer finishes running migrations and PUTs the template ready, IntegreSQL answers
+        // this endpoint with 503 Service Unavailable rather than blocking — so losers of the race
+        // must poll briefly instead of treating 503 as a hard failure.
+        const int maxAttempts = 60;
+        var retryDelay = TimeSpan.FromMilliseconds(250);
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            throw new InvalidOperationException($"IntegreSQL test database request failed: {response.StatusCode}");
+            var response = await _http.GetAsync($"api/v1/templates/{hash}/tests", cancellationToken);
+
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                var payload = await response.Content.ReadFromJsonAsync<TestResponse>(JsonOptions, cancellationToken)
+                    ?? throw new InvalidOperationException("IntegreSQL returned an empty test database response.");
+                return BuildConnectionString(payload.Database.Config);
+            }
+
+            if (response.StatusCode != HttpStatusCode.ServiceUnavailable || attempt == maxAttempts)
+            {
+                throw new InvalidOperationException($"IntegreSQL test database request failed: {response.StatusCode}");
+            }
+
+            await Task.Delay(retryDelay, cancellationToken);
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<TestResponse>(JsonOptions, cancellationToken)
-            ?? throw new InvalidOperationException("IntegreSQL returned an empty test database response.");
-        return BuildConnectionString(payload.Database.Config);
+        throw new InvalidOperationException("IntegreSQL test database request failed: template never became ready.");
     }
 
     private string BuildConnectionString(DatabaseConfig config) =>
