@@ -115,6 +115,24 @@ public static class IntegreSqlPool
             .WithEnvironment("INTEGRESQL_PGHOST", "postgres")
             .WithEnvironment("INTEGRESQL_PGUSER", "postgres")
             .WithEnvironment("INTEGRESQL_PGPASSWORD", "postgres")
+            // Defaults are runtime.NumCPU()-derived (see the IntegreSQL README's Configuration
+            // section): on GitHub Actions' 2-core runners that's an initial pool of 2, a max of 8,
+            // and only 2 pool-maintenance tasks running in parallel. With this suite's 3 test
+            // collections (classes) able to run in parallel and 18 tests total wanting a fresh
+            // database each, a pool that only ever has 2 warmed up forces most checkouts to wait
+            // on synchronous FIFO recreation — which is exactly what surfaced as intermittent
+            // 423/503/500 responses on CI. Fixed, CPU-independent values give the pool enough
+            // headroom to stay ahead of checkout demand regardless of the runner's core count:
+            // 10 warmed up immediately after the template is finalized (comfortably covers the 18
+            // checkouts spread across 3 parallel collections), 20 as the ceiling so returned
+            // databases have room to be recreated in the background without blocking new
+            // checkouts, and 4 parallel maintenance tasks (recreate/create) instead of the
+            // CI-default 2 — these are short, mostly I/O-bound `CREATE/DROP DATABASE ... TEMPLATE`
+            // statements, not CPU-bound work, so oversubscribing the 2 real vCPUs a little lets
+            // pool maintenance make forward progress instead of queuing behind just 2 slots.
+            .WithEnvironment("INTEGRESQL_TEST_INITIAL_POOL_SIZE", "10")
+            .WithEnvironment("INTEGRESQL_TEST_MAX_POOL_SIZE", "20")
+            .WithEnvironment("INTEGRESQL_POOL_MAX_PARALLEL_TASKS", "4")
             .WithPortBinding(5000, true)
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("http server started"))
             .Build();

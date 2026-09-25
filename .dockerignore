@@ -8,4 +8,5 @@ tests/
 docs/
 .git/
 .github/
+.superpowers/
 *.md
