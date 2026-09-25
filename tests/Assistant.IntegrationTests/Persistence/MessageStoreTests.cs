@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -162,5 +163,30 @@ public class MessageStoreTests : IntegrationTestBase
             store.StoreAsync(BotId, 80, TextMessage(80, text: "caption 1\0 note"), CancellationToken.None));
 
         exception.InnerException.ShouldBeOfType<PostgresException>();
+    }
+
+    [Fact]
+    public async Task Message_with_literal_backslash_u0000_text_is_stored_and_raw_json_round_trips()
+    {
+        // C1: the literal 6 characters `\u0000` (one backslash, not an escape) must survive the
+        // raw-JSON sanitizer intact — a naive substring removal turns it into invalid JSON that
+        // Postgres would reject, wedging polling. Build rawJson the same way the real mapper does:
+        // serialize, then sanitize.
+        await EnsureBotAsync();
+        var store = CreateStore();
+
+        var literalText = "note \\u0000 here";
+        var rawJson = TextSanitizer.SanitizeRawJson(JsonSerializer.Serialize(new { text = literalText }));
+
+        var message = TextMessage(90, text: literalText) with { RawJson = rawJson };
+        var result = await store.StoreAsync(BotId, 90, message, CancellationToken.None);
+
+        result.Outcome.ShouldBe(StoreOutcome.Stored);
+
+        var stored = await Db.Messages.SingleAsync(m => m.TelegramMessageId == 90);
+        stored.Text.ShouldBe(literalText);
+
+        using var doc = JsonDocument.Parse(stored.Raw);
+        doc.RootElement.GetProperty("text").GetString().ShouldBe(literalText);
     }
 }
