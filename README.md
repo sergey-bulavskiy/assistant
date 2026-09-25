@@ -62,6 +62,11 @@ This starts three containers: `postgres` (with a named volume, so data survives 
 `app` (the bot, pulled from `ghcr.io/sergey-bulavskiy/assistant`), and `watchtower` (checks for a
 new `app` image every 5 minutes and restarts it automatically — Postgres is never touched).
 
+> **Note:** the first image the CD workflow publishes to GHCR is **private** by default, and
+> Watchtower has no credentials to pull a private image. Make the package public once: GitHub →
+> the repo's **Packages** tab → `assistant` → **Package settings** → **Change visibility** →
+> **Public**.
+
 ## 5. Smoke checklist
 
 - On startup, the bot sends a `🟢 Запущен <sha>` message to the **first** id listed in
