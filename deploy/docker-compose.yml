@@ -1,0 +1,39 @@
+name: assistant
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: ghcr.io/sergey-bulavskiy/assistant:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      ALLOWED_USER_IDS: ${ALLOWED_USER_IDS}
+      ConnectionStrings__Assistant: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=postgres;Password=${POSTGRES_PASSWORD}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: nickfedor/watchtower:1.22.3
+    restart: unless-stopped
+    command: --label-enable --interval 300 --cleanup
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  postgres-data:

@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+.env
+.env.*
+!.env.example
+deploy/.env
+tests/
+docs/
+.git/
+.github/
+.superpowers/
+*.md

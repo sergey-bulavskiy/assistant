@@ -21,3 +21,6 @@ obj/
 .vs/
 .idea/
 TestResults/
+
+# Superpowers scratch state — never part of the shipped repo
+.superpowers/
