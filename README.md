@@ -46,6 +46,10 @@ POSTGRES_DB=assistant
 IMAGE_TAG=latest
 ```
 
+`POSTGRES_PASSWORD` must contain **only letters and digits** — it's interpolated directly into a
+Postgres connection string in `deploy/docker-compose.yml`, and punctuation there (`:`, `@`, `/`,
+etc.) can break parsing.
+
 `deploy/.env` is gitignored — never commit it.
 
 ## 4. Run it
@@ -60,6 +64,8 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 
 ## 5. Smoke checklist
 
+- On startup, the bot sends a `🟢 Запущен <sha>` message to the **first** id listed in
+  `ALLOWED_USER_IDS` — check that user's DM with the bot.
 - Send the bot a direct message → it replies `Получил ✅ #<id>`.
 - Send `/version` (anywhere) → it replies with the running commit SHA and build time.
 - Add the bot to a group and post a message → the message is stored silently (no reply). If the bot
