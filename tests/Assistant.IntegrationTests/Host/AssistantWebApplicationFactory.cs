@@ -14,14 +14,24 @@ namespace Assistant.IntegrationTests.Host;
 public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
+    private readonly PollingSettings _pollingSettings;
 
     public FakeTelegramClient TelegramClient { get; } = new();
 
     public EnsureBotStateFailureInjector EnsureBotStateFailures { get; } = new();
 
-    public AssistantWebApplicationFactory(string connectionString)
+    public PoisonUpdateInjector PoisonUpdate { get; } = new();
+
+    public TestClock Clock { get; } = new();
+
+    public AssistantWebApplicationFactory(string connectionString, PollingSettings? pollingSettings = null)
     {
         _connectionString = connectionString;
+        _pollingSettings = pollingSettings ?? new PollingSettings(
+            MinBackoff: TimeSpan.FromMilliseconds(20),
+            MaxBackoff: TimeSpan.FromMilliseconds(200),
+            LongPollTimeoutSeconds: 1,
+            PoisonUpdateFailureCap: 2);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -54,13 +64,16 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
             services.AddSingleton<ITelegramClient>(TelegramClient);
 
             services.RemoveAll<PollingSettings>();
-            services.AddSingleton(new PollingSettings(
-                MinBackoff: TimeSpan.FromMilliseconds(20),
-                MaxBackoff: TimeSpan.FromMilliseconds(200),
-                LongPollTimeoutSeconds: 1));
+            services.AddSingleton(_pollingSettings);
+
+            // I2: a controllable clock lets PollingHealth tests push "now" past the healthy
+            // window deterministically instead of waiting it out for real (see TestClock).
+            services.RemoveAll<IClock>();
+            services.AddSingleton<IClock>(Clock);
 
             // Decorate the real IMessageStore so tests can inject a transient failure into
-            // EnsureBotStateAsync (see EnsureBotStateFailureInjector / FlakyMessageStore) — every
+            // EnsureBotStateAsync (see EnsureBotStateFailureInjector / FlakyMessageStore) and a
+            // permanently poisonous update (see PoisonUpdateInjector / PoisonMessageStore) — every
             // other member always delegates straight through to the real store.
             services.RemoveAll<IMessageStore>();
             services.AddScoped<IMessageStore>(sp =>
@@ -68,7 +81,8 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
                 var db = sp.GetRequiredService<AssistantDbContext>();
                 var clock = sp.GetRequiredService<IClock>();
                 var inner = new MessageStore(db, clock);
-                return new FlakyMessageStore(inner, EnsureBotStateFailures);
+                var flaky = new FlakyMessageStore(inner, EnsureBotStateFailures);
+                return new PoisonMessageStore(flaky, PoisonUpdate);
             });
         });
     }

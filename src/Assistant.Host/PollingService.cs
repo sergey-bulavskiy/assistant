@@ -13,6 +13,7 @@ public class PollingService : BackgroundService
     private readonly PollingSettings _settings;
     private readonly IClock _clock;
     private readonly IOptions<BotOptions> _options;
+    private readonly BuildInfo _buildInfo;
     private readonly ILogger<PollingService> _logger;
 
     public PollingService(
@@ -22,6 +23,7 @@ public class PollingService : BackgroundService
         PollingSettings settings,
         IClock clock,
         IOptions<BotOptions> options,
+        BuildInfo buildInfo,
         ILogger<PollingService> logger)
     {
         _telegramClient = telegramClient;
@@ -30,6 +32,7 @@ public class PollingService : BackgroundService
         _settings = settings;
         _clock = clock;
         _options = options;
+        _buildInfo = buildInfo;
         _logger = logger;
     }
 
@@ -51,8 +54,9 @@ public class PollingService : BackgroundService
         {
             try
             {
-                var buildInfo = BuildInfo.FromEnvironment(_clock);
-                await _telegramClient.SendTextAsync(ownerId, null, $"🟢 Запущен {buildInfo.ShortSha}", stoppingToken);
+                // M9: use the BuildInfo singleton registered in DI (computed once, at process
+                // startup) instead of recomputing one from the environment here.
+                await _telegramClient.SendTextAsync(ownerId, null, $"🟢 Запущен {_buildInfo.ShortSha}", stoppingToken);
             }
             catch (Exception ex)
             {
@@ -62,21 +66,29 @@ public class PollingService : BackgroundService
 
         var backoff = _settings.MinBackoff;
 
+        // I2: consecutive-failure count per update_id, kept outside the loop body so it survives
+        // across retries of the same update on later iterations (a failed update is never removed
+        // from the batch — the next GetUpdatesAsync call re-fetches it via the unmoved offset).
+        var consecutiveFailures = new Dictionary<long, int>();
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var offset = await GetLastUpdateIdAsync(identity.Id, stoppingToken) + 1;
                 var updates = await _telegramClient.GetUpdatesAsync(offset, _settings.LongPollTimeoutSeconds, stoppingToken);
-                _pollingHealth.MarkSuccess(_clock.UtcNow);
-                backoff = _settings.MinBackoff;
 
                 foreach (var update in updates)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    var handler = scope.ServiceProvider.GetRequiredService<UpdateHandler>();
-                    await handler.HandleAsync(identity.Id, identity.Username, update, stoppingToken);
+                    await HandleWithPoisonCapAsync(identity, update, consecutiveFailures, stoppingToken);
                 }
+
+                // I2(a): only mark success and reset backoff once the *whole* batch has been
+                // handled. Doing this right after GetUpdatesAsync (before handling) made a
+                // permanently throwing HandleAsync retry at the minimum backoff forever while
+                // /health kept reporting healthy — GetUpdatesAsync itself was never what failed.
+                _pollingHealth.MarkSuccess(_clock.UtcNow);
+                backoff = _settings.MinBackoff;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -98,6 +110,54 @@ public class PollingService : BackgroundService
 
                 backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, _settings.MaxBackoff.TotalSeconds));
             }
+        }
+    }
+
+    // I2(b)/(c): a failing update rethrows so the batch is abandoned and the outer catch applies
+    // the normal exponential backoff before the next attempt re-fetches it (same offset, since the
+    // failure means state.LastUpdateId never advanced past it) — unless this is the update's
+    // PoisonUpdateFailureCap-th consecutive failure, in which case it is given up on: its offset is
+    // recorded with no message (StoreAsync's offset-only path) so it is never re-fetched, and
+    // processing continues with the rest of the batch instead of retrying this update forever.
+    private async Task HandleWithPoisonCapAsync(
+        BotIdentity identity,
+        IncomingUpdate update,
+        Dictionary<long, int> consecutiveFailures,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<UpdateHandler>();
+            await handler.HandleAsync(identity.Id, identity.Username, update, cancellationToken);
+            consecutiveFailures.Remove(update.UpdateId);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var failures = consecutiveFailures.GetValueOrDefault(update.UpdateId) + 1;
+            consecutiveFailures[update.UpdateId] = failures;
+
+            if (failures < _settings.PoisonUpdateFailureCap)
+            {
+                throw;
+            }
+
+            // Never log message text or the bot token here — only the update id, the failure
+            // count and the exception's type name.
+            _logger.LogError(
+                "update {UpdateId} failed {FailureCount} times in a row and is being skipped: {ExceptionType}",
+                update.UpdateId,
+                failures,
+                ex.GetType().Name);
+
+            using var scope = _scopeFactory.CreateScope();
+            var messageStore = scope.ServiceProvider.GetRequiredService<IMessageStore>();
+            await messageStore.StoreAsync(identity.Id, update.UpdateId, null, cancellationToken);
+            consecutiveFailures.Remove(update.UpdateId);
         }
     }
 
