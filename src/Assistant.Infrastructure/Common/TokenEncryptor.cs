@@ -33,6 +33,7 @@ public class TokenEncryptor : ITokenEncryptor
 
         using var aesGcm = new AesGcm(_key, TagSizeBytes);
         aesGcm.Encrypt(nonce, plainBytes, ciphertext, tag);
+        CryptographicOperations.ZeroMemory(plainBytes);
 
         var result = new byte[NonceSizeBytes + ciphertext.Length + TagSizeBytes];
         Buffer.BlockCopy(nonce, 0, result, 0, NonceSizeBytes);
@@ -51,6 +52,9 @@ public class TokenEncryptor : ITokenEncryptor
         using var aesGcm = new AesGcm(_key, TagSizeBytes);
         aesGcm.Decrypt(nonce, ciphertext, tag, plainBytes);
 
-        return System.Text.Encoding.UTF8.GetString(plainBytes);
+        // Zero only after the string is materialized, so the return value isn't corrupted.
+        var plainToken = System.Text.Encoding.UTF8.GetString(plainBytes);
+        CryptographicOperations.ZeroMemory(plainBytes);
+        return plainToken;
     }
 }
