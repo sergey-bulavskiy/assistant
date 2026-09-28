@@ -3,7 +3,6 @@ using Assistant.Application.Families;
 using Assistant.Application.Manager;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
-using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -74,30 +73,31 @@ public class UpdateHandler
 
         var message = update.Message;
 
-        if (message.Kind != MessageKind.Service)
+        // Approval gating applies to every message kind, including Service (member joined/left,
+        // pinned message, chat migrated, …) — an unapproved or denied place/user must not have any
+        // of its messages persisted, service messages included, since they can carry names and
+        // other content (e.g. new_chat_members) in their raw payload just like a text message.
+        var placeTitle = message.ChatType == "private" ? "личные сообщения" : $"chat {message.ChatId}";
+        var placeId = await _approvals.GetOrCreatePendingPlaceAsync(bot.BotDbId, message.ChatId, message.TopicId, placeTitle, cancellationToken);
+        var placeStatus = await _approvals.GetPlaceStatusAsync(placeId, cancellationToken);
+        if (placeStatus != PlaceStatus.Approved)
         {
-            var placeTitle = message.ChatType == "private" ? "личные сообщения" : $"chat {message.ChatId}";
-            var placeId = await _approvals.GetOrCreatePendingPlaceAsync(bot.BotDbId, message.ChatId, message.TopicId, placeTitle, cancellationToken);
-            var placeStatus = await _approvals.GetPlaceStatusAsync(placeId, cancellationToken);
-            if (placeStatus != PlaceStatus.Approved)
+            _logger.LogInformation("ignored message: place not approved ({PlaceStatus})", placeStatus);
+            await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
+            return;
+        }
+
+        if (message.UserId is { } userId && bot.FamilyId is { } familyId)
+        {
+            var displayName = message.Username ?? $"user {userId}";
+            var memberId = await _approvals.GetOrCreatePendingFamilyMemberAsync(
+                familyId, userId, displayName, message.Username, bot.Username, cancellationToken);
+            var memberStatus = await _approvals.GetFamilyMemberStatusAsync(memberId, cancellationToken);
+            if (memberStatus != FamilyMemberStatus.Approved)
             {
-                _logger.LogInformation("ignored message: place not approved ({PlaceStatus})", placeStatus);
+                _logger.LogInformation("ignored message: user not approved ({MemberStatus})", memberStatus);
                 await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
                 return;
-            }
-
-            if (message.UserId is { } userId && bot.FamilyId is { } familyId)
-            {
-                var displayName = message.Username ?? $"user {userId}";
-                var memberId = await _approvals.GetOrCreatePendingFamilyMemberAsync(
-                    familyId, userId, displayName, message.Username, bot.Username, cancellationToken);
-                var memberStatus = await _approvals.GetFamilyMemberStatusAsync(memberId, cancellationToken);
-                if (memberStatus != FamilyMemberStatus.Approved)
-                {
-                    _logger.LogInformation("ignored message: user not approved ({MemberStatus})", memberStatus);
-                    await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
-                    return;
-                }
             }
         }
 

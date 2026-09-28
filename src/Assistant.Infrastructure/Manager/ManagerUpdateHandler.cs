@@ -439,7 +439,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             .FirstOrDefaultAsync(m => m.TelegramUserId == creatorUserId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
         if (creatorMember is null)
         {
-            _logger.LogWarning("managed_bot update from a creator with no owning family membership: {CreatorUserId}", creatorUserId);
+            _logger.LogWarning("managed_bot update from a creator with no owning family membership.");
             return;
         }
 

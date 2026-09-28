@@ -8,6 +8,7 @@ using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace Assistant.Infrastructure.Families;
 
@@ -57,7 +58,21 @@ public class ApprovalService : IApprovalService
             CreatedAt = _clock.UtcNow
         };
         _db.Places.Add(place);
-        await _db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Another concurrent call for the same (botDbId, chatId, topicId) won the insert race
+            // and already sent the owner DM — use its row instead of creating a duplicate place
+            // and a duplicate approval DM.
+            _db.Entry(place).State = EntityState.Detached;
+            var winner = await _db.Places.IgnoreQueryFilters()
+                .FirstAsync(p => p.BotId == botDbId && p.ChatId == chatId && p.TopicId == topicId, cancellationToken);
+            return winner.Id;
+        }
 
         var text = topicId is null
             ? $"Бот @{bot.Username} добавлен в «{title}». Работать здесь?"
@@ -117,7 +132,21 @@ public class ApprovalService : IApprovalService
             UpdatedAt = now
         };
         _db.FamilyMembers.Add(member);
-        await _db.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Another concurrent call for the same (familyId, telegramUserId) won the insert race
+            // and already sent the owner DM — use its row instead of creating a duplicate member
+            // and a duplicate approval DM.
+            _db.Entry(member).State = EntityState.Detached;
+            var winner = await _db.FamilyMembers.IgnoreQueryFilters()
+                .FirstAsync(m => m.FamilyId == familyId && m.TelegramUserId == telegramUserId, cancellationToken);
+            return winner.Id;
+        }
 
         var usernameSuffix = username is null ? string.Empty : $" (@{username})";
         var text = $"{displayName}{usernameSuffix} хочет пользоваться ботом @{requestingBotUsername}. Разрешить?";
@@ -191,4 +220,8 @@ public class ApprovalService : IApprovalService
             await managerClient.EditMessageTextAsync(chatId, messageId, resolutionText, cancellationToken);
         }
     }
+
+    private static bool IsUniqueViolation(Exception ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }
+        || ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 }

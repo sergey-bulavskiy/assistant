@@ -29,6 +29,7 @@ public class BotPollingCoordinator : IHostedService
     private readonly PollingHealth _pollingHealth;
     private readonly IClock _clock;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<BotPollingCoordinator> _logger;
     private readonly ConcurrentDictionary<long, WorkerHandle> _workers = new();
 
     public BotPollingCoordinator(
@@ -49,6 +50,7 @@ public class BotPollingCoordinator : IHostedService
         _pollingHealth = pollingHealth;
         _clock = clock;
         _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<BotPollingCoordinator>();
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -155,7 +157,7 @@ public class BotPollingCoordinator : IHostedService
         }
 
         var client = _clientFactory.Create(_options.Value.ManagerToken);
-        var identity = await client.GetMeAsync(cancellationToken);
+        var identity = await GetMeWithRetryAsync(client, cancellationToken);
 
         managerBot = new Bot
         {
@@ -170,5 +172,37 @@ public class BotPollingCoordinator : IHostedService
         };
         db.Bots.Add(managerBot);
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    // Unlike a BotPollingWorker's own retry loop (which runs as a detached background Task and so
+    // never blocks startup), this call is awaited directly inside IHostedService.StartAsync — an
+    // unguarded call here would fail the whole host on a single transient Telegram API hiccup at
+    // boot. Retries with the same backoff schedule as polling, but bounded, so a genuinely
+    // unreachable Telegram API still fails startup rather than hanging it forever.
+    private async Task<BotIdentity> GetMeWithRetryAsync(ITelegramClient client, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 10;
+        var backoff = _settings.MinBackoff;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                return await client.GetMeAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                _logger.LogWarning(
+                    "manager getMe failed (attempt {Attempt}/{MaxAttempts}): {ExceptionType}", attempt, maxAttempts, ex.GetType().Name);
+                await Task.Delay(backoff, cancellationToken);
+                backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, _settings.MaxBackoff.TotalSeconds));
+            }
+        }
+
+        return await client.GetMeAsync(cancellationToken);
     }
 }

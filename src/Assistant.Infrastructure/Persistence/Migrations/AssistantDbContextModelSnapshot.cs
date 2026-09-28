@@ -308,6 +308,8 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_places_bot_id_chat_id_topic_id");
 
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("BotId", "ChatId", "TopicId"), false);
+
                     b.ToTable("places", (string)null);
                 });
 #pragma warning restore 612, 618

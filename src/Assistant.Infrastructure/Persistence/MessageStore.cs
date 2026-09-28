@@ -70,7 +70,7 @@ public class MessageStore : IMessageStore
         }
         else
         {
-            var existing = await _db.Messages.FirstOrDefaultAsync(
+            var existing = await _db.Messages.IgnoreQueryFilters().FirstOrDefaultAsync(
                 m => m.BotId == botId && m.ChatId == message.ChatId && m.TelegramMessageId == message.MessageId,
                 cancellationToken);
 

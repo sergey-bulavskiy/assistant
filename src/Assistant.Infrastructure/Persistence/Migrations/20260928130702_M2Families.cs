@@ -119,7 +119,8 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                 name: "ix_places_bot_id_chat_id_topic_id",
                 table: "places",
                 columns: new[] { "bot_id", "chat_id", "topic_id" },
-                unique: true);
+                unique: true)
+                .Annotation("Npgsql:NullsDistinct", false);
         }
 
         /// <inheritdoc />

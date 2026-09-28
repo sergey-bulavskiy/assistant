@@ -65,6 +65,11 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
             Text: text, Kind: MessageKind.Text, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
             MigrateToChatId: null, RawJson: "{}");
 
+    private static IncomingMessage GroupService(int messageId, long chatId, long userId) =>
+        new(ChatId: chatId, ChatType: "group", TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
+            Text: null, Kind: MessageKind.Service, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
+            MigrateToChatId: null, RawJson: "{}");
+
     [Fact]
     public async Task First_message_from_an_unknown_chat_is_ignored_and_requests_a_place_approval()
     {
@@ -102,5 +107,23 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         var stored = await Db.Messages.IgnoreQueryFilters().SingleAsync();
         stored.FamilyId.ShouldBe(bot.FamilyId);
         stored.Text.ShouldBe("hello again");
+    }
+
+    [Fact]
+    public async Task Service_message_from_a_denied_place_is_not_stored()
+    {
+        var (handler, bot, telegram) = await SetupAsync();
+
+        // First message creates a pending place; deny it explicitly.
+        await handler.HandleAsync(bot, telegram, new IncomingUpdate(1, GroupText(1, -100, 111, "hello")), CancellationToken.None);
+        var place = await Db.Places.IgnoreQueryFilters().SingleAsync();
+        place.Status = Assistant.Domain.Places.PlaceStatus.Denied;
+        await Db.SaveChangesAsync();
+
+        // A Service-kind update (e.g. a member joining/leaving, a pin) from the same denied chat
+        // must be gated exactly like a text message — approval gating is not a text-only rule.
+        await handler.HandleAsync(bot, telegram, new IncomingUpdate(2, GroupService(2, -100, 111)), CancellationToken.None);
+
+        (await Db.Messages.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
     }
 }
