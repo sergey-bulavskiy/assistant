@@ -361,6 +361,11 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
                 }
 
                 await _coordinator.StopBotAsync(id);
+                // No FK between places.bot_id and bots.id (family-scoped tables reference their
+                // parent loosely, like FamilyMember does with family_id), so removing the bot alone
+                // would leave its places as permanently orphaned rows — delete them together.
+                var places = await _db.Places.IgnoreQueryFilters().Where(p => p.BotId == id).ToListAsync(cancellationToken);
+                _db.Places.RemoveRange(places);
                 _db.Bots.Remove(bot);
                 await _db.SaveChangesAsync(cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Бот удалён.", cancellationToken);
@@ -426,6 +431,10 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
                     return;
                 }
 
+                // Does not check member.Status: a still-Pending/Denied member can be flagged
+                // IsOwner = true here, but that's inert on its own — IsApprovedOwnerAsync (the only
+                // place ownership actually grants anything) separately requires
+                // Status == Approved, so promotion has no effect until the member is also approved.
                 member.IsOwner = true;
                 member.UpdatedAt = _clock.UtcNow;
                 await _db.SaveChangesAsync(cancellationToken);

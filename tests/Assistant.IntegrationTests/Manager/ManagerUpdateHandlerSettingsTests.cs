@@ -150,6 +150,38 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Removing_a_bot_deletes_it_and_its_places()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 111, $"bot_remove:{_botId}"), CancellationToken.None);
+
+        (await Db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.Id == _botId)).ShouldBeNull();
+        // No FK ties places.bot_id to bots.id, so this only holds if bot_remove explicitly cleans
+        // up the bot's places too — otherwise the row survives, permanently orphaned.
+        (await Db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == _placeId)).ShouldBeNull();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "Бот удалён.");
+    }
+
+    [Fact]
+    public async Task Bot_remove_from_a_non_owner_does_not_delete_it()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        var otherFamily = new Family { Name = "other family", CreatedAt = DateTimeOffset.UtcNow };
+        Db.Families.Add(otherFamily);
+        await Db.SaveChangesAsync();
+        Db.FamilyMembers.Add(new FamilyMember { FamilyId = otherFamily.Id, TelegramUserId = 777, DisplayName = "other owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 777, $"bot_remove:{_botId}"), CancellationToken.None);
+
+        (await Db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.Id == _botId)).ShouldNotBeNull();
+        (await Db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == _placeId)).ShouldNotBeNull();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "У вас нет прав.");
+    }
+
+    [Fact]
     public async Task Removing_a_place_deletes_its_row()
     {
         var (handler, telegram) = await SetupAsync();
