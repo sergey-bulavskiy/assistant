@@ -42,8 +42,8 @@ jobs:
                (use `gh pr diff` to see changed files).
             2. Review strictly against the "Code review checklist" in the root AGENTS.md and,
                for test changes, the test quality rules in tests/AGENTS.md.
-            3. Post inline comments on specific lines, then one summary comment with findings
-               grouped as blocking / should-fix / nit, or say there are none.
+            3. Post inline comments on specific lines, and put the summary in your tracking
+               comment with findings grouped as blocking / should-fix / nit, or say there are none.
 
             Privacy: if you suspect personal data, a real identifier or a secret in the diff,
             report it only as "possible personal data or secret at <file>:<line>" and never
@@ -51,4 +51,4 @@ jobs:
             the diff unless a checklist item requires it.
           claude_args: |
             --model claude-sonnet-5
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Glob,Grep"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Glob,Grep"
