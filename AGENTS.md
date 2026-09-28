@@ -69,15 +69,20 @@ step 7.
    separate session with no stake in the change). Fix or explicitly answer each finding.
    In Claude Code use the built-in `/code-review`; when tests changed, also run the
    `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`).
-   After opening the PR you may also add the `claude-review` label for a CI review
-   (`gh pr edit <n> --add-label claude-review`); it complements, never replaces, the local review
-   done before pushing.
 5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
 6. **CI.** `gh pr checks --watch`. On failure: `gh run view <run-id> --log-failed`, fix, push,
    watch again. A red or pending check is not done.
+   **CI review:** if the PR adds or changes functionality (anything under `src/`, behaviour, config
+   or schema), run the Claude CI review: `gh pr edit <n> --add-label claude-review`, then wait for
+   its run (`gh run list --workflow claude-review.yml --limit 1`, `gh run watch <run-id>`) and read
+   its summary (`gh pr view <n> --comments`) and inline comments
+   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`). Fix or explicitly answer every blocking and
+   should-fix finding; after fixing, remove and re-add the label to review again. Optional for
+   docs-only and chore PRs. It complements, never replaces, the local review in step 4.
 7. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
-   below) only when CI is green and the owner has approved merging in the current session.
+   below) only when CI is green, required CI review findings are resolved, and the owner has
+   approved merging in the current session.
 8. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
    `gh run watch <run-id>`.
