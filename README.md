@@ -17,18 +17,29 @@ personal data lives in this repository** — not in code, tests, commit history 
   is running.
 - A Telegram account to create the bot.
 
-## 1. Create the bot in BotFather
+## 1. Turn your bot into the manager bot
+
+This milestone's manager bot creates every other bot for you through Telegram's **Managed Bots**
+feature — you no longer create bots by hand in BotFather except this first one.
 
 1. Open a chat with [@BotFather](https://t.me/BotFather) in Telegram.
-2. Send `/newbot`, follow the prompts, and choose a name and username.
-3. BotFather replies with a token like `123456789:AAExampleTokenValueDoNotUseThisOne`. Copy it — this
-   is `TELEGRAM_BOT_TOKEN`.
+2. Send `/newbot`, follow the prompts, and choose a name and username. BotFather replies with a
+   token like `123456789:AAExampleTokenValueDoNotUseThisOne`. Copy it — this is
+   `TELEGRAM_MANAGER_BOT_TOKEN`.
+3. Open BotFather's own Mini App (or send `/mybots` → your bot → Bot Settings) and enable
+   **"Allow bot to manage other bots"** for this bot. Without this, `/newbot` in the running
+   assistant will fail — Telegram will reject the creation link.
 
-## 2. Find your Telegram user id
+## 2. Generate a token encryption key
 
-Message [@userinfobot](https://t.me/userinfobot) (or any similar bot) and it replies with your
-numeric Telegram user id. This is temporary: M1 reads allowed user ids from `.env`; M2 replaces this
-with proper approvals through a manager bot.
+Role-bot tokens (fetched automatically when `/newbot` completes) are encrypted at rest. Generate a
+random 32-byte key, base64-encoded:
+
+```bash
+openssl rand -base64 32
+```
+
+This is `TOKEN_ENCRYPTION_KEY`.
 
 ## 3. Configure `.env`
 
@@ -39,8 +50,8 @@ cp deploy/.env.example deploy/.env
 Edit `deploy/.env`:
 
 ```
-TELEGRAM_BOT_TOKEN=<the token from BotFather>
-ALLOWED_USER_IDS=<your user id>,<any other allowed user id>
+TELEGRAM_MANAGER_BOT_TOKEN=<the token from BotFather>
+TOKEN_ENCRYPTION_KEY=<the base64 key from step 2>
 POSTGRES_PASSWORD=<pick a password>
 POSTGRES_DB=assistant
 IMAGE_TAG=latest
@@ -69,16 +80,20 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 
 ## 5. Smoke checklist
 
-- On startup, the bot sends a `🟢 Запущен <sha>` message to the **first** id listed in
-  `ALLOWED_USER_IDS` — check that user's DM with the bot.
-- Send the bot a direct message → it replies `Получил ✅ #<id>`.
-- Send `/version` (anywhere) → it replies with the running commit SHA and build time.
-- Add the bot to a group and post a message → the message is stored silently (no reply). If the bot
-  never reacts to group messages, it likely needs **admin rights** in that group, or **privacy mode
-  disabled** in BotFather (`/setprivacy`) — Telegram bots cannot see ordinary group messages
-  otherwise.
-- Restart the container (`docker compose -f deploy/docker-compose.yml restart app`) and resend a
-  message you already sent before restarting → no duplicate row, no duplicate reply.
+- On first startup with no family yet, the log prints a one-time claim code — send
+  `/claim <code>` to the manager bot in a DM. It replies confirming you're the platform owner.
+- Send `/newbot <role>` (e.g. `/newbot general`) → the manager replies with a Telegram creation
+  link. Tap it, confirm creation in Telegram's own UI — the manager starts polling the new bot
+  automatically, no restart needed.
+- Add the new role bot to a group → every family owner gets a DM with Yes/No buttons; tapping
+  Yes lets it start recording messages there.
+- Have an unrecognized Telegram account message the role bot → every owner gets an Allow/Deny DM
+  for that user.
+- `/settings` on the manager bot lists bots/places/users with buttons that actually change
+  behavior (Disable a bot and confirm it stops replying; Remove a place and confirm new messages
+  from it start a fresh approval).
+- Restart the process (or container) and resend a message you already sent before restarting to
+  any bot → no duplicate row, no duplicate reply, for every bot independently.
 
 ## Rollback
 

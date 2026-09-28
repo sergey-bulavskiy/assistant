@@ -24,3 +24,5 @@ TestResults/
 
 # Superpowers scratch state — never part of the shipped repo
 .superpowers/
+
+MANUAL-SMOKE-TEST-M2.md

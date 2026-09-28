@@ -1,7 +1,8 @@
 # src/Assistant.Host/AGENTS.md
 
-- Config comes from environment variables: `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_IDS`
-  (comma-separated; the first id is the owner and gets the startup message),
+- Config comes from environment variables: `TELEGRAM_MANAGER_BOT_TOKEN` (the manager bot's own
+  token; role-bot tokens are obtained at runtime through Telegram Managed Bots, not from env),
+  `TOKEN_ENCRYPTION_KEY` (base64, 32 bytes — encrypts role-bot tokens at rest),
   `ConnectionStrings__Assistant`, optional `Database__MigrationMaxAttempts` /
   `Database__MigrationRetryDelaySeconds`. `GIT_SHA` / `BUILD_TIME` are baked in by the Dockerfile.
   A new setting needs: validation, an entry in `deploy/.env.example` and `deploy/docker-compose.yml`
@@ -14,6 +15,9 @@
   instance before starting another against the same bot.
 - `/health` reports polling health (`PollingHealth`); `--healthcheck` is the container
   HEALTHCHECK entry point and calls `/health` on port 8080.
-- The update offset is stored in the database, one row per bot in `bots.last_update_id`, so
-  restarts resume where they left off. `PollingService` keeps a per-update failure count and skips
-  poison updates after `PoisonUpdateFailureCap` attempts.
+- Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,
+  replacing M1's single-row `bot_state` table, so restarts resume every bot independently.
+  `BotPollingCoordinator` (singleton hosted service) runs one `BotPollingWorker` per active `bots`
+  row and can start a new worker at runtime, without a process restart, when a role bot finishes
+  creation. Each worker keeps its own per-update failure count and skips poison updates after
+  `PoisonUpdateFailureCap` attempts.
