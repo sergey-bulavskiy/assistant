@@ -69,6 +69,9 @@ step 7.
    separate session with no stake in the change). Fix or explicitly answer each finding.
    In Claude Code use the built-in `/code-review`; when tests changed, also run the
    `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`).
+   After opening the PR you may also add the `claude-review` label for a CI review
+   (`gh pr edit <n> --add-label claude-review`); it complements, never replaces, the local review
+   done before pushing.
 5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
 6. **CI.** `gh pr checks --watch`. On failure: `gh run view <run-id> --log-failed`, fix, push,
