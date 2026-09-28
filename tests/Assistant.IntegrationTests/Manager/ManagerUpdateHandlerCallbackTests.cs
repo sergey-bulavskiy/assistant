@@ -82,8 +82,10 @@ public class ManagerUpdateHandlerCallbackTests : IntegrationTestBase
         }
     }
 
-    private static IncomingUpdate CallbackUpdate(long updateId, string data) =>
-        new(updateId, null, CallbackQuery: new CallbackQueryInfo(CallbackQueryId: $"cbq-{updateId}", FromUserId: 111, Data: data, MessageChatId: 111, MessageId: 1));
+    private static IncomingUpdate CallbackUpdate(long updateId, string data) => CallbackUpdate(updateId, data, fromUserId: 111);
+
+    private static IncomingUpdate CallbackUpdate(long updateId, string data, long fromUserId) =>
+        new(updateId, null, CallbackQuery: new CallbackQueryInfo(CallbackQueryId: $"cbq-{updateId}", FromUserId: fromUserId, Data: data, MessageChatId: fromUserId, MessageId: 1));
 
     [Fact]
     public async Task Approving_a_place_marks_it_approved_and_answers_recorded()
@@ -138,6 +140,36 @@ public class ManagerUpdateHandlerCallbackTests : IntegrationTestBase
         await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, $"member_allow:{member.Id}"), CancellationToken.None);
 
         (await Db.FamilyMembers.FindAsync(member.Id))!.Status.ShouldBe(FamilyMemberStatus.Approved);
+    }
+
+    [Fact]
+    public async Task Tap_from_a_non_owner_does_not_approve_a_place()
+    {
+        var (handler, telegram) = await SetupAsync();
+        var place = new Place { BotId = _botId, ChatId = -100, Title = "test chat", Status = PlaceStatus.Pending, CreatedAt = DateTimeOffset.UtcNow };
+        Db.Places.Add(place);
+        await Db.SaveChangesAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, $"place_approve:{place.Id}", fromUserId: 999), CancellationToken.None);
+
+        (await Db.Places.FindAsync(place.Id))!.Status.ShouldBe(PlaceStatus.Pending);
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text != "Записано.");
+    }
+
+    [Fact]
+    public async Task Tap_from_a_non_owner_does_not_approve_a_member()
+    {
+        var (handler, telegram) = await SetupAsync();
+        var member = new FamilyMember { FamilyId = _familyId, TelegramUserId = 333, DisplayName = "test user", Status = FamilyMemberStatus.Pending, IsOwner = false, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        Db.FamilyMembers.Add(member);
+        await Db.SaveChangesAsync();
+
+        // The non-owner tap comes from the pending member's own account — a realistic attacker who
+        // has messaged the manager bot but holds no owner membership in any family.
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, $"member_allow:{member.Id}", fromUserId: member.TelegramUserId), CancellationToken.None);
+
+        (await Db.FamilyMembers.FindAsync(member.Id))!.Status.ShouldBe(FamilyMemberStatus.Pending);
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text != "Записано.");
     }
 
     [Fact]

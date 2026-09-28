@@ -194,6 +194,22 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             case "place_approve":
             case "place_deny":
             {
+                var placeFamilyId = await _db.Places.IgnoreQueryFilters()
+                    .Where(p => p.Id == id)
+                    .Join(_db.Bots.IgnoreQueryFilters(), p => p.BotId, b => b.Id, (p, b) => b.FamilyId)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (placeFamilyId is null)
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Уже решено.", cancellationToken);
+                    return;
+                }
+
+                if (!await IsApprovedOwnerAsync(callback.FromUserId, placeFamilyId.Value, cancellationToken))
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
+                    return;
+                }
+
                 var resolution = await _approvals.ResolvePlaceApprovalAsync(id, approve: parts[0] == "place_approve", cancellationToken);
                 await telegramClient.AnswerCallbackAsync(
                     callback.CallbackQueryId, resolution == ApprovalResolution.Applied ? "Записано." : "Уже решено.", cancellationToken);
@@ -202,6 +218,22 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             case "member_allow":
             case "member_deny":
             {
+                var memberFamilyId = await _db.FamilyMembers.IgnoreQueryFilters()
+                    .Where(m => m.Id == id)
+                    .Select(m => (long?)m.FamilyId)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (memberFamilyId is null)
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Уже решено.", cancellationToken);
+                    return;
+                }
+
+                if (!await IsApprovedOwnerAsync(callback.FromUserId, memberFamilyId.Value, cancellationToken))
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
+                    return;
+                }
+
                 var resolution = await _approvals.ResolveUserApprovalAsync(id, approve: parts[0] == "member_allow", cancellationToken);
                 await telegramClient.AnswerCallbackAsync(
                     callback.CallbackQueryId, resolution == ApprovalResolution.Applied ? "Записано." : "Уже решено.", cancellationToken);
@@ -213,6 +245,14 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
                 return;
         }
     }
+
+    // Approval-button taps carry only a guessable sequential id (place_approve:1, member_allow:2, …),
+    // so the button data itself proves nothing about who is tapping. The DM was sent to the owning
+    // family's owners, so resolving it must be gated on the tapping user actually being one of them —
+    // not just an owner of some other family.
+    private async Task<bool> IsApprovedOwnerAsync(long userId, long familyId, CancellationToken cancellationToken) =>
+        await _db.FamilyMembers.IgnoreQueryFilters()
+            .AnyAsync(m => m.TelegramUserId == userId && m.FamilyId == familyId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
 
     private async Task HandleManagedBotCreatedAsync(
         long creatorUserId, long newBotUserId, ITelegramClient telegramClient, CancellationToken cancellationToken)
