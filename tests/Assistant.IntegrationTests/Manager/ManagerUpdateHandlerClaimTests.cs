@@ -2,12 +2,16 @@ using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Assistant.IntegrationTests.Manager;
 
@@ -18,9 +22,46 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         public string Code => "424242";
     }
 
+    private sealed class SingleClientFactory : ITelegramClientFactory
+    {
+        public FakeTelegramClient Client { get; } = new();
+        public ITelegramClient Create(string token) => Client;
+    }
+
+    private sealed class NoopScopeFactory : IServiceScopeFactory
+    {
+        private readonly AssistantDbContext _db;
+        public NoopScopeFactory(AssistantDbContext db) => _db = db;
+        public IServiceScope CreateScope() => new SingleInstanceScope(_db);
+
+        private sealed class SingleInstanceScope : IServiceScope
+        {
+            public SingleInstanceScope(AssistantDbContext db) => ServiceProvider = new SingleInstanceProvider(db);
+            public IServiceProvider ServiceProvider { get; }
+            public void Dispose() { }
+        }
+
+        private sealed class SingleInstanceProvider : IServiceProvider
+        {
+            private readonly AssistantDbContext _db;
+            public SingleInstanceProvider(AssistantDbContext db) => _db = db;
+            public object? GetService(Type serviceType) => serviceType == typeof(AssistantDbContext) ? _db : null;
+        }
+    }
+
     private static readonly ReceivingBot ManagerBot = new(BotDbId: 1, TelegramBotId: 998, Username: "test_manager_bot", FamilyId: null, Role: "manager");
 
-    private ManagerUpdateHandler CreateHandler() => new(Db, new FixedClaimCode(), new SystemClock(), NullLogger<ManagerUpdateHandler>.Instance);
+    private ManagerUpdateHandler CreateHandler()
+    {
+        var clients = new SingleClientFactory();
+        var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+        var encryptor = new Assistant.Infrastructure.Common.TokenEncryptor(options.Value.TokenEncryptionKey);
+        var clock = new SystemClock();
+        var coordinator = new BotPollingCoordinator(
+            new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
+            new PollingHealth(), clock, NullLoggerFactory.Instance);
+        return new ManagerUpdateHandler(Db, new FixedClaimCode(), new PendingBotCreations(), clients, encryptor, coordinator, clock, NullLogger<ManagerUpdateHandler>.Instance);
+    }
 
     private static IncomingUpdate ClaimCommand(long updateId, long userId, string? username, string args) =>
         new(updateId, new IncomingMessage(
@@ -79,13 +120,27 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var optionsA = new DbContextOptionsBuilder<AssistantDbContext>();
         AssistantDbContext.Configure(optionsA, ConnectionString);
         await using var dbA = new AssistantDbContext(optionsA.Options);
-        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new SystemClock(), NullLogger<ManagerUpdateHandler>.Instance);
+        var clientsA = new SingleClientFactory();
+        var botOptionsA = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+        var encryptorA = new Assistant.Infrastructure.Common.TokenEncryptor(botOptionsA.Value.TokenEncryptionKey);
+        var clockA = new SystemClock();
+        var coordinatorA = new BotPollingCoordinator(
+            new NoopScopeFactory(dbA), clientsA, encryptorA, botOptionsA, PollingWorkerSettings.Default,
+            new PollingHealth(), clockA, NullLoggerFactory.Instance);
+        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new PendingBotCreations(), clientsA, encryptorA, coordinatorA, clockA, NullLogger<ManagerUpdateHandler>.Instance);
         var telegramA = new FakeTelegramClient();
 
         var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
         AssistantDbContext.Configure(optionsB, ConnectionString);
         await using var dbB = new AssistantDbContext(optionsB.Options);
-        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new SystemClock(), NullLogger<ManagerUpdateHandler>.Instance);
+        var clientsB = new SingleClientFactory();
+        var botOptionsB = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+        var encryptorB = new Assistant.Infrastructure.Common.TokenEncryptor(botOptionsB.Value.TokenEncryptionKey);
+        var clockB = new SystemClock();
+        var coordinatorB = new BotPollingCoordinator(
+            new NoopScopeFactory(dbB), clientsB, encryptorB, botOptionsB, PollingWorkerSettings.Default,
+            new PollingHealth(), clockB, NullLoggerFactory.Instance);
+        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new PendingBotCreations(), clientsB, encryptorB, coordinatorB, clockB, NullLogger<ManagerUpdateHandler>.Instance);
         var telegramB = new FakeTelegramClient();
 
         await Task.WhenAll(

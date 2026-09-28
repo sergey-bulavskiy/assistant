@@ -34,6 +34,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
+        services.AddSingleton<IPendingBotCreations, PendingBotCreations>();
 
         services.AddSingleton<ITokenEncryptor>(sp =>
             new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));
