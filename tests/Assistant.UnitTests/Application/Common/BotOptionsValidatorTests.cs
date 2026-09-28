@@ -53,9 +53,9 @@ public class BotOptionsValidatorTests
     [Fact]
     public void Failure_messages_never_contain_the_token_value()
     {
-        var options = new BotOptions { ManagerToken = "", TokenEncryptionKey = "" };
-        options.ManagerToken = "super-secret-token-value";
-        var result = _validator.Validate(null, new BotOptions { ManagerToken = "", TokenEncryptionKey = "" });
+        var options = new BotOptions { ManagerToken = "super-secret-token-value", TokenEncryptionKey = "" };
+        var result = _validator.Validate(null, options);
+        result.Failed.ShouldBeTrue();
         result.Failures!.ShouldAllBe(f => !f.Contains("super-secret-token-value"));
     }
 }
