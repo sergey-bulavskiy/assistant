@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Assistant.IntegrationTests.Host;
 
@@ -80,7 +81,8 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
             {
                 var db = sp.GetRequiredService<AssistantDbContext>();
                 var clock = sp.GetRequiredService<IClock>();
-                var inner = new MessageStore(db, clock);
+                var logger = sp.GetRequiredService<ILogger<MessageStore>>();
+                var inner = new MessageStore(db, clock, logger);
                 var flaky = new FlakyMessageStore(inner, EnsureBotStateFailures);
                 return new PoisonMessageStore(flaky, PoisonUpdate);
             });

@@ -14,6 +14,6 @@
   instance before starting another against the same bot.
 - `/health` reports polling health (`PollingHealth`); `--healthcheck` is the container
   HEALTHCHECK entry point and calls `/health` on port 8080.
-- The update offset is stored in the database (`bot_state`), so restarts resume where they left
-  off. `PollingService` keeps a per-update failure count and skips poison updates after
-  `PoisonUpdateFailureCap` attempts.
+- The update offset is stored in the database, one row per bot in `bots.last_update_id`, so
+  restarts resume where they left off. `PollingService` keeps a per-update failure count and skips
+  poison updates after `PoisonUpdateFailureCap` attempts.

@@ -4,6 +4,7 @@ using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Messages;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Assistant.Infrastructure.Persistence;
 
@@ -11,18 +12,28 @@ public class MessageStore : IMessageStore
 {
     private readonly AssistantDbContext _db;
     private readonly IClock _clock;
+    private readonly ILogger<MessageStore> _logger;
 
-    public MessageStore(AssistantDbContext db, IClock clock)
+    public MessageStore(AssistantDbContext db, IClock clock, ILogger<MessageStore> logger)
     {
         _db = db;
         _clock = clock;
+        _logger = logger;
     }
 
     public async Task EnsureBotStateAsync(BotIdentity identity, CancellationToken cancellationToken)
     {
         var bot = await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TelegramBotId == identity.Id, cancellationToken);
 
-        if (bot is not null && bot.Username != identity.Username)
+        if (bot is null)
+        {
+            _logger.LogWarning(
+                "EnsureBotStateAsync: no bots row found for telegram bot id {TelegramBotId}; bot must be registered via claim/newbot before it can store messages.",
+                identity.Id);
+            return;
+        }
+
+        if (bot.Username != identity.Username)
         {
             bot.Username = identity.Username;
             await _db.SaveChangesAsync(cancellationToken);

@@ -7,6 +7,7 @@ using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace Assistant.IntegrationTests.Persistence;
@@ -15,7 +16,7 @@ public class MessageStoreTests : IntegrationTestBase
 {
     private const long BotId = 999;
 
-    private MessageStore CreateStore() => new(Db, new SystemClock());
+    private MessageStore CreateStore() => new(Db, new SystemClock(), NullLogger<MessageStore>.Instance);
 
     private static IncomingMessage TextMessage(
         int messageId,
@@ -133,6 +134,17 @@ public class MessageStoreTests : IntegrationTestBase
         result.Outcome.ShouldBe(StoreOutcome.OffsetOnly);
         (await Db.Messages.CountAsync()).ShouldBe(0);
         (await store.GetLastUpdateIdAsync(BotId, CancellationToken.None)).ShouldBe(50);
+    }
+
+    [Fact]
+    public async Task EnsureBotStateAsync_for_unregistered_bot_does_not_throw_or_create_a_row()
+    {
+        var store = CreateStore();
+
+        await Should.NotThrowAsync(() =>
+            store.EnsureBotStateAsync(new BotIdentity(123456, "unregistered_bot"), CancellationToken.None));
+
+        (await Db.Bots.CountAsync()).ShouldBe(0);
     }
 
     [Fact]
