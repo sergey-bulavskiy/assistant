@@ -20,6 +20,7 @@ public class BotPollingWorker
     private readonly PollingHealth _pollingHealth;
     private readonly IClock _clock;
     private readonly ILogger _logger;
+    private readonly string _token;
 
     public BotPollingWorker(
         ReceivingBot bot,
@@ -29,7 +30,8 @@ public class BotPollingWorker
         PollingWorkerSettings settings,
         PollingHealth pollingHealth,
         IClock clock,
-        ILogger logger)
+        ILogger logger,
+        string token)
     {
         _bot = bot;
         _telegramClient = telegramClient;
@@ -39,6 +41,7 @@ public class BotPollingWorker
         _pollingHealth = pollingHealth;
         _clock = clock;
         _logger = logger;
+        _token = token;
     }
 
     public async Task RunAsync(CancellationToken stoppingToken)
@@ -69,7 +72,7 @@ public class BotPollingWorker
             }
             catch (Exception ex)
             {
-                _logger.LogError("polling loop error for bot {TelegramBotId}: {ExceptionType} {Message}", _bot.TelegramBotId, ex.GetType().Name, ex.Message);
+                _logger.LogError("polling loop error for bot {TelegramBotId}: {ExceptionType} {Message}", _bot.TelegramBotId, ex.GetType().Name, SecretRedactor.Redact(ex.Message, _token));
 
                 try
                 {

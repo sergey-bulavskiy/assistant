@@ -4,7 +4,6 @@ using Assistant.Application.Telegram;
 using Assistant.Domain.Messages;
 using Assistant.UnitTests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Assistant.UnitTests.Application.Messages;
 
@@ -12,15 +11,11 @@ public class UpdateHandlerTests
 {
     private static readonly ReceivingBot Bot = new(1, 999, "test_bot", null, "manager");
 
-    // NOTE: this factory's `allowedUserIds` parameter is now unused — the allowlist check was
-    // removed from UpdateHandler in the multi-bot polling task. Left as-is (call sites unchanged)
-    // since this file's own behavior rewrite (and BotOptions field cleanup) is a later task.
-    private static UpdateHandler CreateHandler(FakeMessageStore store, FakeTelegramClient telegram, string allowedUserIds = "111,222")
+    private static UpdateHandler CreateHandler(FakeMessageStore store, FakeTelegramClient telegram)
     {
-        var options = Options.Create(new BotOptions { ManagerToken = "test-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var clock = new FixedClock(DateTimeOffset.UtcNow);
-        return new UpdateHandler(store, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        return new UpdateHandler(store, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
     }
 
     private static IncomingMessage Message(long userId = 111, string chatType = "private", string? text = "тест 1") =>
@@ -45,7 +40,7 @@ public class UpdateHandlerTests
         var store = new FakeMessageStore();
         store.SetNextResult(new StoreResult(StoreOutcome.OffsetOnly, null));
         var telegram = new FakeTelegramClient();
-        var handler = CreateHandler(store, telegram, allowedUserIds: "222");
+        var handler = CreateHandler(store, telegram);
 
         await handler.HandleAsync(Bot, telegram, new IncomingUpdate(1, Message(userId: 111)), CancellationToken.None);
 

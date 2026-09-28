@@ -1,27 +1,23 @@
 using Assistant.Application.Common;
 using Assistant.Application.Telegram;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Assistant.Application.Messages;
 
 public class UpdateHandler
 {
     private readonly IMessageStore _store;
-    private readonly IOptions<BotOptions> _options;
     private readonly BuildInfo _buildInfo;
     private readonly IClock _clock;
     private readonly ILogger<UpdateHandler> _logger;
 
     public UpdateHandler(
         IMessageStore store,
-        IOptions<BotOptions> options,
         BuildInfo buildInfo,
         IClock clock,
         ILogger<UpdateHandler> logger)
     {
         _store = store;
-        _options = options;
         _buildInfo = buildInfo;
         _clock = clock;
         _logger = logger;

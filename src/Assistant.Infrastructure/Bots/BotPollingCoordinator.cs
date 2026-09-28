@@ -63,18 +63,29 @@ public class BotPollingCoordinator : IHostedService
 
         foreach (var bot in activeBots)
         {
-            StartWorker(bot);
+            var handle = StartWorker(bot);
+            if (!_workers.TryAdd(bot.Id, handle))
+            {
+                handle.Cts.Cancel();
+                await handle.RunTask;
+                handle.Cts.Dispose();
+            }
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         foreach (var handle in _workers.Values)
         {
             handle.Cts.Cancel();
         }
 
-        return Task.WhenAll(_workers.Values.Select(h => h.RunTask));
+        await Task.WhenAll(_workers.Values.Select(h => h.RunTask));
+
+        foreach (var handle in _workers.Values)
+        {
+            handle.Cts.Dispose();
+        }
     }
 
     /// <summary>Starts polling a bot that was just created (e.g. by /newbot) without restarting the
@@ -89,7 +100,16 @@ public class BotPollingCoordinator : IHostedService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AssistantDbContext>();
         var bot = await db.Bots.IgnoreQueryFilters().SingleAsync(b => b.Id == botDbId, cancellationToken);
-        StartWorker(bot);
+        var handle = StartWorker(bot);
+
+        if (!_workers.TryAdd(bot.Id, handle))
+        {
+            // Another concurrent StartBotAsync call already registered a worker for this bot id first;
+            // cancel and drain the losing worker so it never runs orphaned.
+            handle.Cts.Cancel();
+            await handle.RunTask;
+            handle.Cts.Dispose();
+        }
     }
 
     /// <summary>Stops polling a bot (e.g. /settings' Remove action). No-op if it isn't running.</summary>
@@ -99,10 +119,11 @@ public class BotPollingCoordinator : IHostedService
         {
             handle.Cts.Cancel();
             await handle.RunTask;
+            handle.Cts.Dispose();
         }
     }
 
-    private void StartWorker(Bot bot)
+    private WorkerHandle StartWorker(Bot bot)
     {
         var token = bot.FamilyId is null
             ? _options.Value.ManagerToken
@@ -115,11 +136,11 @@ public class BotPollingCoordinator : IHostedService
             : new[] { UpdateKind.Message, UpdateKind.EditedMessage, UpdateKind.MyChatMember };
 
         var logger = _loggerFactory.CreateLogger<BotPollingWorker>();
-        var worker = new BotPollingWorker(receivingBot, client, allowedUpdates, _scopeFactory, _settings, _pollingHealth, _clock, logger);
+        var worker = new BotPollingWorker(receivingBot, client, allowedUpdates, _scopeFactory, _settings, _pollingHealth, _clock, logger, token);
 
         var cts = new CancellationTokenSource();
         var runTask = Task.Run(() => worker.RunAsync(cts.Token), CancellationToken.None);
-        _workers[bot.Id] = new WorkerHandle(runTask, cts);
+        return new WorkerHandle(runTask, cts);
     }
 
     private async Task EnsureManagerBotRowAsync(CancellationToken cancellationToken)
