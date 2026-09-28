@@ -1,8 +1,10 @@
 using Assistant.Application.Common;
+using Assistant.Application.Families;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
 using Assistant.Infrastructure.Bots;
+using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
@@ -60,7 +62,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var coordinator = new BotPollingCoordinator(
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
-        return new ManagerUpdateHandler(Db, new FixedClaimCode(), new PendingBotCreations(), clients, encryptor, coordinator, clock, NullLogger<ManagerUpdateHandler>.Instance);
+        var approvals = new ApprovalService(Db, clients, options, clock);
+        return new ManagerUpdateHandler(Db, new FixedClaimCode(), new PendingBotCreations(), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
     }
 
     private static IncomingUpdate ClaimCommand(long updateId, long userId, string? username, string args) =>
@@ -127,7 +130,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var coordinatorA = new BotPollingCoordinator(
             new NoopScopeFactory(dbA), clientsA, encryptorA, botOptionsA, PollingWorkerSettings.Default,
             new PollingHealth(), clockA, NullLoggerFactory.Instance);
-        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new PendingBotCreations(), clientsA, encryptorA, coordinatorA, clockA, NullLogger<ManagerUpdateHandler>.Instance);
+        var approvalsA = new ApprovalService(dbA, clientsA, botOptionsA, clockA);
+        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new PendingBotCreations(), clientsA, encryptorA, coordinatorA, approvalsA, clockA, NullLogger<ManagerUpdateHandler>.Instance);
         var telegramA = new FakeTelegramClient();
 
         var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
@@ -140,7 +144,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var coordinatorB = new BotPollingCoordinator(
             new NoopScopeFactory(dbB), clientsB, encryptorB, botOptionsB, PollingWorkerSettings.Default,
             new PollingHealth(), clockB, NullLoggerFactory.Instance);
-        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new PendingBotCreations(), clientsB, encryptorB, coordinatorB, clockB, NullLogger<ManagerUpdateHandler>.Instance);
+        var approvalsB = new ApprovalService(dbB, clientsB, botOptionsB, clockB);
+        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new PendingBotCreations(), clientsB, encryptorB, coordinatorB, approvalsB, clockB, NullLogger<ManagerUpdateHandler>.Instance);
         var telegramB = new FakeTelegramClient();
 
         await Task.WhenAll(

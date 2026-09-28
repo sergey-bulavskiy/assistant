@@ -1,9 +1,11 @@
 using Assistant.Application.Common;
+using Assistant.Application.Families;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
 using Assistant.Infrastructure.Bots;
+using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
@@ -55,8 +57,9 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         var coordinator = new BotPollingCoordinator(
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
+        var approvals = new ApprovalService(Db, clients, options, clock);
 
-        var handler = new ManagerUpdateHandler(Db, new FixedClaimCode(), pending, clients, encryptor, coordinator, clock, NullLogger<ManagerUpdateHandler>.Instance);
+        var handler = new ManagerUpdateHandler(Db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
         return (handler, clients, pending, family.Id);
     }
 

@@ -1,6 +1,7 @@
 using System.Data;
 using System.Security.Cryptography;
 using Assistant.Application.Common;
+using Assistant.Application.Families;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -23,6 +24,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     private readonly ITelegramClientFactory _clientFactory;
     private readonly ITokenEncryptor _tokenEncryptor;
     private readonly BotPollingCoordinator _coordinator;
+    private readonly IApprovalService _approvals;
     private readonly IClock _clock;
     private readonly ILogger<ManagerUpdateHandler> _logger;
 
@@ -33,6 +35,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         ITelegramClientFactory clientFactory,
         ITokenEncryptor tokenEncryptor,
         BotPollingCoordinator coordinator,
+        IApprovalService approvals,
         IClock clock,
         ILogger<ManagerUpdateHandler> logger)
     {
@@ -42,6 +45,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         _clientFactory = clientFactory;
         _tokenEncryptor = tokenEncryptor;
         _coordinator = coordinator;
+        _approvals = approvals;
         _clock = clock;
         _logger = logger;
     }
@@ -56,8 +60,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
 
         if (update.CallbackQuery is { } callback)
         {
-            // A later task adds real resolution (place/user approvals, settings actions).
-            await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Пока не реализовано", cancellationToken);
+            await HandleCallbackAsync(callback, telegramClient, cancellationToken);
             return;
         }
 
@@ -175,6 +178,40 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         var suggestedUsername = GenerateSuggestedUsername(role);
         var link = $"https://t.me/newbot/{managerUsername}/{suggestedUsername}?name={Uri.EscapeDataString(role)}";
         await telegramClient.SendTextAsync(chatId, topicId, $"Нажмите, чтобы создать бота роли «{role}»: {link}", cancellationToken);
+    }
+
+    private async Task HandleCallbackAsync(CallbackQueryInfo callback, ITelegramClient telegramClient, CancellationToken cancellationToken)
+    {
+        var parts = callback.Data.Split(':', 2);
+        if (parts.Length != 2 || !long.TryParse(parts[1], out var id))
+        {
+            await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Некорректные данные.", cancellationToken);
+            return;
+        }
+
+        switch (parts[0])
+        {
+            case "place_approve":
+            case "place_deny":
+            {
+                var resolution = await _approvals.ResolvePlaceApprovalAsync(id, approve: parts[0] == "place_approve", cancellationToken);
+                await telegramClient.AnswerCallbackAsync(
+                    callback.CallbackQueryId, resolution == ApprovalResolution.Applied ? "Записано." : "Уже решено.", cancellationToken);
+                return;
+            }
+            case "member_allow":
+            case "member_deny":
+            {
+                var resolution = await _approvals.ResolveUserApprovalAsync(id, approve: parts[0] == "member_allow", cancellationToken);
+                await telegramClient.AnswerCallbackAsync(
+                    callback.CallbackQueryId, resolution == ApprovalResolution.Applied ? "Записано." : "Уже решено.", cancellationToken);
+                return;
+            }
+            default:
+                // A later task adds settings actions (bot_*/settingsplace_*/member_disable|enable|makeowner).
+                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Пока не реализовано", cancellationToken);
+                return;
+        }
     }
 
     private async Task HandleManagedBotCreatedAsync(
