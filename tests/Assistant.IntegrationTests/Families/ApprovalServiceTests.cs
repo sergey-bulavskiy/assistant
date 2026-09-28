@@ -5,9 +5,11 @@ using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Places;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Assistant.IntegrationTests.Families;
@@ -106,5 +108,36 @@ public class ApprovalServiceTests : IntegrationTestBase
         await service.ResolveUserApprovalAsync(memberId, approve: false, CancellationToken.None);
 
         (await Db.FamilyMembers.FindAsync(memberId))!.Status.ShouldBe(FamilyMemberStatus.Denied);
+    }
+
+    [Fact]
+    public async Task Two_concurrent_first_messages_to_the_same_new_chat_create_only_one_place()
+    {
+        // Two independent DbContext instances on two independent connections, mirroring
+        // ManagerUpdateHandlerClaimTests' concurrent-/claim test, so the two calls genuinely race
+        // at the Postgres level (a single DbContext would just serialize them). TopicId is null on
+        // both, which is the common case for a plain chat/DM and the case the places unique index's
+        // NULLS NOT DISTINCT setting exists for.
+        await SetupAsync();
+        var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+
+        var optionsA = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(optionsA, ConnectionString);
+        await using var dbA = new AssistantDbContext(optionsA.Options);
+        var clientsA = new SingleClientFactory();
+        var serviceA = new ApprovalService(dbA, clientsA, options, new SystemClock());
+
+        var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(optionsB, ConnectionString);
+        await using var dbB = new AssistantDbContext(optionsB.Options);
+        var clientsB = new SingleClientFactory();
+        var serviceB = new ApprovalService(dbB, clientsB, options, new SystemClock());
+
+        var results = await Task.WhenAll(
+            serviceA.GetOrCreatePendingPlaceAsync(_botId, -100, null, "test chat", CancellationToken.None),
+            serviceB.GetOrCreatePendingPlaceAsync(_botId, -100, null, "test chat", CancellationToken.None));
+
+        results[0].ShouldBe(results[1]);
+        (await Db.Places.CountAsync(p => p.BotId == _botId && p.ChatId == -100)).ShouldBe(1);
     }
 }

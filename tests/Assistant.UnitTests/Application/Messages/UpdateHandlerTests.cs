@@ -161,12 +161,19 @@ public class UpdateHandlerTests
     }
 
     [Fact]
-    public async Task Failed_reply_send_is_swallowed_and_does_not_throw()
+    public async Task Failed_reply_send_keeps_the_stored_message_and_does_not_fail_the_update()
     {
-        var (handler, _, telegram, _, _) = CreateHandler();
+        var (handler, store, telegram, _, _) = CreateHandler();
         telegram.ThrowOnSend = true;
+        var message = Message(userId: 111);
 
+        // The message is committed before the reply is sent; a send failure escaping here would
+        // make the poller retry an update that is already stored.
         await Should.NotThrowAsync(() =>
-            handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(7, Message(userId: 111)), CancellationToken.None));
+            handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(7, message), CancellationToken.None));
+
+        var call = store.Calls.ShouldHaveSingleItem();
+        call.UpdateId.ShouldBe(7);
+        call.Message.ShouldBe(message);
     }
 }
