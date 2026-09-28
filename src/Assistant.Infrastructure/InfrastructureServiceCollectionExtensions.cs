@@ -29,6 +29,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IMessageStore, MessageStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();
+        services.AddScoped<IApprovalService, ApprovalService>();
 
         services.AddSingleton<ITokenEncryptor>(sp =>
             new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));
