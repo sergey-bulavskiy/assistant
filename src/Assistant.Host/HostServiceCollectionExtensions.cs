@@ -17,9 +17,6 @@ public static class HostServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<BotOptions>, BotOptionsValidator>();
 
         services.AddSingleton(sp => BuildInfo.FromEnvironment(sp.GetRequiredService<IClock>()));
-        services.AddSingleton<PollingHealth>();
-        services.AddSingleton(PollingSettings.Default);
-        services.AddHostedService<PollingService>();
 
         return services;
     }

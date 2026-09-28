@@ -10,12 +10,17 @@ namespace Assistant.UnitTests.Application.Messages;
 
 public class UpdateHandlerTests
 {
+    private static readonly ReceivingBot Bot = new(1, 999, "test_bot", null, "manager");
+
+    // NOTE: this factory's `allowedUserIds` parameter is now unused — the allowlist check was
+    // removed from UpdateHandler in the multi-bot polling task. Left as-is (call sites unchanged)
+    // since this file's own behavior rewrite (and BotOptions field cleanup) is a later task.
     private static UpdateHandler CreateHandler(FakeMessageStore store, FakeTelegramClient telegram, string allowedUserIds = "111,222")
     {
-        var options = Options.Create(new BotOptions { Token = "test-token", AllowedUserIdsRaw = allowedUserIds });
+        var options = Options.Create(new BotOptions { ManagerToken = "test-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var clock = new FixedClock(DateTimeOffset.UtcNow);
-        return new UpdateHandler(store, telegram, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        return new UpdateHandler(store, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
     }
 
     private static IncomingMessage Message(long userId = 111, string chatType = "private", string? text = "тест 1") =>
@@ -42,7 +47,7 @@ public class UpdateHandlerTests
         var telegram = new FakeTelegramClient();
         var handler = CreateHandler(store, telegram, allowedUserIds: "222");
 
-        await handler.HandleAsync(999, "test_bot", new IncomingUpdate(1, Message(userId: 111)), CancellationToken.None);
+        await handler.HandleAsync(Bot, telegram, new IncomingUpdate(1, Message(userId: 111)), CancellationToken.None);
 
         store.Calls.ShouldHaveSingleItem();
         store.Calls[0].Message.ShouldBeNull();
@@ -57,7 +62,7 @@ public class UpdateHandlerTests
         var telegram = new FakeTelegramClient();
         var handler = CreateHandler(store, telegram);
 
-        await handler.HandleAsync(999, "test_bot", new IncomingUpdate(2, Message(userId: 111)), CancellationToken.None);
+        await handler.HandleAsync(Bot, telegram, new IncomingUpdate(2, Message(userId: 111)), CancellationToken.None);
 
         store.Calls.Single().Message.ShouldNotBeNull();
         telegram.Sent.Single().Text.ShouldBe("Получил ✅ #7");
@@ -75,7 +80,7 @@ public class UpdateHandlerTests
         // The message is committed before the reply is sent; a send failure escaping here would make
         // the poller retry an update that is already stored.
         await Should.NotThrowAsync(() =>
-            handler.HandleAsync(999, "test_bot", new IncomingUpdate(3, message), CancellationToken.None));
+            handler.HandleAsync(Bot, telegram, new IncomingUpdate(3, message), CancellationToken.None));
 
         var call = store.Calls.ShouldHaveSingleItem();
         call.UpdateId.ShouldBe(3);
@@ -90,7 +95,7 @@ public class UpdateHandlerTests
         var telegram = new FakeTelegramClient();
         var handler = CreateHandler(store, telegram);
 
-        await handler.HandleAsync(999, "test_bot", new IncomingUpdate(4, null), CancellationToken.None);
+        await handler.HandleAsync(Bot, telegram, new IncomingUpdate(4, null), CancellationToken.None);
 
         store.Calls.Single().Message.ShouldBeNull();
         telegram.Sent.ShouldBeEmpty();

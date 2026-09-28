@@ -2,6 +2,7 @@ using Assistant.Application.Common;
 using Assistant.Application.Families;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Common;
 using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Persistence;
@@ -39,6 +40,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient("telegram").RemoveAllLoggers();
 
         services.AddSingleton<ITelegramClientFactory, TelegramClientFactory>();
+
+        services.AddSingleton<PollingHealth>();
+        services.AddSingleton(PollingWorkerSettings.Default);
+        services.AddSingleton<BotPollingCoordinator>();
+        services.AddHostedService(sp => sp.GetRequiredService<BotPollingCoordinator>());
 
         return services;
     }
