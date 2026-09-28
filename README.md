@@ -8,7 +8,7 @@ pipeline that later milestones build on.
 
 This project is designed to later handle personal and health data at runtime, in the database. **No
 personal data lives in this repository** — not in code, tests, commit history or this README. See
-`CLAUDE.md` for the full rules.
+`AGENTS.md` for the full rules.
 
 ## Prerequisites
 
