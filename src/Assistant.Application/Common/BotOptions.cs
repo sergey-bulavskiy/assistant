@@ -1,33 +1,11 @@
-using System.Globalization;
 using Microsoft.Extensions.Options;
 
 namespace Assistant.Application.Common;
 
 public class BotOptions
 {
-    public string Token { get; set; } = string.Empty;
-    public string AllowedUserIdsRaw { get; set; } = string.Empty;
-
-    private IReadOnlyList<long>? _allowedUserIds;
-
-    public IReadOnlyList<long> AllowedUserIds
-    {
-        get
-        {
-            if (_allowedUserIds is not null)
-            {
-                return _allowedUserIds;
-            }
-
-            _allowedUserIds = AllowedUserIdsRaw
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(s => long.Parse(s, CultureInfo.InvariantCulture))
-                .ToArray();
-            return _allowedUserIds;
-        }
-    }
-
-    public long? OwnerUserId => AllowedUserIds.Count > 0 ? AllowedUserIds[0] : null;
+    public string ManagerToken { get; set; } = string.Empty;
+    public string TokenEncryptionKey { get; set; } = string.Empty;
 }
 
 public class BotOptionsValidator : IValidateOptions<BotOptions>
@@ -36,27 +14,28 @@ public class BotOptionsValidator : IValidateOptions<BotOptions>
     {
         var failures = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(options.Token))
+        if (string.IsNullOrWhiteSpace(options.ManagerToken))
         {
-            failures.Add("TELEGRAM_BOT_TOKEN is required.");
+            failures.Add("TELEGRAM_MANAGER_BOT_TOKEN is required.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.AllowedUserIdsRaw))
+        if (string.IsNullOrWhiteSpace(options.TokenEncryptionKey))
         {
-            failures.Add("ALLOWED_USER_IDS is required and must contain at least one Telegram user id.");
+            failures.Add("TOKEN_ENCRYPTION_KEY is required.");
         }
         else
         {
             try
             {
-                if (options.AllowedUserIds.Count == 0)
+                var keyBytes = Convert.FromBase64String(options.TokenEncryptionKey);
+                if (keyBytes.Length != 32)
                 {
-                    failures.Add("ALLOWED_USER_IDS must contain at least one Telegram user id.");
+                    failures.Add("TOKEN_ENCRYPTION_KEY must be base64 for exactly 32 raw bytes (AES-256).");
                 }
             }
             catch (FormatException)
             {
-                failures.Add("ALLOWED_USER_IDS must be a comma-separated list of numeric Telegram user ids.");
+                failures.Add("TOKEN_ENCRYPTION_KEY must be valid base64.");
             }
         }
 

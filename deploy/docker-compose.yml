@@ -22,8 +22,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      ALLOWED_USER_IDS: ${ALLOWED_USER_IDS}
+      TELEGRAM_MANAGER_BOT_TOKEN: ${TELEGRAM_MANAGER_BOT_TOKEN}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       ConnectionStrings__Assistant: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=postgres;Password=${POSTGRES_PASSWORD}
     labels:
       - "com.centurylinklabs.watchtower.enable=true"

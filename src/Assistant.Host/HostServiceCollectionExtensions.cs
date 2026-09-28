@@ -10,8 +10,8 @@ public static class HostServiceCollectionExtensions
         services.AddOptions<BotOptions>()
             .Configure<IConfiguration>((options, config) =>
             {
-                options.Token = config["TELEGRAM_BOT_TOKEN"] ?? string.Empty;
-                options.AllowedUserIdsRaw = config["ALLOWED_USER_IDS"] ?? string.Empty;
+                options.ManagerToken = config["TELEGRAM_MANAGER_BOT_TOKEN"] ?? string.Empty;
+                options.TokenEncryptionKey = config["TOKEN_ENCRYPTION_KEY"] ?? string.Empty;
             })
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<BotOptions>, BotOptionsValidator>();

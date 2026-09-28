@@ -1,6 +1,7 @@
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Infrastructure.Common;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
@@ -24,6 +25,9 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddScoped<IMessageStore, MessageStore>();
+
+        services.AddSingleton<ITokenEncryptor>(sp =>
+            new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));
 
         // Request URLs for every Telegram Bot API call embed the bot token
         // (https://api.telegram.org/bot<token>/method). The default HttpClient logging handlers log
