@@ -89,9 +89,6 @@ public class FamilyIsolationTests : IAsyncLifetime
     [Fact]
     public async Task Unscoped_manager_context_sees_both_families_family_members_but_isolation_still_holds_per_scope()
     {
-        await using var unscoped = await OpenScopedAsync(default);
-        // default(long) is 0, not null — use the no-currentFamily constructor path instead to get
-        // an actually-unfiltered (FamilyId == null) scope:
         var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
         Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, _connectionString);
         var currentFamily = new CurrentFamily();
@@ -99,5 +96,10 @@ public class FamilyIsolationTests : IAsyncLifetime
         await using var managerScoped = new Assistant.Infrastructure.Persistence.AssistantDbContext(options.Options, currentFamily);
 
         (await managerScoped.FamilyMembers.CountAsync()).ShouldBe(2);
+        (await managerScoped.Bots.Where(b => b.FamilyId != null).CountAsync()).ShouldBe(2);
+
+        await using var familyAScoped = await OpenScopedAsync(_familyAId);
+        (await familyAScoped.Places.CountAsync()).ShouldBe(1);
+        (await familyAScoped.Messages.CountAsync()).ShouldBe(1);
     }
 }

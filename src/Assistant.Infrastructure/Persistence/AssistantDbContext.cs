@@ -48,6 +48,9 @@ public class AssistantDbContext : DbContext
         // family. Bot rows with FamilyId == null (the manager bot itself) are always visible, since
         // the manager is not itself family-scoped.
         modelBuilder.Entity<FamilyMember>().HasQueryFilter(m => _currentFamily.FamilyId == null || m.FamilyId == _currentFamily.FamilyId);
+        // The inner (b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId) duplicates Bot's own
+        // query filter, which EF Core already applies inside this Bots.Any(...) subquery. It's redundant,
+        // not load-bearing on its own — kept only for explicitness/defense-in-depth.
         modelBuilder.Entity<Place>().HasQueryFilter(p => _currentFamily.FamilyId == null || Bots.Any(b => b.Id == p.BotId && (b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId)));
         modelBuilder.Entity<StoredMessage>().HasQueryFilter(m => _currentFamily.FamilyId == null || m.FamilyId == null || m.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<Bot>().HasQueryFilter(b => _currentFamily.FamilyId == null || b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId);
