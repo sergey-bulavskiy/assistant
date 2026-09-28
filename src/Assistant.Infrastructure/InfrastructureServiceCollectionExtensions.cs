@@ -1,7 +1,9 @@
 using Assistant.Application.Common;
+using Assistant.Application.Families;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Infrastructure.Common;
+using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +27,7 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddScoped<IMessageStore, MessageStore>();
+        services.AddScoped<ICurrentFamily, CurrentFamily>();
 
         services.AddSingleton<ITokenEncryptor>(sp =>
             new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));
