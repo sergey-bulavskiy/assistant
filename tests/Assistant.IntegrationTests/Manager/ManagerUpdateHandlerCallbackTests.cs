@@ -173,6 +173,28 @@ public class ManagerUpdateHandlerCallbackTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Tap_from_an_owner_of_a_different_family_does_not_approve_a_place()
+    {
+        var (handler, telegram) = await SetupAsync();
+        var place = new Place { BotId = _botId, ChatId = -100, Title = "test chat", Status = PlaceStatus.Pending, CreatedAt = DateTimeOffset.UtcNow };
+        Db.Places.Add(place);
+
+        // A second, unrelated family whose caller is a genuine approved owner — just not of the
+        // family that owns the place being tapped on. Proves the authorization check is
+        // family-scoped, not "is an owner of any family".
+        var otherFamily = new Family { Name = "other family", CreatedAt = DateTimeOffset.UtcNow };
+        Db.Families.Add(otherFamily);
+        await Db.SaveChangesAsync();
+        Db.FamilyMembers.Add(new FamilyMember { FamilyId = otherFamily.Id, TelegramUserId = 777, DisplayName = "other owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, $"place_approve:{place.Id}", fromUserId: 777), CancellationToken.None);
+
+        (await Db.Places.FindAsync(place.Id))!.Status.ShouldBe(PlaceStatus.Pending);
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text != "Записано.");
+    }
+
+    [Fact]
     public async Task Unknown_callback_data_answers_not_implemented_without_throwing()
     {
         var (handler, telegram) = await SetupAsync();
