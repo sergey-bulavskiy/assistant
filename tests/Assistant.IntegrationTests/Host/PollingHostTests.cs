@@ -123,10 +123,14 @@ public class PollingHostTests : IAsyncLifetime
         var client = factory.CreateClient();
         await WaitUntilHealthyAsync(client);
 
+        // A later private sentinel update: updates are handled in order, so once its ack is sent the
+        // group update has been fully handled, including any (wrong) reply sent after storing it.
         factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(1, GroupText(1, -100, 111, "тест 1")));
+        factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(2, PrivateText(2, 111, "тест 2")));
 
-        await WaitForConditionAsync(async () => await CountMessagesAsync() == 1);
+        await WaitForConditionAsync(() => factory.TelegramClient.SentMessages.Any(m => m.Text == "Получил ✅ #2"));
 
+        (await CountMessagesAsync()).ShouldBe(2);
         factory.TelegramClient.SentMessages.ShouldNotContain(m => m.ChatId == -100);
     }
 
@@ -280,16 +284,16 @@ public class PollingHostTests : IAsyncLifetime
 
         factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(1, PrivateText(1, 111, "тест 1")));
 
-        // Let several real failing poll/backoff cycles run (backoff sleeps use wall-clock time
-        // regardless of the frozen offset TestClock applies below).
-        await Task.Delay(300);
+        await WaitForConditionAsync(() => factory.PoisonUpdate.FailureCount >= 1);
 
-        // Deterministic check without waiting out PollingHealth's real multi-minute healthy
-        // window: push the test clock's "now" forward past it instead. If a fresh success had
-        // been marked since startup, "now" would still fall inside its window measured from that
-        // success; since update 1 has been failing the whole time, the last recorded success is
-        // still the pre-failure one, and this must report unhealthy.
+        // Push the test clock past PollingHealth's healthy window instead of waiting it out, then
+        // let at least two more failing poll cycles run at the advanced time. A poll that marked
+        // success before handling its batch would record a success inside the new window during
+        // those cycles; since update 1 keeps failing, the last success must stay the pre-failure
+        // one and /health must report unhealthy.
         factory.Clock.Advance(TimeSpan.FromMinutes(3));
+        var failuresAtAdvance = factory.PoisonUpdate.FailureCount;
+        await WaitForConditionAsync(() => factory.PoisonUpdate.FailureCount >= failuresAtAdvance + 2);
 
         var response = await client.GetAsync("/health");
         response.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);

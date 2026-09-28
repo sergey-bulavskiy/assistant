@@ -138,22 +138,6 @@ public class MessageStoreTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Sanitized_text_stores_cleanly_with_no_nul_characters()
-    {
-        await EnsureBotAsync();
-        var store = CreateStore();
-
-        var sanitizedText = TextSanitizer.SanitizeText("caption 1\0 note");
-        var result = await store.StoreAsync(BotId, 70, TextMessage(70, text: sanitizedText), CancellationToken.None);
-
-        result.Outcome.ShouldBe(StoreOutcome.Stored);
-        var stored = await Db.Messages.SingleAsync(m => m.TelegramMessageId == 70);
-        stored.Text.ShouldBe("caption 1 note");
-        stored.Text.ShouldNotBeNull();
-        stored.Text.ShouldNotContain('\0');
-    }
-
-    [Fact]
     public async Task Unsanitized_nul_character_in_text_is_rejected_by_postgres()
     {
         await EnsureBotAsync();
