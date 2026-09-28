@@ -11,6 +11,19 @@ public sealed class PoisonUpdateInjector
 {
     private readonly object _lock = new();
     private long? _poisonUpdateId;
+    private int _failureCount;
+
+    /// <summary>How many times a poisoned store attempt has been made to fail so far.</summary>
+    public int FailureCount
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _failureCount;
+            }
+        }
+    }
 
     public void AlwaysFailStoringUpdate(long updateId)
     {
@@ -24,7 +37,13 @@ public sealed class PoisonUpdateInjector
     {
         lock (_lock)
         {
-            return hasMessage && _poisonUpdateId == updateId;
+            if (!hasMessage || _poisonUpdateId != updateId)
+            {
+                return false;
+            }
+
+            _failureCount++;
+            return true;
         }
     }
 }
