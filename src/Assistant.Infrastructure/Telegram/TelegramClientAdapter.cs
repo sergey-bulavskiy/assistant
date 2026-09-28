@@ -1,6 +1,8 @@
 using Assistant.Application.Telegram;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+using TelegramUpdateType = Telegram.Bot.Types.Enums.UpdateType;
 
 namespace Assistant.Infrastructure.Telegram;
 
@@ -19,13 +21,14 @@ public class TelegramClientAdapter : ITelegramClient
         return new BotIdentity(me.Id, me.Username ?? string.Empty);
     }
 
-    public async Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(long offset, int timeoutSeconds, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(
+        long offset, int timeoutSeconds, IReadOnlyList<UpdateKind> allowedUpdates, CancellationToken cancellationToken)
     {
         var updates = await _client.GetUpdates(
             offset: checked((int)offset),
             limit: 100,
             timeout: timeoutSeconds,
-            allowedUpdates: new[] { UpdateType.Message, UpdateType.EditedMessage },
+            allowedUpdates: allowedUpdates.Select(MapAllowedUpdate).ToArray(),
             cancellationToken: cancellationToken);
 
         return updates.Select(TelegramUpdateMapper.Map).ToArray();
@@ -33,4 +36,38 @@ public class TelegramClientAdapter : ITelegramClient
 
     public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken) =>
         _client.SendMessage(chatId: chatId, text: text, messageThreadId: topicId, cancellationToken: cancellationToken);
+
+    public async Task<int> SendTextWithButtonsAsync(
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+    {
+        var markup = new InlineKeyboardMarkup(buttons.Select(b => InlineKeyboardButton.WithCallbackData(b.Label, b.CallbackData)));
+        var sent = await _client.SendMessage(
+            chatId: chatId, text: text, messageThreadId: topicId, replyMarkup: markup, cancellationToken: cancellationToken);
+        return sent.Id;
+    }
+
+    public Task EditMessageButtonsAsync(long chatId, int messageId, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+    {
+        var markup = new InlineKeyboardMarkup(buttons.Select(b => InlineKeyboardButton.WithCallbackData(b.Label, b.CallbackData)));
+        return _client.EditMessageReplyMarkup(chatId: chatId, messageId: messageId, replyMarkup: markup, cancellationToken: cancellationToken);
+    }
+
+    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken) =>
+        _client.EditMessageText(chatId: chatId, messageId: messageId, text: text, cancellationToken: cancellationToken);
+
+    public Task AnswerCallbackAsync(string callbackQueryId, string? text, CancellationToken cancellationToken) =>
+        _client.AnswerCallbackQuery(callbackQueryId: callbackQueryId, text: text, cancellationToken: cancellationToken);
+
+    public Task<string> GetManagedBotTokenAsync(long managedBotUserId, CancellationToken cancellationToken) =>
+        _client.GetManagedBotToken(managedBotUserId, cancellationToken);
+
+    private static TelegramUpdateType MapAllowedUpdate(UpdateKind kind) => kind switch
+    {
+        UpdateKind.Message => TelegramUpdateType.Message,
+        UpdateKind.EditedMessage => TelegramUpdateType.EditedMessage,
+        UpdateKind.CallbackQuery => TelegramUpdateType.CallbackQuery,
+        UpdateKind.MyChatMember => TelegramUpdateType.MyChatMember,
+        UpdateKind.ManagedBot => TelegramUpdateType.ManagedBot,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "unmapped UpdateKind")
+    };
 }

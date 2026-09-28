@@ -35,18 +35,7 @@ public static class InfrastructureServiceCollectionExtensions
         // RemoveAllLoggers() strips those handlers from this named client only.
         services.AddHttpClient("telegram").RemoveAllLoggers();
 
-        services.AddSingleton<ITelegramBotClient>(sp =>
-        {
-            var options = sp.GetRequiredService<IOptions<BotOptions>>().Value;
-            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var httpClient = httpClientFactory.CreateClient("telegram");
-            return new TelegramBotClient(new TelegramBotClientOptions(options.Token), httpClient);
-        });
-
-        // Registered as a singleton (not scoped): TelegramClientAdapter is a stateless wrapper over
-        // the singleton ITelegramBotClient and is consumed by a singleton BackgroundService (the
-        // polling gateway, added in a later milestone task).
-        services.AddSingleton<ITelegramClient, TelegramClientAdapter>();
+        services.AddSingleton<ITelegramClientFactory, TelegramClientFactory>();
 
         return services;
     }

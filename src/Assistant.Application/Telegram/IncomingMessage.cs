@@ -17,6 +17,26 @@ public record IncomingMessage(
     long? MigrateToChatId,
     string RawJson);
 
-public record IncomingUpdate(long UpdateId, IncomingMessage? Message);
+/// <summary>A tap on an inline button. <see cref="MessageChatId"/>/<see cref="MessageId"/> identify
+/// the message the button was attached to, so its buttons can later be edited/removed.</summary>
+public record CallbackQueryInfo(
+    string CallbackQueryId,
+    long FromUserId,
+    string Data,
+    long MessageChatId,
+    int MessageId);
+
+/// <summary>The bot's own membership in a chat changed (my_chat_member). <see cref="IsNowMember"/>
+/// is true when the bot transitioned into being able to see the chat (added, or un-kicked);
+/// false when it was removed.</summary>
+public record BotMembershipChange(long ChatId, string ChatTitle, bool IsNowMember);
+
+public record IncomingUpdate(
+    long UpdateId,
+    IncomingMessage? Message,
+    CallbackQueryInfo? CallbackQuery = null,
+    BotMembershipChange? MembershipChange = null,
+    long? ManagedBotCreatorUserId = null,
+    long? ManagedBotUserId = null);
 
 public record BotIdentity(long Id, string Username);
