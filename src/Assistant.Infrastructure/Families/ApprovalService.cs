@@ -73,6 +73,12 @@ public class ApprovalService : IApprovalService
         return place.Id;
     }
 
+    public async Task<PlaceStatus> GetPlaceStatusAsync(long placeId, CancellationToken cancellationToken)
+    {
+        var place = await _db.Places.IgnoreQueryFilters().SingleAsync(p => p.Id == placeId, cancellationToken);
+        return place.Status;
+    }
+
     public async Task<ApprovalResolution> ResolvePlaceApprovalAsync(long placeId, bool approve, CancellationToken cancellationToken)
     {
         var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == placeId, cancellationToken);
@@ -124,6 +130,12 @@ public class ApprovalService : IApprovalService
         await SendToOwnersAsync(familyId, ("member", member.Id), text, buttons, cancellationToken);
 
         return member.Id;
+    }
+
+    public async Task<FamilyMemberStatus> GetFamilyMemberStatusAsync(long familyMemberId, CancellationToken cancellationToken)
+    {
+        var member = await _db.FamilyMembers.IgnoreQueryFilters().SingleAsync(m => m.Id == familyMemberId, cancellationToken);
+        return member.Status;
     }
 
     public async Task<ApprovalResolution> ResolveUserApprovalAsync(long familyMemberId, bool approve, CancellationToken cancellationToken)
