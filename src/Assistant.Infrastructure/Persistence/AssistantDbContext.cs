@@ -1,4 +1,7 @@
+using Assistant.Domain.Bots;
+using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
+using Assistant.Domain.Places;
 using Microsoft.EntityFrameworkCore;
 
 namespace Assistant.Infrastructure.Persistence;
@@ -9,9 +12,15 @@ public class AssistantDbContext : DbContext
 
     public DbSet<StoredMessage> Messages => Set<StoredMessage>();
 
-    public DbSet<BotState> BotStates => Set<BotState>();
-
     public DbSet<ChatMigration> ChatMigrations => Set<ChatMigration>();
+
+    public DbSet<Family> Families => Set<Family>();
+
+    public DbSet<FamilyMember> FamilyMembers => Set<FamilyMember>();
+
+    public DbSet<Bot> Bots => Set<Bot>();
+
+    public DbSet<Place> Places => Set<Place>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

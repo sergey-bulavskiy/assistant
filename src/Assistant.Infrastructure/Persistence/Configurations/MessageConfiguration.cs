@@ -15,5 +15,6 @@ public class MessageConfiguration : IEntityTypeConfiguration<StoredMessage>
         builder.Property(m => m.Raw).HasColumnType("jsonb").IsRequired();
         builder.Property(m => m.Username).HasMaxLength(256);
         builder.HasIndex(m => new { m.BotId, m.ChatId, m.TelegramMessageId }).IsUnique();
+        builder.HasIndex(m => m.FamilyId);
     }
 }

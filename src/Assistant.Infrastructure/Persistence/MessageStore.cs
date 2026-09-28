@@ -1,6 +1,7 @@
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Domain.Bots;
 using Assistant.Domain.Messages;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,34 +20,27 @@ public class MessageStore : IMessageStore
 
     public async Task EnsureBotStateAsync(BotIdentity identity, CancellationToken cancellationToken)
     {
-        var state = await _db.BotStates.FirstOrDefaultAsync(b => b.BotId == identity.Id, cancellationToken);
-        var now = _clock.UtcNow;
+        var bot = await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TelegramBotId == identity.Id, cancellationToken);
 
-        if (state is null)
+        if (bot is not null && bot.Username != identity.Username)
         {
-            _db.BotStates.Add(new BotState { BotId = identity.Id, Username = identity.Username, LastUpdateId = 0, UpdatedAt = now });
+            bot.Username = identity.Username;
+            await _db.SaveChangesAsync(cancellationToken);
         }
-        else if (state.Username != identity.Username)
-        {
-            state.Username = identity.Username;
-            state.UpdatedAt = now;
-        }
-
-        await _db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken)
     {
-        var state = await _db.BotStates.AsNoTracking().FirstOrDefaultAsync(b => b.BotId == botId, cancellationToken);
-        return state?.LastUpdateId ?? 0;
+        var bot = await _db.Bots.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(b => b.TelegramBotId == botId, cancellationToken);
+        return bot?.LastUpdateId ?? 0;
     }
 
     public async Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
 
-        var state = await _db.BotStates.FirstOrDefaultAsync(b => b.BotId == botId, cancellationToken)
-            ?? throw new InvalidOperationException($"bot_state row for bot {botId} not found; call EnsureBotStateAsync first.");
+        var state = await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TelegramBotId == botId, cancellationToken)
+            ?? throw new InvalidOperationException($"bots row for telegram bot id {botId} not found; the bot must be registered before polling starts.");
 
         var now = _clock.UtcNow;
 
@@ -74,6 +68,7 @@ public class MessageStore : IMessageStore
                 var entity = new StoredMessage
                 {
                     BotId = botId,
+                    FamilyId = state.FamilyId,
                     ChatId = message.ChatId,
                     TopicId = message.TopicId,
                     TelegramMessageId = message.MessageId,
@@ -118,7 +113,6 @@ public class MessageStore : IMessageStore
         }
 
         state.LastUpdateId = updateId;
-        state.UpdatedAt = now;
         await _db.SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
