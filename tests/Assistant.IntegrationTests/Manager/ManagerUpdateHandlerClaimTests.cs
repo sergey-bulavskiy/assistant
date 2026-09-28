@@ -3,6 +3,7 @@ using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
 using Assistant.Infrastructure.Manager;
+using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -67,5 +68,36 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         (await Db.Families.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
         (await Db.FamilyMembers.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("уже активирована"));
+    }
+
+    [Fact]
+    public async Task Two_concurrent_claims_against_the_same_database_create_only_one_family()
+    {
+        // Two independent DbContext instances on two independent connections, so the two claims
+        // genuinely race at the Postgres level (a single DbContext is not thread-safe and would
+        // just serialize the calls, proving nothing about the database-level fix).
+        var optionsA = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(optionsA, ConnectionString);
+        await using var dbA = new AssistantDbContext(optionsA.Options);
+        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new SystemClock(), NullLogger<ManagerUpdateHandler>.Instance);
+        var telegramA = new FakeTelegramClient();
+
+        var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(optionsB, ConnectionString);
+        await using var dbB = new AssistantDbContext(optionsB.Options);
+        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new SystemClock(), NullLogger<ManagerUpdateHandler>.Instance);
+        var telegramB = new FakeTelegramClient();
+
+        await Task.WhenAll(
+            handlerA.HandleAsync(ManagerBot, telegramA, ClaimCommand(1, 111, "test_owner_a", "424242"), CancellationToken.None),
+            handlerB.HandleAsync(ManagerBot, telegramB, ClaimCommand(2, 222, "test_owner_b", "424242"), CancellationToken.None));
+
+        (await Db.Families.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        var owners = await Db.FamilyMembers.IgnoreQueryFilters().Where(m => m.IsOwner).ToListAsync();
+        owners.Count.ShouldBe(1);
+
+        var allReplies = telegramA.SentMessages.Concat(telegramB.SentMessages).ToList();
+        allReplies.ShouldContain(m => m.Text.Contains("Готово"));
+        allReplies.ShouldContain(m => m.Text.Contains("уже активирована"));
     }
 }

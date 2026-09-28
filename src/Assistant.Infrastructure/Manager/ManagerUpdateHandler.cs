@@ -1,3 +1,4 @@
+using System.Data;
 using Assistant.Application.Common;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
@@ -6,6 +7,7 @@ using Assistant.Domain.Families;
 using Assistant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace Assistant.Infrastructure.Manager;
 
@@ -59,37 +61,62 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     private async Task HandleClaimAsync(
         long chatId, int? topicId, long userId, string? username, string? code, ITelegramClient telegramClient, CancellationToken cancellationToken)
     {
-        var alreadyClaimed = await _db.Families.IgnoreQueryFilters().AnyAsync(cancellationToken);
-        if (alreadyClaimed)
+        // The check-then-act below (AnyAsync, then insert) is a classic TOCTOU: two concurrent
+        // /claim calls could both observe "no family yet" before either commits. Serializable
+        // isolation makes Postgres detect that overlap and abort one side with a serialization
+        // failure (SqlState 40001), which is caught below and treated the same as "already
+        // claimed". This keeps the invariant scoped to the claim path (no schema-level "at most
+        // one family, ever" constraint), since M3+ is expected to allow multiple families.
+        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        try
         {
+            var alreadyClaimed = await _db.Families.IgnoreQueryFilters().AnyAsync(cancellationToken);
+            if (alreadyClaimed)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", cancellationToken);
+                return;
+            }
+
+            if (code is null || code != _claimCode.Code)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, "Неверный код.", cancellationToken);
+                return;
+            }
+
+            var now = _clock.UtcNow;
+            var family = new Family { Name = "Family 1", CreatedAt = now };
+            _db.Families.Add(family);
+            await _db.SaveChangesAsync(cancellationToken);
+
+            _db.FamilyMembers.Add(new FamilyMember
+            {
+                FamilyId = family.Id,
+                TelegramUserId = userId,
+                DisplayName = username ?? $"user {userId}",
+                Username = username,
+                Status = FamilyMemberStatus.Approved,
+                IsOwner = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            await _db.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex) when (IsSerializationFailure(ex))
+        {
+            _logger.LogInformation("claim lost a concurrent race (serialization failure); treating as already claimed.");
             await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", cancellationToken);
             return;
         }
 
-        if (code is null || code != _claimCode.Code)
-        {
-            await telegramClient.SendTextAsync(chatId, topicId, "Неверный код.", cancellationToken);
-            return;
-        }
-
-        var now = _clock.UtcNow;
-        var family = new Family { Name = "Family 1", CreatedAt = now };
-        _db.Families.Add(family);
-        await _db.SaveChangesAsync(cancellationToken);
-
-        _db.FamilyMembers.Add(new FamilyMember
-        {
-            FamilyId = family.Id,
-            TelegramUserId = userId,
-            DisplayName = username ?? $"user {userId}",
-            Username = username,
-            Status = FamilyMemberStatus.Approved,
-            IsOwner = true,
-            CreatedAt = now,
-            UpdatedAt = now
-        });
-        await _db.SaveChangesAsync(cancellationToken);
-
         await telegramClient.SendTextAsync(chatId, topicId, "Готово! Семья создана, вы её владелец. Команда /newbot создаёт бота роли.", cancellationToken);
     }
+
+    private static bool IsSerializationFailure(Exception ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure }
+        || ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure };
 }
