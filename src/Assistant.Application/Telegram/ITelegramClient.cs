@@ -9,6 +9,8 @@ public enum UpdateKind
     ManagedBot
 }
 
+/// <summary>Telegram limits <c>callback_data</c> to 64 bytes (UTF-8 encoded); callers must keep
+/// encoded action strings under that limit.</summary>
 public record InlineButton(string Label, string CallbackData);
 
 public interface ITelegramClient
