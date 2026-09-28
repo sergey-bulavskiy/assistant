@@ -2,6 +2,7 @@ using System.Text.Json;
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Domain.Bots;
 using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
@@ -41,6 +42,17 @@ public class MessageStoreTests : IntegrationTestBase
 
     private async Task EnsureBotAsync()
     {
+        Db.Bots.Add(new Bot
+        {
+            TelegramBotId = BotId,
+            Username = "test_bot",
+            Role = "test",
+            Status = BotStatus.Active,
+            LastUpdateId = 0,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await Db.SaveChangesAsync();
+
         await CreateStore().EnsureBotStateAsync(new BotIdentity(BotId, "test_bot"), CancellationToken.None);
     }
 
