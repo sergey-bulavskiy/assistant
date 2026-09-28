@@ -225,9 +225,23 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         await telegramClient.SendTextAsync(chatId, topicId, "Готово! Семья создана, вы её владелец. Команда /newbot создаёт бота роли.", cancellationToken);
     }
 
-    private static bool IsSerializationFailure(Exception ex) =>
-        ex is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure }
-        || ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure };
+    // EF Core's default (non-retrying) execution strategy detects that a serialization failure is
+    // "transient" and, because it happened inside our own explicit transaction (BeginTransactionAsync
+    // above) rather than one it controls, re-wraps it as an InvalidOperationException instead of
+    // letting the PostgresException surface directly — one extra level of nesting on top of the usual
+    // DbUpdateException wrapper. Walk the whole chain instead of checking a fixed depth.
+    private static bool IsSerializationFailure(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private async Task HandleNewBotAsync(
         long chatId, int? topicId, long userId, string managerUsername, string? role, ITelegramClient telegramClient, CancellationToken cancellationToken)
