@@ -9,10 +9,34 @@ command only as an example next to a generic fallback.
 
 ## Repositories
 
-- This repo (`assistant`) is **public**: code, tests, CI/CD, deploy files.
-- Specs, plans and requirements live in the **private** sibling repo `../assistant-specs`
-  (`docs/superpowers/specs`, `docs/superpowers/plans`). Read them there; never copy them here.
-  `docs/` is gitignored in this repo on purpose.
+- This repo (`assistant`) is **public**: code, tests, CI/CD, deploy files, and every rule on
+  *how* the project is developed (process, planning, delivery, agent instructions).
+- The **private** sibling repo `../assistant-specs` holds the *product*: requirements, specs,
+  plans, decisions, status (`docs/superpowers/specs`, `docs/superpowers/plans`). Read them there;
+  never copy them here. `docs/` is gitignored in this repo on purpose. Development rules go here,
+  not there; the specs repo's `AGENTS.md` keeps only its layout and privacy rules.
+
+## Planning and working with the owner
+
+- **Iterative delivery.** Foundation and delivery pipeline first, then features, one milestone at
+  a time. Write a milestone's spec (in the specs repo) when the milestone starts, get the owner's
+  approval, then write the plan.
+- **Plans for weaker implementers.** Plans are executed by fresh, less capable models with zero
+  context: exact file paths, complete code, exact package versions, exact commands with expected
+  output, a verification after each step, feature-specific pitfalls named. No "etc.", "similar to
+  Task N" or unstated decisions.
+- **Plans contain the feature, not the repo's process.** Branching, privacy, git, local gate,
+  review, PR/CI/merge flow and environment pitfalls are defined in this file and the local
+  guides. A plan points to them once in its header ("follow `../assistant/AGENTS.md` and the
+  local guides") and never restates or overrides them. If a plan needs a new repo-wide rule,
+  change this file instead.
+- **Coordinate, don't grind.** The main agent coordinates; research, plan writing,
+  implementation and reviews go to cheaper subagents with self-contained briefs. Specify the
+  model explicitly.
+- **Read official docs first** (e.g. a tool's GitHub README) before probing an API by trial and
+  error.
+- **Ask before outward actions** the owner hasn't authorized in the current session (merges,
+  pushes to `main`, publishing, deploying on the home PC, changing the owner's machine settings).
 
 ## Layout and local guides
 
