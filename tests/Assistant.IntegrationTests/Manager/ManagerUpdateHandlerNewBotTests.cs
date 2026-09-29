@@ -39,6 +39,8 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
 
     private static readonly ReceivingBot ManagerBot = new(BotDbId: 1, TelegramBotId: 998, Username: "test_manager_bot", FamilyId: null, Role: "manager");
 
+    private readonly TestClock _clock = new();
+
     private async Task<(ManagerUpdateHandler Handler, RecordingClientFactory Clients, IPendingBotCreations Pending, long FamilyId)> SetupAsync()
     {
         var family = new Family { Name = "test family", CreatedAt = DateTimeOffset.UtcNow };
@@ -47,20 +49,32 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         Db.FamilyMembers.Add(new FamilyMember { FamilyId = family.Id, TelegramUserId = 111, DisplayName = "owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
         await Db.SaveChangesAsync();
 
-        var services = new ServiceCollection();
-        services.AddSingleton<AssistantDbContext>(Db);
+        var (handler, clients, pending, _) = CreateHandler(Db);
+        return (handler, clients, pending, family.Id);
+    }
+
+    /// <summary>Everything a fresh process would build: a new handler, store and client factory over
+    /// the given context. Calling it again with a new context stands in for a restart.</summary>
+    private (ManagerUpdateHandler Handler, RecordingClientFactory Clients, IPendingBotCreations Pending, BotPollingCoordinator Coordinator) CreateHandler(AssistantDbContext db)
+    {
         var clients = new RecordingClientFactory();
-        var pending = new PendingBotCreations();
+        var pending = new PendingBotCreations(db, _clock);
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var encryptor = new Assistant.Infrastructure.Common.TokenEncryptor(options.Value.TokenEncryptionKey);
-        var clock = new SystemClock();
         var coordinator = new BotPollingCoordinator(
-            new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
-            new PollingHealth(), clock, NullLoggerFactory.Instance);
-        var approvals = new ApprovalService(Db, clients, options, clock);
+            new NoopScopeFactory(db), clients, encryptor, options, PollingWorkerSettings.Default,
+            new PollingHealth(), _clock, NullLoggerFactory.Instance);
+        var approvals = new ApprovalService(db, clients, options, _clock);
 
-        var handler = new ManagerUpdateHandler(Db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
-        return (handler, clients, pending, family.Id);
+        var handler = new ManagerUpdateHandler(db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, _clock, NullLogger<ManagerUpdateHandler>.Instance);
+        return (handler, clients, pending, coordinator);
+    }
+
+    private AssistantDbContext NewDbContext()
+    {
+        var options = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(options, ConnectionString);
+        return new AssistantDbContext(options.Options);
     }
 
     /// <summary>BotPollingCoordinator.StartBotAsync opens its own DI scope to reload the bot row —
@@ -115,7 +129,7 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
 
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("https://t.me/newbot/test_manager_bot/"));
-        pending.TakeRole(111).ShouldBe("cook");
+        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("cook");
     }
 
     [Fact]
@@ -135,5 +149,69 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         bot.Role.ShouldBe("cook");
         bot.TokenEncrypted.ShouldNotBeNull();
         telegram.SentMessages.ShouldContain(m => m.ChatId == 111 && m.Text.Contains("создан и запущен"));
+    }
+
+    [Fact]
+    public async Task Pending_role_survives_a_restart_between_newbot_and_the_managed_bot_update()
+    {
+        var (handler, _, _, _) = await SetupAsync();
+        var telegram = new FakeTelegramClient();
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
+
+        await using var dbAfterRestart = NewDbContext();
+        var (handlerAfterRestart, _, _, coordinatorAfterRestart) = CreateHandler(dbAfterRestart);
+        await handlerAfterRestart.HandleAsync(
+            ManagerBot, telegram, new IncomingUpdate(2, null, ManagedBotCreatorUserId: 111, ManagedBotUserId: 555), CancellationToken.None);
+        await coordinatorAfterRestart.StopAsync(CancellationToken.None);
+
+        var bot = await Db.Bots.IgnoreQueryFilters().SingleAsync(b => b.TelegramBotId == 999);
+        bot.Role.ShouldBe("cook");
+    }
+
+    [Fact]
+    public async Task A_repeat_newbot_replaces_the_pending_role()
+    {
+        var (handler, _, pending, _) = await SetupAsync();
+        var telegram = new FakeTelegramClient();
+
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
+        await handler.HandleAsync(ManagerBot, telegram, Command(2, 111, "/newbot driver"), CancellationToken.None);
+
+        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("driver");
+    }
+
+    [Fact]
+    public async Task A_pending_role_can_be_taken_only_once()
+    {
+        var (handler, _, pending, _) = await SetupAsync();
+        var telegram = new FakeTelegramClient();
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
+
+        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("cook");
+        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_pending_role_older_than_a_day_is_ignored()
+    {
+        var (handler, _, pending, _) = await SetupAsync();
+        var telegram = new FakeTelegramClient();
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
+
+        _clock.Advance(TimeSpan.FromHours(25));
+
+        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_role_that_does_not_fit_a_bot_row_is_rejected_without_a_link()
+    {
+        var (handler, _, _, _) = await SetupAsync();
+        var telegram = new FakeTelegramClient();
+
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot " + new string('r', 65)), CancellationToken.None);
+
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldContain("слишком длинная");
+        (await Db.PendingBotCreations.CountAsync()).ShouldBe(0);
     }
 }
