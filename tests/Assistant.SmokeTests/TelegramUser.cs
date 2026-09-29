@@ -37,8 +37,10 @@ public sealed class TelegramUser : IAsyncDisposable
             {
                 "api_id" => apiId.ToString(CultureInfo.InvariantCulture),
                 "api_hash" => apiHash,
-                _ => throw new InvalidOperationException(
-                    $"Telegram asked for '{what}': the stored session is expired or invalid. Regenerate it (tests/Assistant.SmokeTests/README.md).")
+                "phone_number" or "verification_code" or "password" or "email" or "email_verification_code" =>
+                    throw new InvalidOperationException(
+                        $"Telegram asked for '{what}': the stored session is expired or invalid. Regenerate it (tests/Assistant.SmokeTests/README.md)."),
+                _ => null
             },
             sessionStore);
 
@@ -73,7 +75,7 @@ public sealed class TelegramUser : IAsyncDisposable
     public async Task<InputPeer> FindChatAsync(string title)
     {
         var dialogs = await _client.Messages_GetAllDialogs();
-        var chat = dialogs.chats.Values.FirstOrDefault(c => c.Title == title)
+        var chat = dialogs.chats.Values.FirstOrDefault(c => c.IsActive && c.Title == title)
             ?? throw new InvalidOperationException($"The account is not a member of a chat titled '{title}'.");
         return chat;
     }
@@ -81,25 +83,6 @@ public sealed class TelegramUser : IAsyncDisposable
     public async Task SendAsync(InputPeer peer, string text, int topicId = 0)
     {
         await _client.SendMessageAsync(peer, text, reply_to_msg_id: topicId);
-        await Task.Delay(SendPause);
-    }
-
-    /// <summary>Removes the bot from the chat if present, then adds it, so the bot always sees a fresh "added" event.</summary>
-    public async Task ReAddBotAsync(InputPeer chat, InputPeer bot)
-    {
-        var botPeer = (InputPeerUser)bot;
-        var botUser = new InputUser(botPeer.user_id, botPeer.access_hash);
-        try
-        {
-            await _client.DeleteChatUser(chat, botUser);
-            await Task.Delay(SendPause);
-        }
-        catch (RpcException)
-        {
-            // Not a member yet: nothing to remove.
-        }
-
-        await _client.AddChatUser(chat, botUser);
         await Task.Delay(SendPause);
     }
 
@@ -138,7 +121,7 @@ public sealed class TelegramUser : IAsyncDisposable
             var match = _received.Skip(since).FirstOrDefault(predicate);
             if (match is not null)
             {
-                throw new InvalidOperationException($"Unexpected message matching '{description}': {match.message}");
+                throw new InvalidOperationException($"Unexpected message matching '{description}', message id {match.id}");
             }
         }
     }
@@ -152,8 +135,16 @@ public sealed class TelegramUser : IAsyncDisposable
             .Select(b => b.type)
             .OfType<InlineButtonTypeCallback>()
             .FirstOrDefault()
-            ?? throw new InvalidOperationException($"No button '{buttonLabel}' on message: {message.message}");
-        await _client.Messages_GetBotCallbackAnswer(peer, message.id, callback.data);
+            ?? throw new InvalidOperationException($"No button '{buttonLabel}' on message id {message.id}");
+        try
+        {
+            await _client.Messages_GetBotCallbackAnswer(peer, message.id, callback.data);
+        }
+        catch (RpcException e) when (e.Message == "BOT_RESPONSE_TIMEOUT")
+        {
+            // The bot answered slowly; the scenario verifies every tap through the database.
+        }
+
         await Task.Delay(SendPause);
     }
 

@@ -49,12 +49,17 @@ public sealed class Scenario(SmokeConfig config, SmokeStack stack, TelegramUser 
     public async Task SeedRoleBotAsync()
     {
         var familyId = Convert.ToInt64(await stack.ScalarAsync("SELECT id FROM families LIMIT 1"), CultureInfo.InvariantCulture);
+        if (!long.TryParse(config.RoleBotToken.Split(':')[0], NumberStyles.None, CultureInfo.InvariantCulture, out var botId))
+        {
+            throw new InvalidOperationException("SMOKE_ROLE_BOT_TOKEN is not in <id>:<secret> form.");
+        }
+
         var encrypted = new TokenEncryptor(stack.EncryptionKey).Encrypt(config.RoleBotToken);
         await stack.ExecuteAsync(
             "INSERT INTO bots (family_id, telegram_bot_id, username, role, token_encrypted, status, last_update_id, created_at) " +
             "VALUES (@f, @t, @n, 'general', @e, 'Active', 0, now())",
             ("f", familyId),
-            ("t", long.Parse(config.RoleBotToken.Split(':')[0], CultureInfo.InvariantCulture)),
+            ("t", botId),
             ("n", config.RoleBotUsername),
             ("e", encrypted));
         await stack.RestartAppAsync();
@@ -65,14 +70,14 @@ public sealed class Scenario(SmokeConfig config, SmokeStack stack, TelegramUser 
         var dmMarker = Marker("dm");
         var mark = owner.Mark();
         await owner.SendAsync(_roleBot, dmMarker);
-        await owner.WaitForAsync(FromDm(_roleBotId, "Получил"), mark, "private ack");
+        await AckAsync(mark, dmMarker, "private ack");
         (await stack.CountAsync("SELECT count(*) FROM messages WHERE text = @t", ("t", dmMarker))).ShouldBe(1);
 
         await ApprovePlaceAsync(_group, config.GroupTitle);
 
         var groupMarker = Marker("group");
         mark = owner.Mark();
-        await owner.SendAsync(_group, $"@{config.RoleBotUsername} {groupMarker}");
+        await owner.SendAsync(_group, groupMarker);
         await EventuallyAsync(
             async () => await stack.CountAsync("SELECT count(*) FROM messages WHERE text LIKE @t", ("t", $"%{groupMarker}%")) == 1,
             "group message stored");
@@ -85,7 +90,7 @@ public sealed class Scenario(SmokeConfig config, SmokeStack stack, TelegramUser 
 
         var topicId = await owner.CreateForumTopicAsync(_forum, Marker("topic"));
         var mark = owner.Mark();
-        await owner.SendAsync(_forum, $"@{config.RoleBotUsername} {Marker("topic-msg")}", topicId);
+        await owner.SendAsync(_forum, Marker("topic-msg"), topicId);
         var dm = await owner.WaitForAsync(FromDm(_managerId, "Первое сообщение в теме"), mark, "topic approval DM");
         await owner.TapAsync(_manager, dm, "Да");
         await EventuallyAsync(
@@ -127,7 +132,7 @@ public sealed class Scenario(SmokeConfig config, SmokeStack stack, TelegramUser 
         await owner.TapAsync(_manager, groupPlace, "Удалить");
         await EventuallyAsync(async () => await stack.CountAsync("SELECT count(*) FROM places") == placesBefore - 1, "place removed");
         mark = owner.Mark();
-        await owner.SendAsync(_group, $"@{config.RoleBotUsername} {Marker("after-remove")}");
+        await owner.SendAsync(_group, Marker("after-remove"));
         await owner.WaitForAsync(FromDm(_managerId, $"добавлен в «{config.GroupTitle}»"), mark, "fresh approval after place removal");
     }
 
@@ -136,29 +141,41 @@ public sealed class Scenario(SmokeConfig config, SmokeStack stack, TelegramUser 
         var before = Marker("before-restart");
         var mark = owner.Mark();
         await owner.SendAsync(_roleBot, before);
-        await owner.WaitForAsync(FromDm(_roleBotId, "Получил"), mark, "ack before restart");
+        var idBefore = await AckAsync(mark, before, "ack before restart");
 
         mark = owner.Mark();
         await stack.RestartAppAsync();
-        await owner.AssertNoneAsync(FromDm(_roleBotId, "Получил"), mark, "duplicate ack after restart", seconds: 15);
+        await owner.AssertNoneAsync(FromDm(_roleBotId, $"Получил ✅ #{idBefore}"), mark, "duplicate ack after restart", seconds: 15);
         (await stack.CountAsync("SELECT count(*) FROM messages WHERE text = @t", ("t", before))).ShouldBe(1);
 
         var after = Marker("after-restart");
         mark = owner.Mark();
         await owner.SendAsync(_roleBot, after);
-        await owner.WaitForAsync(FromDm(_roleBotId, "Получил"), mark, "ack after restart");
+        await AckAsync(mark, after, "ack after restart");
         (await stack.CountAsync("SELECT count(*) FROM messages WHERE text = @t", ("t", after))).ShouldBe(1);
     }
 
     private async Task ApprovePlaceAsync(InputPeer chat, string title)
     {
         var mark = owner.Mark();
-        await owner.ReAddBotAsync(chat, _roleBot);
+        await owner.SendAsync(chat, Marker("place"));
         var dm = await owner.WaitForAsync(FromDm(_managerId, $"добавлен в «{title}»"), mark, $"place approval DM for '{title}'");
         await owner.TapAsync(_manager, dm, "Да");
         await EventuallyAsync(
             async () => await stack.CountAsync("SELECT count(*) FROM places WHERE title = @t AND topic_id IS NULL AND status = 'Approved'", ("t", title)) == 1,
             $"place '{title}' approved");
+    }
+
+    /// <summary>Waits until the message is stored, then for the bot's ack carrying its database id; returns that id.</summary>
+    private async Task<long> AckAsync(int mark, string marker, string what)
+    {
+        object? id = null;
+        await EventuallyAsync(
+            async () => (id = await stack.ScalarAsync("SELECT id FROM messages WHERE text = @t", ("t", marker))) is not null and not DBNull,
+            $"{what}: message stored");
+        var messageId = Convert.ToInt64(id, CultureInfo.InvariantCulture);
+        await owner.WaitForAsync(FromDm(_roleBotId, $"Получил ✅ #{messageId}"), mark, what);
+        return messageId;
     }
 
     private async Task<string?> StatusOfRoleBotAsync() =>

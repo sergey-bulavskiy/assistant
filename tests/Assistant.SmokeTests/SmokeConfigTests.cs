@@ -27,9 +27,33 @@ public class SmokeConfigTests
     }
 
     [Fact]
-    public void Image_is_optional_and_used_when_present()
+    public void Empty_required_setting_counts_as_missing()
     {
         var settings = CompleteSettings();
+        settings["SMOKE_ROLE_BOT_TOKEN"] = "";
+
+        var error = Should.Throw<InvalidOperationException>(() => SmokeConfig.Load(name => settings.GetValueOrDefault(name)));
+
+        error.Message.ShouldContain("SMOKE_ROLE_BOT_TOKEN");
+    }
+
+    [Fact]
+    public void Non_numeric_api_id_is_reported_by_name()
+    {
+        var settings = CompleteSettings();
+        settings["SMOKE_TG_API_ID"] = "abc";
+
+        var error = Should.Throw<InvalidOperationException>(() => SmokeConfig.Load(name => settings.GetValueOrDefault(name)));
+
+        error.Message.ShouldContain("SMOKE_TG_API_ID");
+        error.Message.ShouldNotContain("abc");
+    }
+
+    [Fact]
+    public void Empty_image_setting_is_treated_as_unset()
+    {
+        var settings = CompleteSettings();
+        settings["SMOKE_IMAGE"] = "";
         SmokeConfig.Load(name => settings.GetValueOrDefault(name)).Image.ShouldBeNull();
 
         settings["SMOKE_IMAGE"] = "example.invalid/assistant:sha-abc1234";

@@ -30,12 +30,19 @@ public sealed record SmokeConfig(
 
     public static SmokeConfig Load(Func<string, string?> lookup)
     {
+        string? Optional(string name) => lookup(name) is { Length: > 0 } value ? value : null;
+
         string Required(string name) =>
-            lookup(name) ?? throw new InvalidOperationException(
+            Optional(name) ?? throw new InvalidOperationException(
                 $"Smoke test setting {name} is missing (see tests/Assistant.SmokeTests/README.md).");
 
+        if (!int.TryParse(Required("SMOKE_TG_API_ID"), NumberStyles.None, CultureInfo.InvariantCulture, out var apiId))
+        {
+            throw new InvalidOperationException("Smoke test setting SMOKE_TG_API_ID must be a number.");
+        }
+
         return new SmokeConfig(
-            int.Parse(Required("SMOKE_TG_API_ID"), CultureInfo.InvariantCulture),
+            apiId,
             Required("SMOKE_TG_API_HASH"),
             Required("SMOKE_OWNER_SESSION"),
             Required("SMOKE_MANAGER_BOT_TOKEN"),
@@ -44,7 +51,7 @@ public sealed record SmokeConfig(
             Required("SMOKE_ROLE_BOT_USERNAME"),
             Required("SMOKE_GROUP_TITLE"),
             Required("SMOKE_FORUM_TITLE"),
-            lookup("SMOKE_IMAGE"));
+            Optional("SMOKE_IMAGE"));
     }
 
     private static Dictionary<string, string> LoadEnvFile()
