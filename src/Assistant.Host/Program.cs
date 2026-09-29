@@ -31,8 +31,8 @@ builder.Services.AddAssistantHost(builder.Configuration);
 
 var app = builder.Build();
 
-// Force BotOptions validation now, before touching the database: a bad TELEGRAM_BOT_TOKEN or
-// ALLOWED_USER_IDS should fail fast with an OptionsValidationException rather than running
+// Force BotOptions validation now, before touching the database: a missing
+// TELEGRAM_MANAGER_BOT_TOKEN or a bad TOKEN_ENCRYPTION_KEY should fail fast with an OptionsValidationException rather than running
 // migrations against a database the bot then can't actually use.
 _ = app.Services.GetRequiredService<IOptions<BotOptions>>().Value;
 

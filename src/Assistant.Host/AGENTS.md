@@ -15,9 +15,5 @@
   instance before starting another against the same bot.
 - `/health` reports polling health (`PollingHealth`); `--healthcheck` is the container
   HEALTHCHECK entry point and calls `/health` on port 8080.
-- Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,
-  replacing M1's single-row `bot_state` table, so restarts resume every bot independently.
-  `BotPollingCoordinator` (singleton hosted service) runs one `BotPollingWorker` per active `bots`
-  row and can start a new worker at runtime, without a process restart, when a role bot finishes
-  creation. Each worker keeps its own per-update failure count and skips poison updates after
-  `PoisonUpdateFailureCap` attempts.
+- Bot polling itself (`BotPollingCoordinator`, one worker per bot) lives in
+  `src/Assistant.Infrastructure/Bots`; see that folder's guide.

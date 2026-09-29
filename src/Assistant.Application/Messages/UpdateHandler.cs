@@ -51,9 +51,9 @@ public class UpdateHandler
             return;
         }
 
-        // Bot just added to a chat (spec §3.3): request a whole-chat place approval immediately,
+        // Bot just added to a chat: request a whole-chat place approval immediately,
         // without waiting for a first message. topic_id is always null here — Telegram's
-        // my_chat_member update carries no topic information (Judgment Call 3).
+        // my_chat_member update carries no topic information.
         if (update.MembershipChange is { IsNowMember: true } added)
         {
             await _approvals.GetOrCreatePendingPlaceAsync(bot.BotDbId, added.ChatId, null, added.ChatTitle, cancellationToken);
@@ -64,7 +64,7 @@ public class UpdateHandler
         if (update.MembershipChange is not null || update.CallbackQuery is not null || update.Message is null)
         {
             // "removed from chat" needs no action beyond advancing the offset; role bots never
-            // receive callback queries (an earlier task's allowed-update list for role bots has no
+            // receive callback queries (their allowed-update list in BotPollingCoordinator has no
             // CallbackQuery) or managed_bot/other non-message updates in practice, but handle them
             // the same inert way defensively.
             await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
