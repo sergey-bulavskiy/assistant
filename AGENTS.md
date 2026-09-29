@@ -3,7 +3,9 @@
 Family assistant: Telegram role-bots backed by LLMs (C# / .NET 10, PostgreSQL).
 
 Instructions for any coding agent (Claude Code, Codex, Copilot, Cursor, …) working in this repo.
-`CLAUDE.md` files only import the `AGENTS.md` next to them; edit `AGENTS.md`, never the stubs.
+`AGENTS.md` files are the only instruction files; don't add tool-specific ones (`CLAUDE.md`,
+`.cursorrules`, `copilot-instructions.md`, …). Keep the rules tool-neutral: name a tool's
+command only as an example next to a generic fallback.
 
 ## Repositories
 
@@ -27,7 +29,7 @@ Instructions for any coding agent (Claude Code, Codex, Copilot, Cursor, …) wor
 Before editing files under a path with a local guide, read that guide. Rules live in exactly one
 file: a rule that applies to one folder goes in that folder's guide, not here. Add a new local
 guide only for knowledge that is not obvious from the code (a gotcha, an invariant, a command),
-and add it to the table above together with a `CLAUDE.md` stub containing `@AGENTS.md`.
+and add it to the table above.
 
 ## Privacy rules (mandatory)
 
@@ -58,34 +60,52 @@ Faster local loop and test infrastructure details: `tests/AGENTS.md`.
 ## Delivering a change
 
 Every change, including docs, goes through these steps. Do not report a change as done before
-step 7.
+step 8.
+
+The owner is the only developer. Each check runs **once**, where it is cheapest: tests run
+locally and again in CI (CI costs no model tokens), but a change gets **one** model review, not
+one per stage. Keep command output small: read logs only when something failed.
 
 1. **Branch.** Never commit to `main`. Name branches `feat/…`, `fix/…` or `chore/…`.
-2. **Local gate.** Run the build and test commands above; both must pass. If you could not run a
-   step (e.g. Docker unavailable), say so explicitly — never claim it passed.
+2. **Local gate.** Run the build and test commands above with quiet output
+   (`dotnet build -c Release -warnaserror -v q -nologo`,
+   `dotnet test -c Release -v q --logger "console;verbosity=minimal"`); both must pass. If you
+   could not run a step (e.g. Docker unavailable), say so explicitly — never claim it passed.
+   Skip it for changes that touch no code, tests or build files (docs, `AGENTS.md`, workflows):
+   CI runs anyway. After fixing review findings, rerun only the build and the affected tests;
+   CI runs the full suite.
 3. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
    about to publish against the privacy rules above.
-4. **Review.** Get a review against the checklist below from a fresh reviewer (a subagent or a
-   separate session with no stake in the change). Fix or explicitly answer each finding.
-   In Claude Code use the built-in `/code-review`; when tests changed, also run the
-   `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`).
+4. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
+   subagent or a separate session with no stake in the change). Fix or explicitly answer each
+   blocking and should-fix finding.
+   - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 3 is enough.
+   - Code changes: one review, using the tool's built-in review command if it has one (e.g.
+     `/code-review` in Claude Code), otherwise a fresh subagent given this checklist.
+   - Work executed task by task with per-task reviews (e.g. a subagent-per-task plan executor):
+     those reviews plus one final whole-branch review are the review. Do not run another one.
+   - A dedicated test-quality review (e.g. the `test-quality-auditor` agent from the
+     `dotnet-test` plugin, see `tests/AGENTS.md`) only when the PR adds new test classes or
+     rewrites existing tests, not for small test edits.
+   - Do not rerun a full review after fixing findings; check the fixes yourself.
 5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
-6. **CI.** `gh pr checks --watch`. On failure: `gh run view <run-id> --log-failed`, fix, push,
-   watch again. A red or pending check is not done.
-   **CI review:** if the PR adds or changes functionality (anything under `src/`, behaviour, config
-   or schema), run the Claude CI review: `gh pr edit <n> --add-label claude-review`, then wait for
-   its run (`gh run list --workflow claude-review.yml --limit 1`, `gh run watch <run-id>`) and read
-   its summary (`gh pr view <n> --comments`) and inline comments
-   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`). Fix or explicitly answer every blocking and
-   should-fix finding; after fixing, remove and re-add the label to review again. Optional for
-   docs-only and chore PRs. It complements, never replaces, the local review in step 4.
+6. **CI.** Wait without streaming progress:
+   `gh pr checks <n> --watch --fail-fast > /dev/null; echo "exit=$?"` (if it reports no checks
+   yet, retry after a few seconds). On failure: `gh run view <run-id> --log-failed`, fix, push,
+   wait again. A red or pending check is not done.
+   **AI CI review** (`claude-review` label, `.github/AGENTS.md`) is **not** part of the flow;
+   run it only when the owner asks. Then: `gh pr edit <n> --add-label claude-review`, wait for its run
+   (`gh run list --workflow claude-review.yml --limit 1`,
+   `gh run watch <run-id> --exit-status > /dev/null`), read its summary
+   (`gh pr view <n> --comments`) and inline comments
+   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`),
+   and fix or explicitly answer every blocking and should-fix finding.
 7. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
-   below) only when CI is green, required CI review findings are resolved, and the owner has
-   approved merging in the current session.
+   below) only when CI is green and the owner has approved merging in the current session.
 8. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
-   `gh run watch <run-id>`.
+   `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`.
    Report the deployed image tag (`sha-<first 7 of the merge commit>`). If CD fails, say so and
    investigate; the change is merged but not delivered.
 
@@ -120,6 +140,12 @@ privacy rules too.
 
 ## Environment pitfalls (Windows dev PC)
 
+- **Other agents may be working at the same time**, in this checkout or another worktree, and
+  may be running builds or tests. Before starting, check `git status` and running
+  `dotnet`/`testhost` processes. Never switch branches, stash or reset in a checkout you didn't
+  create; do your own work in a separate worktree (`git worktree add ../assistant-<topic> -b
+  <branch> main`). Don't run builds or tests the task doesn't need; a failing test may be one
+  another agent is fixing. Locked files in `bin/`/`obj/` usually mean another agent's run.
 - Git Bash mangles Windows backslash paths in `sed`/heredocs (`\a`, `\s`) — use forward slashes,
   a file-editing tool, or PowerShell for such edits.
 - A corporate NuGet source may exist on the machine; `nuget.config` pins nuget.org. Keep it.
