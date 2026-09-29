@@ -7,6 +7,7 @@ public class FakeTelegramClient : ITelegramClient
     private readonly object _lock = new();
     private readonly List<IncomingUpdate> _updates = new();
     private readonly List<(long ChatId, int? TopicId, string Text)> _sentMessages = new();
+    private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
     private int _getMeFailuresRemaining;
     private int _nextSentMessageId = 1;
@@ -29,6 +30,18 @@ public class FakeTelegramClient : ITelegramClient
             lock (_lock)
             {
                 return _sentMessages.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Buttons of every message sent with <see cref="SendTextWithButtonsAsync"/>, by text.</summary>
+    public IReadOnlyList<(string Text, IReadOnlyList<InlineButton> Buttons)> SentButtons
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _sentButtons.ToArray();
             }
         }
     }
@@ -120,6 +133,7 @@ public class FakeTelegramClient : ITelegramClient
         lock (_lock)
         {
             _sentMessages.Add((chatId, topicId, text));
+            _sentButtons.Add((text, buttons));
             return Task.FromResult(_nextSentMessageId++);
         }
     }

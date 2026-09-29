@@ -99,7 +99,7 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
         var handler = new ManagerUpdateHandler(
-            Db, new FixedClaimCode(), new PendingBotCreations(), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
+            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
 
         return (handler, clients.Client);
     }
@@ -135,6 +135,28 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("test chat"));
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("owner one"));
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("member two"));
+    }
+
+    private async Task<long> AddPendingMemberAsync()
+    {
+        var pending = new FamilyMember { FamilyId = _familyId, TelegramUserId = 333, DisplayName = "member three", Status = FamilyMemberStatus.Pending, IsOwner = false, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        Db.FamilyMembers.Add(pending);
+        await Db.SaveChangesAsync();
+        return pending.Id;
+    }
+
+    [Fact]
+    public async Task Settings_shows_a_pending_member_as_waiting_with_allow_and_deny()
+    {
+        var (handler, telegram) = await SetupAsync();
+        var pendingId = await AddPendingMemberAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/settings"), CancellationToken.None);
+
+        var (text, buttons) = telegram.SentButtons.Single(m => m.Text.Contains("member three"));
+        text.ShouldEndWith("ожидает");
+        buttons.Select(b => b.CallbackData).ShouldBe(new[] { $"member_allow:{pendingId}", $"member_deny:{pendingId}" });
+        telegram.SentButtons.Single(m => m.Text.Contains("member two")).Text.ShouldEndWith("активен");
     }
 
     [Fact]

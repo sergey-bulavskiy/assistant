@@ -32,9 +32,11 @@
 
 ## Manager bot and approvals (`Manager/`, `Families/`)
 
-- Some state is in memory only and lost on restart: the role chosen in `/newbot` until Telegram
-  reports the created bot (`PendingBotCreations`; a restart in between stores the bot with role
-  `unspecified`), and which owner DMs to edit once an approval is resolved (`ApprovalService`).
+- The role chosen in `/newbot` waits in `pending_bot_creations` (`PendingBotCreations`) until
+  Telegram reports the created bot. It is removed only in the transaction that saves the bot, so
+  a failed attempt leaves it for the redelivered update; entries older than a day are ignored.
+- Which owner DMs to edit once an approval is resolved is in memory only (`ApprovalService`): after
+  a restart, a late tap still resolves correctly but the other owners' DMs keep their buttons.
 - Callback data carries sequential ids (`place_approve:1`), so every callback re-checks that the
   tapping user is an approved owner of the row's family.
 

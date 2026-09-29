@@ -12,8 +12,8 @@ chats. Later milestones add the assistant features on top of this pipeline.
 | Command | Who | What |
 |---|---|---|
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
-| `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot. Once confirmed, the bot starts polling without a restart. |
-| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, disable/enable a user, make a user an owner. |
+| `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, allow/deny a user still waiting for approval, disable/enable a user, make an approved user an owner. |
 
 **Role bots:**
 
