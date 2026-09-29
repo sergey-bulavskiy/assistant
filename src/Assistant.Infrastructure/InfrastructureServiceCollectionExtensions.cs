@@ -1,6 +1,12 @@
 using Assistant.Application.Common;
+using Assistant.Application.Families;
+using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Infrastructure.Bots;
+using Assistant.Infrastructure.Common;
+using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
@@ -24,6 +30,14 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddScoped<IMessageStore, MessageStore>();
+        services.AddScoped<ICurrentFamily, CurrentFamily>();
+        services.AddScoped<IApprovalService, ApprovalService>();
+        services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
+        services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
+        services.AddSingleton<IPendingBotCreations, PendingBotCreations>();
+
+        services.AddSingleton<ITokenEncryptor>(sp =>
+            new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));
 
         // Request URLs for every Telegram Bot API call embed the bot token
         // (https://api.telegram.org/bot<token>/method). The default HttpClient logging handlers log
@@ -31,18 +45,12 @@ public static class InfrastructureServiceCollectionExtensions
         // RemoveAllLoggers() strips those handlers from this named client only.
         services.AddHttpClient("telegram").RemoveAllLoggers();
 
-        services.AddSingleton<ITelegramBotClient>(sp =>
-        {
-            var options = sp.GetRequiredService<IOptions<BotOptions>>().Value;
-            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var httpClient = httpClientFactory.CreateClient("telegram");
-            return new TelegramBotClient(new TelegramBotClientOptions(options.Token), httpClient);
-        });
+        services.AddSingleton<ITelegramClientFactory, TelegramClientFactory>();
 
-        // Registered as a singleton (not scoped): TelegramClientAdapter is a stateless wrapper over
-        // the singleton ITelegramBotClient and is consumed by a singleton BackgroundService (the
-        // polling gateway, added in a later milestone task).
-        services.AddSingleton<ITelegramClient, TelegramClientAdapter>();
+        services.AddSingleton<PollingHealth>();
+        services.AddSingleton(PollingWorkerSettings.Default);
+        services.AddSingleton<BotPollingCoordinator>();
+        services.AddHostedService(sp => sp.GetRequiredService<BotPollingCoordinator>());
 
         return services;
     }

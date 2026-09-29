@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Persistence;
 
 namespace Assistant.Host;

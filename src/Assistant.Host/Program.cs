@@ -1,9 +1,11 @@
 using Assistant.Application;
 using Assistant.Application.Common;
+using Assistant.Application.Manager;
 using Assistant.Host;
 using Assistant.Infrastructure;
 using Assistant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Formatting.Compact;
@@ -54,6 +56,16 @@ await DatabaseMigrator.MigrateAsync(
     CancellationToken.None,
     maxAttempts: migrationMaxAttempts,
     delay: TimeSpan.FromSeconds(migrationRetryDelaySeconds));
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AssistantDbContext>();
+    if (!await db.Families.IgnoreQueryFilters().AnyAsync())
+    {
+        var claimCode = scope.ServiceProvider.GetRequiredService<IClaimCodeProvider>();
+        app.Logger.LogInformation("Platform not claimed yet. Send /claim {ClaimCode} to the manager bot.", claimCode.Code);
+    }
+}
 
 await app.RunAsync();
 return 0;

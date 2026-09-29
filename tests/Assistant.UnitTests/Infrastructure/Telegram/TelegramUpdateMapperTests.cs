@@ -3,6 +3,7 @@ using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Telegram;
 using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 
 namespace Assistant.UnitTests.Infrastructure.Telegram;
 
@@ -41,6 +42,7 @@ public class TelegramUpdateMapperTests
         result.Message.Kind.ShouldBe(MessageKind.Text);
         result.Message.IsEdit.ShouldBeFalse();
         result.Message.TopicId.ShouldBeNull();
+        result.Message.ChatTitle.ShouldBeNull();
     }
 
     [Fact]
@@ -139,6 +141,7 @@ public class TelegramUpdateMapperTests
         result.Message!.ChatType.ShouldBe("supergroup");
         result.Message.TopicId.ShouldBe(4);
         result.Message.Kind.ShouldBe(MessageKind.Text);
+        result.Message.ChatTitle.ShouldBe("Family");
     }
 
     [Fact]
@@ -248,5 +251,115 @@ public class TelegramUpdateMapperTests
 
         result.UpdateId.ShouldBe(100010);
         result.Message.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Callback_query_update_maps_to_CallbackQuery_info()
+    {
+        var update = new Update
+        {
+            Id = 500,
+            CallbackQuery = new CallbackQuery
+            {
+                Id = "cbq-1",
+                From = new User { Id = 111, Username = "test_user" },
+                Data = "place_approve:7",
+                Message = new Message { Id = 42, Chat = new Chat { Id = 111, Type = ChatType.Private } }
+            }
+        };
+
+        var result = TelegramUpdateMapper.Map(update);
+
+        result.Message.ShouldBeNull();
+        result.CallbackQuery.ShouldNotBeNull();
+        result.CallbackQuery!.CallbackQueryId.ShouldBe("cbq-1");
+        result.CallbackQuery.FromUserId.ShouldBe(111);
+        result.CallbackQuery.Data.ShouldBe("place_approve:7");
+        result.CallbackQuery.MessageChatId.ShouldBe(111);
+        result.CallbackQuery.MessageId.ShouldBe(42);
+    }
+
+    [Fact]
+    public void Bot_added_to_chat_maps_to_a_membership_change_with_IsNowMember_true()
+    {
+        var update = new Update
+        {
+            Id = 501,
+            MyChatMember = new ChatMemberUpdated
+            {
+                Chat = new Chat { Id = -100, Title = "test group" },
+                From = new User { Id = 111 },
+                Date = DateTime.UtcNow,
+                OldChatMember = new ChatMemberLeft { User = new User { Id = 999 } },
+                NewChatMember = new ChatMemberMember { User = new User { Id = 999 } }
+            }
+        };
+
+        var result = TelegramUpdateMapper.Map(update);
+
+        result.MembershipChange.ShouldNotBeNull();
+        result.MembershipChange!.ChatId.ShouldBe(-100);
+        result.MembershipChange.ChatTitle.ShouldBe("test group");
+        result.MembershipChange.IsNowMember.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Bot_removed_from_chat_maps_to_a_membership_change_with_IsNowMember_false()
+    {
+        var update = new Update
+        {
+            Id = 502,
+            MyChatMember = new ChatMemberUpdated
+            {
+                Chat = new Chat { Id = -100, Title = "test group" },
+                From = new User { Id = 111 },
+                Date = DateTime.UtcNow,
+                OldChatMember = new ChatMemberMember { User = new User { Id = 999 } },
+                NewChatMember = new ChatMemberLeft { User = new User { Id = 999 } }
+            }
+        };
+
+        var result = TelegramUpdateMapper.Map(update);
+
+        result.MembershipChange!.IsNowMember.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Managed_bot_update_maps_to_creator_and_new_bot_ids()
+    {
+        var update = new Update
+        {
+            Id = 503,
+            ManagedBot = new ManagedBotUpdated
+            {
+                User = new User { Id = 111 },
+                Bot = new User { Id = 222, Username = "test_role_bot" }
+            }
+        };
+
+        var result = TelegramUpdateMapper.Map(update);
+
+        result.ManagedBotCreatorUserId.ShouldBe(111);
+        result.ManagedBotUserId.ShouldBe(222);
+    }
+
+    [Fact]
+    public void ManagedBotCreated_service_message_maps_to_Service_kind()
+    {
+        var update = new Update
+        {
+            Id = 504,
+            Message = new Message
+            {
+                Id = 1,
+                Chat = new Chat { Id = 111, Type = ChatType.Private },
+                Date = DateTime.UtcNow,
+                ManagedBotCreated = new ManagedBotCreated { Bot = new User { Id = 222 } }
+            }
+        };
+
+        var result = TelegramUpdateMapper.Map(update);
+
+        result.Message!.Kind.ShouldBe(MessageKind.Service);
     }
 }

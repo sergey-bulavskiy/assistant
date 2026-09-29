@@ -1,4 +1,4 @@
-namespace Assistant.Host;
+namespace Assistant.Infrastructure.Bots;
 
 public class PollingHealth
 {

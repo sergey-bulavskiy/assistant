@@ -7,8 +7,12 @@ public class FakeTelegramClient : ITelegramClient
     private readonly object _lock = new();
     private readonly List<IncomingUpdate> _updates = new();
     private readonly List<(long ChatId, int? TopicId, string Text)> _sentMessages = new();
+    private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
     private int _getMeFailuresRemaining;
+    private int _nextSentMessageId = 1;
     private readonly BotIdentity _identity = new(999, "test_bot");
+
+    public string? ManagedBotTokenToReturn { get; set; } = "test-managed-bot-token";
 
     /// <summary>
     /// One-shot switch simulating Telegram redelivering updates the offset has already moved past
@@ -25,6 +29,17 @@ public class FakeTelegramClient : ITelegramClient
             lock (_lock)
             {
                 return _sentMessages.ToArray();
+            }
+        }
+    }
+
+    public IReadOnlyList<(string CallbackQueryId, string? Text)> AnsweredCallbacks
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _answeredCallbacks.ToArray();
             }
         }
     }
@@ -59,7 +74,8 @@ public class FakeTelegramClient : ITelegramClient
         }
     }
 
-    public async Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(long offset, int timeoutSeconds, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(
+        long offset, int timeoutSeconds, IReadOnlyList<UpdateKind> allowedUpdates, CancellationToken cancellationToken)
     {
         IncomingUpdate[] result;
         lock (_lock)
@@ -97,4 +113,32 @@ public class FakeTelegramClient : ITelegramClient
 
         return Task.CompletedTask;
     }
+
+    public Task<int> SendTextWithButtonsAsync(
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _sentMessages.Add((chatId, topicId, text));
+            return Task.FromResult(_nextSentMessageId++);
+        }
+    }
+
+    public Task EditMessageButtonsAsync(long chatId, int messageId, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task AnswerCallbackAsync(string callbackQueryId, string? text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _answeredCallbacks.Add((callbackQueryId, text));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<string> GetManagedBotTokenAsync(long managedBotUserId, CancellationToken cancellationToken) =>
+        Task.FromResult(ManagedBotTokenToReturn ?? throw new InvalidOperationException("no managed bot token configured"));
 }

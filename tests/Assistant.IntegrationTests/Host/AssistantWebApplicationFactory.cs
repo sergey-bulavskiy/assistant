@@ -2,19 +2,22 @@ using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Host;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Telegram;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Assistant.IntegrationTests.Host;
 
 public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
-    private readonly PollingSettings _pollingSettings;
+    private readonly PollingWorkerSettings _pollingSettings;
 
     public FakeTelegramClient TelegramClient { get; } = new();
 
@@ -24,10 +27,10 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
 
     public TestClock Clock { get; } = new();
 
-    public AssistantWebApplicationFactory(string connectionString, PollingSettings? pollingSettings = null)
+    public AssistantWebApplicationFactory(string connectionString, PollingWorkerSettings? pollingSettings = null)
     {
         _connectionString = connectionString;
-        _pollingSettings = pollingSettings ?? new PollingSettings(
+        _pollingSettings = pollingSettings ?? new PollingWorkerSettings(
             MinBackoff: TimeSpan.FromMilliseconds(20),
             MaxBackoff: TimeSpan.FromMilliseconds(200),
             LongPollTimeoutSeconds: 1,
@@ -51,8 +54,8 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Assistant"] = _connectionString,
-                ["TELEGRAM_BOT_TOKEN"] = "test-token",
-                ["ALLOWED_USER_IDS"] = "111,222",
+                ["TELEGRAM_MANAGER_BOT_TOKEN"] = "test-manager-token",
+                ["TOKEN_ENCRYPTION_KEY"] = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
                 ["Database:MigrationMaxAttempts"] = "3",
                 ["Database:MigrationRetryDelaySeconds"] = "0.2"
             });
@@ -60,10 +63,10 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
-            services.RemoveAll<ITelegramClient>();
-            services.AddSingleton<ITelegramClient>(TelegramClient);
+            services.RemoveAll<ITelegramClientFactory>();
+            services.AddSingleton<ITelegramClientFactory>(new SingleClientFactory(TelegramClient));
 
-            services.RemoveAll<PollingSettings>();
+            services.RemoveAll<PollingWorkerSettings>();
             services.AddSingleton(_pollingSettings);
 
             // I2: a controllable clock lets PollingHealth tests push "now" past the healthy
@@ -80,10 +83,23 @@ public class AssistantWebApplicationFactory : WebApplicationFactory<Program>
             {
                 var db = sp.GetRequiredService<AssistantDbContext>();
                 var clock = sp.GetRequiredService<IClock>();
-                var inner = new MessageStore(db, clock);
+                var logger = sp.GetRequiredService<ILogger<MessageStore>>();
+                var inner = new MessageStore(db, clock, logger);
                 var flaky = new FlakyMessageStore(inner, EnsureBotStateFailures);
                 return new PoisonMessageStore(flaky, PoisonUpdate);
             });
         });
     }
+}
+
+/// <summary>Every worker asks the factory for a client "per bot token" — tests only run one bot
+/// (the manager), so this always hands back the same shared FakeTelegramClient regardless of the
+/// token it's asked to build one for.</summary>
+public sealed class SingleClientFactory : ITelegramClientFactory
+{
+    private readonly ITelegramClient _client;
+
+    public SingleClientFactory(ITelegramClient client) => _client = client;
+
+    public ITelegramClient Create(string token) => _client;
 }

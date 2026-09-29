@@ -22,19 +22,46 @@ namespace Assistant.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Assistant.Domain.Messages.BotState", b =>
+            modelBuilder.Entity("Assistant.Domain.Bots.Bot", b =>
                 {
-                    b.Property<long>("BotId")
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
-                        .HasColumnName("bot_id");
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
 
                     b.Property<long>("LastUpdateId")
                         .HasColumnType("bigint")
                         .HasColumnName("last_update_id");
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("role");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<byte[]>("TokenEncrypted")
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_encrypted");
 
                     b.Property<string>("Username")
                         .IsRequired()
@@ -42,10 +69,95 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(256)")
                         .HasColumnName("username");
 
-                    b.HasKey("BotId")
-                        .HasName("pk_bot_state");
+                    b.HasKey("Id")
+                        .HasName("pk_bots");
 
-                    b.ToTable("bot_state", (string)null);
+                    b.HasIndex("TelegramBotId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_bots_telegram_bot_id");
+
+                    b.ToTable("bots", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Families.Family", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("name");
+
+                    b.HasKey("Id")
+                        .HasName("pk_families");
+
+                    b.ToTable("families", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Families.FamilyMember", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("display_name");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<bool>("IsOwner")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_owner");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("TelegramUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_user_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("username");
+
+                    b.HasKey("Id")
+                        .HasName("pk_family_members");
+
+                    b.HasIndex("FamilyId", "TelegramUserId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_family_members_family_id_telegram_user_id");
+
+                    b.ToTable("family_members", (string)null);
                 });
 
             modelBuilder.Entity("Assistant.Domain.Messages.ChatMigration", b =>
@@ -99,6 +211,10 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("edited_at");
 
+                    b.Property<long?>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -138,11 +254,63 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_messages");
 
+                    b.HasIndex("FamilyId")
+                        .HasDatabaseName("ix_messages_family_id");
+
                     b.HasIndex("BotId", "ChatId", "TelegramMessageId")
                         .IsUnique()
                         .HasDatabaseName("ix_messages_bot_id_chat_id_telegram_message_id");
 
                     b.ToTable("messages", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Places.Place", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("BotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("title");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_places");
+
+                    b.HasIndex("BotId", "ChatId", "TopicId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_places_bot_id_chat_id_topic_id");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("BotId", "ChatId", "TopicId"), false);
+
+                    b.ToTable("places", (string)null);
                 });
 #pragma warning restore 612, 618
         }

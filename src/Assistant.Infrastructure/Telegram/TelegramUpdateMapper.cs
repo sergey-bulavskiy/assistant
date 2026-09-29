@@ -12,6 +12,24 @@ public static class TelegramUpdateMapper
 {
     public static IncomingUpdate Map(Update update)
     {
+        if (update.CallbackQuery is { } callbackQuery)
+        {
+            return new IncomingUpdate(update.Id, null, CallbackQuery: MapCallbackQuery(callbackQuery));
+        }
+
+        if (update.ManagedBot is { } managedBot)
+        {
+            return new IncomingUpdate(
+                update.Id, null,
+                ManagedBotCreatorUserId: managedBot.User.Id,
+                ManagedBotUserId: managedBot.Bot.Id);
+        }
+
+        if (update.MyChatMember is { } myChatMember)
+        {
+            return new IncomingUpdate(update.Id, null, MembershipChange: MapMembershipChange(myChatMember));
+        }
+
         var tgMessage = update.Message ?? update.EditedMessage;
         if (tgMessage is null)
         {
@@ -31,11 +49,13 @@ public static class TelegramUpdateMapper
 
         var topicId = tgMessage.IsTopicMessage ? tgMessage.MessageThreadId : null;
         var text = TextSanitizer.SanitizeText(tgMessage.Text ?? tgMessage.Caption);
+        var chatTitle = TextSanitizer.SanitizeText(tgMessage.Chat.Title);
         var rawJson = TextSanitizer.SanitizeRawJson(JsonSerializer.Serialize(update, JsonBotAPI.Options));
 
         var message = new IncomingMessage(
             ChatId: tgMessage.Chat.Id,
             ChatType: chatType,
+            ChatTitle: chatTitle,
             TopicId: topicId,
             MessageId: tgMessage.Id,
             UserId: tgMessage.From?.Id,
@@ -50,6 +70,27 @@ public static class TelegramUpdateMapper
 
         return new IncomingUpdate(update.Id, message);
     }
+
+    private static CallbackQueryInfo MapCallbackQuery(CallbackQuery callbackQuery) => new(
+        CallbackQueryId: callbackQuery.Id,
+        FromUserId: callbackQuery.From.Id,
+        Data: callbackQuery.Data ?? string.Empty,
+        MessageChatId: callbackQuery.Message?.Chat.Id ?? 0,
+        MessageId: callbackQuery.Message?.Id ?? 0);
+
+    private static BotMembershipChange MapMembershipChange(ChatMemberUpdated update)
+    {
+        var wasMember = IsMember(update.OldChatMember.Status);
+        var isMember = IsMember(update.NewChatMember.Status);
+        return new BotMembershipChange(update.Chat.Id, update.Chat.Title ?? string.Empty, IsNowMember: !wasMember && isMember);
+    }
+
+    private static bool IsMember(ChatMemberStatus status) => status switch
+    {
+        ChatMemberStatus.Left => false,
+        ChatMemberStatus.Kicked => false,
+        _ => true
+    };
 
     private static MessageKind MapKind(Message message) => message.Type switch
     {
@@ -87,6 +128,7 @@ public static class TelegramUpdateMapper
         MessageType.UsersShared => MessageKind.Service,
         MessageType.ChatShared => MessageKind.Service,
         MessageType.ProximityAlertTriggered => MessageKind.Service,
+        MessageType.ManagedBotCreated => MessageKind.Service,
         _ => MessageKind.Other
     };
 }
