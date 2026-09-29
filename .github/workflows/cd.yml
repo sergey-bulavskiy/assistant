@@ -65,6 +65,7 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: smoke
+    timeout-minutes: 30
     concurrency:
       group: smoke
       cancel-in-progress: false
@@ -116,7 +117,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check that this commit is still the head of main
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          main_sha=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$main_sha" = "$HEAD_SHA" ]; then
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main has moved past $HEAD_SHA; not promoting it (a newer run promotes its own image)."
+          fi
+
       - name: Retag sha- image as latest (no rebuild)
+        if: steps.fresh.outputs.promote == 'true'
         run: >-
           docker buildx imagetools create
           --tag ${{ env.IMAGE }}:latest

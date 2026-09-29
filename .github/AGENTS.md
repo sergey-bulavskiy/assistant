@@ -13,7 +13,10 @@ This repo is public; workflows run on code from anyone who opens a PR.
 - `cd.yml` has three jobs: `build-and-push` pushes only the `sha-<7>` image, `smoke`
   (real Telegram, `tests/Assistant.SmokeTests`) runs against that tag, `promote` retags it as
   `latest` only when smoke passed. Watchtower follows `latest`, so a failing smoke run never
-  reaches the home PC. Re-run failed jobs from the Actions UI; the `sha-` image is reused.
+  reaches the home PC. Re-running a failed `smoke` job of the newest run is fine (the `sha-` image is reused);
+  `promote` retags only when the run's commit is still the head of `main`, so re-running an
+  older run never moves `latest` back. A third queued run supersedes a queued second one
+  (concurrency group `smoke` does not cancel a running job).
 - `claude-review.yml` (secret `CLAUDE_CODE_OAUTH_TOKEN`) reviews a PR when the `claude-review`
   label is added; remove and re-add the label to review again after new pushes. It is optional
   and runs only on the owner's request (see "Delivering a change" in the root `AGENTS.md`). Its prompt

@@ -135,7 +135,7 @@ one per stage. Keep command output small: read logs only when something failed.
    image, runs the real-Telegram smoke test against it, and only then promotes `latest`.
    Report the deployed image tag (`sha-<first 7 of the merge commit>`) once `promote` succeeded.
    If `smoke` fails, `latest` is unchanged (the home PC keeps the previous release): say so and
-   investigate; the change is merged but not delivered. Re-run failed jobs for transient failures.
+   investigate; the change is merged but not delivered. Re-run failed jobs for transient failures (only the newest run promotes).
 
 Outward actions beyond this flow (force pushes, deleting remote branches other than the merged
 one, changing repo settings, publishing packages) need the owner's explicit approval.

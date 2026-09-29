@@ -19,8 +19,12 @@ and promotes `latest` only if it passes.
    Settings → enable **"Allow bot to manage other bots"**. Confirm it is on.
 3. In BotFather create a **role bot** by hand (`/newbot`). The test inserts it into the smoke
    database instead of creating it through `/newbot` (Telegram needs a human tap for that).
+   Disable privacy mode for it **before** it is added to the groups (BotFather → `/setprivacy` →
+   the bot → Disable): the scenario sends plain messages into groups and topics.
 4. With the owner account create a normal group and a forum supergroup (Group settings → Topics).
-   The owner must be admin in both. Note both titles exactly.
+   The owner must be admin in both. Note both titles exactly. Add the role bot to both groups by
+   hand, once, as an ordinary member (the test never adds or removes it; the first message in each
+   chat triggers the approval DM).
 5. Generate the account's session string (asks for the phone number and the login code sent by
    Telegram, and the 2FA password if set):
 
@@ -59,17 +63,18 @@ A failure names the step (`Smoke step '7 settings' failed: ...`).
 
 - **One poller per bot token.** Do not run the test locally with the same bot tokens (or the same
   test groups) while CD's smoke job is running: two pollers on one token conflict and steps time
-  out. Use a separate smoke manager bot, role bot and pair of groups for local runs; the same
-  throwaway account can serve both.
+  out. Use a separate smoke manager bot, role bot and pair of groups for local runs, and a separate
+  session string (run the login tool again for the same account). Never reuse the CD session
+  string locally: using one session from two places at once makes Telegram revoke it.
 - Test messages are invented; never send real content from the test account.
 - Session expired (`Telegram asked for 'phone_number'`): regenerate it with the login tool and update
   `smoke.env` and the GitHub secret.
 - Telegram flood limits: the driver pauses after each send. If a run still hits a limit, wait and rerun.
-- Each run leaves the role bot as a member of the test groups and adds one forum topic. That is harmless.
+- Each run adds one forum topic. That is harmless.
 
 ## Not automated
 
 - Step 1 of the old checklist (the BotFather toggle) is the one-time setup above.
 - Managed-bot creation through `/newbot` (a human confirms in Telegram's UI). The hand-made role bot stands in.
 - Open observations to check by hand when relevant: whether there is a cap on managed bots per
-  manager, and whether privacy mode / admin rights differ for a managed bot in groups.
+  manager. The test requires privacy mode disabled for the role bot.
