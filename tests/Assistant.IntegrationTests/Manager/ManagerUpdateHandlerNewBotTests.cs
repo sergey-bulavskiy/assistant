@@ -91,7 +91,7 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
 
     private static IncomingUpdate Command(long updateId, long userId, string text) =>
         new(updateId, new IncomingMessage(
-            ChatId: userId, ChatType: "private", TopicId: null, MessageId: (int)updateId, UserId: userId, Username: "test_owner",
+            ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: "test_owner",
             Text: text, Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
             SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}"));
 

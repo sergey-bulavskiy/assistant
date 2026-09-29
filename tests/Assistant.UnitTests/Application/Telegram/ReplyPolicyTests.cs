@@ -14,6 +14,7 @@ public class ReplyPolicyTests
         new(
             ChatId: 111,
             ChatType: chatType,
+            ChatTitle: null,
             TopicId: null,
             MessageId: 1,
             UserId: 111,

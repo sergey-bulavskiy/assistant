@@ -20,9 +20,15 @@ public class UpdateHandlerTests
         public FamilyMemberStatus NextMemberStatus { get; set; } = FamilyMemberStatus.Approved;
         public long NextPlaceId { get; set; } = 1;
         public long NextMemberId { get; set; } = 1;
+        public int PlaceApprovalCalls { get; private set; }
+        public string? LastPlaceTitle { get; private set; }
 
-        public Task<long> GetOrCreatePendingPlaceAsync(long botDbId, long chatId, int? topicId, string title, CancellationToken cancellationToken) =>
-            Task.FromResult(NextPlaceId);
+        public Task<long> GetOrCreatePendingPlaceAsync(long botDbId, long chatId, int? topicId, string title, CancellationToken cancellationToken)
+        {
+            PlaceApprovalCalls++;
+            LastPlaceTitle = title;
+            return Task.FromResult(NextPlaceId);
+        }
 
         public Task<ApprovalResolution> ResolvePlaceApprovalAsync(long placeId, bool approve, CancellationToken cancellationToken) =>
             Task.FromResult(ApprovalResolution.Applied);
@@ -75,10 +81,11 @@ public class UpdateHandlerTests
         return (handler, store, telegram, approvals, manager);
     }
 
-    private static IncomingMessage Message(long userId = 111, string chatType = "private", string? text = "test 1") =>
+    private static IncomingMessage Message(long userId = 111, string chatType = "private", string? text = "test 1", string? chatTitle = null) =>
         new(
             ChatId: 111,
             ChatType: chatType,
+            ChatTitle: chatTitle,
             TopicId: null,
             MessageId: 1,
             UserId: userId,
@@ -114,15 +121,54 @@ public class UpdateHandlerTests
     }
 
     [Fact]
-    public async Task Role_bot_message_from_a_pending_place_is_ignored()
+    public async Task Group_message_from_a_pending_place_is_ignored()
     {
         var (handler, store, telegram, approvals, _) = CreateHandler();
         approvals.NextPlaceStatus = PlaceStatus.Pending;
 
-        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(3, Message(userId: 111)), CancellationToken.None);
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(3, Message(userId: 111, chatType: "group")), CancellationToken.None);
 
         store.Calls.Single().Message.ShouldBeNull();
         telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Private_message_skips_the_place_approval_gate_entirely()
+    {
+        // Bug fix: a private DM to a role bot has no "place" to approve — approving the user
+        // (below) already covers all of that family's bots. Before the fix, HandleAsync ran the
+        // place-approval gate unconditionally, so a pending place status would wrongly block a
+        // brand-new user's first private DM even though the user gate would have approved it.
+        var (handler, store, telegram, approvals, _) = CreateHandler();
+        approvals.NextPlaceStatus = PlaceStatus.Pending;
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(8, Message(userId: 111, chatType: "private")), CancellationToken.None);
+
+        approvals.PlaceApprovalCalls.ShouldBe(0);
+        store.Calls.Single().Message.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Group_message_place_approval_uses_the_real_chat_title_when_available()
+    {
+        // Bug fix: the place-approval title must come from Telegram's real chat title, not a
+        // synthesized "chat {id}" placeholder, so owners see the actual group name in approval
+        // prompts and /settings.
+        var (handler, _, telegram, approvals, _) = CreateHandler();
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(9, Message(userId: 111, chatType: "group", chatTitle: "test group")), CancellationToken.None);
+
+        approvals.LastPlaceTitle.ShouldBe("test group");
+    }
+
+    [Fact]
+    public async Task Group_message_place_approval_falls_back_to_a_synthetic_title_when_telegram_sent_none()
+    {
+        var (handler, _, telegram, approvals, _) = CreateHandler();
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(10, Message(userId: 111, chatType: "group", chatTitle: null)), CancellationToken.None);
+
+        approvals.LastPlaceTitle.ShouldBe("chat 111");
     }
 
     [Fact]

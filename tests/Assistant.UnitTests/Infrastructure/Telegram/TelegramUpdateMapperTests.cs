@@ -42,6 +42,7 @@ public class TelegramUpdateMapperTests
         result.Message.Kind.ShouldBe(MessageKind.Text);
         result.Message.IsEdit.ShouldBeFalse();
         result.Message.TopicId.ShouldBeNull();
+        result.Message.ChatTitle.ShouldBeNull();
     }
 
     [Fact]
@@ -140,6 +141,7 @@ public class TelegramUpdateMapperTests
         result.Message!.ChatType.ShouldBe("supergroup");
         result.Message.TopicId.ShouldBe(4);
         result.Message.Kind.ShouldBe(MessageKind.Text);
+        result.Message.ChatTitle.ShouldBe("Family");
     }
 
     [Fact]

@@ -77,14 +77,22 @@ public class UpdateHandler
         // pinned message, chat migrated, …) — an unapproved or denied place/user must not have any
         // of its messages persisted, service messages included, since they can carry names and
         // other content (e.g. new_chat_members) in their raw payload just like a text message.
-        var placeTitle = message.ChatType == "private" ? "личные сообщения" : $"chat {message.ChatId}";
-        var placeId = await _approvals.GetOrCreatePendingPlaceAsync(bot.BotDbId, message.ChatId, message.TopicId, placeTitle, cancellationToken);
-        var placeStatus = await _approvals.GetPlaceStatusAsync(placeId, cancellationToken);
-        if (placeStatus != PlaceStatus.Approved)
+        //
+        // Place approval (spec §3.3) exists for group chats/topics being added to a family; a
+        // private DM to a bot has no separate "place" to approve — approving the user (below)
+        // already covers all of that family's bots (§3.4), so private chats skip straight to the
+        // user-approval gate instead of also requiring a place approval first.
+        if (message.ChatType != "private")
         {
-            _logger.LogInformation("ignored message: place not approved ({PlaceStatus})", placeStatus);
-            await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
-            return;
+            var placeTitle = message.ChatTitle ?? $"chat {message.ChatId}";
+            var placeId = await _approvals.GetOrCreatePendingPlaceAsync(bot.BotDbId, message.ChatId, message.TopicId, placeTitle, cancellationToken);
+            var placeStatus = await _approvals.GetPlaceStatusAsync(placeId, cancellationToken);
+            if (placeStatus != PlaceStatus.Approved)
+            {
+                _logger.LogInformation("ignored message: place not approved ({PlaceStatus})", placeStatus);
+                await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
+                return;
+            }
         }
 
         if (message.UserId is { } userId && bot.FamilyId is { } familyId)

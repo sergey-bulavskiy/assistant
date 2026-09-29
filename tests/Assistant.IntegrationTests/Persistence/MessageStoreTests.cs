@@ -29,6 +29,7 @@ public class MessageStoreTests : IntegrationTestBase
         new(
             ChatId: chatId,
             ChatType: "private",
+            ChatTitle: null,
             TopicId: null,
             MessageId: messageId,
             UserId: userId,

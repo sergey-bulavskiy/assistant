@@ -77,7 +77,7 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
         // update just needs to be safely absorbed and its offset advanced exactly once, proving
         // the coordinator's single worker really is polling. A private-chat text message is enough.
         factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(1, new IncomingMessage(
-            ChatId: 111, ChatType: "private", TopicId: null, MessageId: 1, UserId: 111, Username: "test_user",
+            ChatId: 111, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: 1, UserId: 111, Username: "test_user",
             Text: "hello", Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
             SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}")));
 

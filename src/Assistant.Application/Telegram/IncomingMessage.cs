@@ -5,6 +5,7 @@ namespace Assistant.Application.Telegram;
 public record IncomingMessage(
     long ChatId,
     string ChatType,
+    string? ChatTitle,
     int? TopicId,
     int MessageId,
     long? UserId,

@@ -60,14 +60,19 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         return (handler, receivingBot, clients.Client);
     }
 
-    private static IncomingMessage GroupText(int messageId, long chatId, long userId, string text) =>
-        new(ChatId: chatId, ChatType: "group", TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
+    private static IncomingMessage GroupText(int messageId, long chatId, long userId, string text, string? chatTitle = "test group") =>
+        new(ChatId: chatId, ChatType: "group", ChatTitle: chatTitle, TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
             Text: text, Kind: MessageKind.Text, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
             MigrateToChatId: null, RawJson: "{}");
 
     private static IncomingMessage GroupService(int messageId, long chatId, long userId) =>
-        new(ChatId: chatId, ChatType: "group", TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
+        new(ChatId: chatId, ChatType: "group", ChatTitle: "test group", TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
             Text: null, Kind: MessageKind.Service, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
+            MigrateToChatId: null, RawJson: "{}");
+
+    private static IncomingMessage PrivateText(int messageId, long userId, string text) =>
+        new(ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
+            Text: text, Kind: MessageKind.Text, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
             MigrateToChatId: null, RawJson: "{}");
 
     [Fact]
@@ -125,5 +130,45 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         await handler.HandleAsync(bot, telegram, new IncomingUpdate(2, GroupService(2, -100, 111)), CancellationToken.None);
 
         (await Db.Messages.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task First_private_message_from_a_new_user_needs_only_one_owner_approval_round_trip()
+    {
+        // Bug fix: a private DM to a role bot has no separate "place" to approve (unlike a group
+        // chat) — approving the user covers all of that family's bots. Before the fix, a brand
+        // new user's first private DM also created and required approval of a place row, forcing
+        // two owner-approval round trips instead of one.
+        var (handler, bot, telegram) = await SetupAsync();
+
+        // Round trip 1: first private message creates only a pending family member — no place row
+        // is created at all for a private chat.
+        await handler.HandleAsync(bot, telegram, new IncomingUpdate(1, PrivateText(1, 222, "hello")), CancellationToken.None);
+        (await Db.Places.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        var member = await Db.FamilyMembers.IgnoreQueryFilters().SingleAsync(m => m.TelegramUserId == 222);
+        member.Status = FamilyMemberStatus.Approved;
+        await Db.SaveChangesAsync();
+
+        // Round trip 2: with the user now approved, the resent message is stored — no place
+        // approval round trip is ever required for a private chat.
+        await handler.HandleAsync(bot, telegram, new IncomingUpdate(2, PrivateText(2, 222, "hello again")), CancellationToken.None);
+
+        var stored = await Db.Messages.IgnoreQueryFilters().SingleAsync();
+        stored.FamilyId.ShouldBe(bot.FamilyId);
+        stored.Text.ShouldBe("hello again");
+        (await Db.Places.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task First_message_from_an_unknown_group_chat_requests_a_place_approval_using_the_real_chat_title()
+    {
+        // Bug fix: the place-approval title must come from Telegram's real chat title
+        // (IncomingMessage.ChatTitle), not a synthesized "chat {id}" placeholder.
+        var (handler, bot, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(bot, telegram, new IncomingUpdate(1, GroupText(1, -100, 111, "hello", chatTitle: "test group")), CancellationToken.None);
+
+        var place = await Db.Places.IgnoreQueryFilters().SingleAsync();
+        place.Title.ShouldBe("test group");
     }
 }

@@ -54,6 +54,7 @@ public static class TelegramUpdateMapper
         var message = new IncomingMessage(
             ChatId: tgMessage.Chat.Id,
             ChatType: chatType,
+            ChatTitle: tgMessage.Chat.Title,
             TopicId: topicId,
             MessageId: tgMessage.Id,
             UserId: tgMessage.From?.Id,

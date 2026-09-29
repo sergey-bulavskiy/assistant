@@ -68,7 +68,7 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
 
     private static IncomingUpdate ClaimCommand(long updateId, long userId, string? username, string args) =>
         new(updateId, new IncomingMessage(
-            ChatId: userId, ChatType: "private", TopicId: null, MessageId: (int)updateId, UserId: userId, Username: username,
+            ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: username,
             Text: $"/claim {args}", Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
             SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}"));
 
