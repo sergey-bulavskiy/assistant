@@ -1,5 +1,4 @@
 using System.Net;
-using System.Threading;
 using Assistant.Application.Telegram;
 using Assistant.Host;
 using Assistant.Infrastructure.Bots;
