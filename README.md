@@ -78,24 +78,21 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 > the repo's **Packages** tab → `assistant` → **Package settings** → **Change visibility** →
 > **Public**.
 
-## 5. Smoke checklist
+## 5. Smoke test
 
-- On first startup with no family yet, the log prints a one-time claim code — send
-  `/claim <code>` to the manager bot in a DM. It replies confirming you're the platform owner.
-- Send `/newbot <role>` (e.g. `/newbot general`) → the manager replies with a Telegram creation
-  link. Tap it, confirm creation in Telegram's own UI — the manager starts polling the new bot
-  automatically, no restart needed.
-- Add the new role bot to a group → every family owner gets a DM with Yes/No buttons; tapping
-  Yes lets it start recording messages there.
-- Have an unrecognized Telegram account message the role bot → every owner gets an Allow/Deny DM
-  for that user.
-- `/settings` on the manager bot lists bots/places/users with buttons that actually change
-  behavior (Disable a bot and confirm it stops replying; Remove a place and confirm new messages
-  from it start a fresh approval).
-- Restart the process (or container) and resend a message you already sent before restarting to
-  any bot → no duplicate row, no duplicate reply, for every bot independently.
+The smoke test is automated: CD runs it against real Telegram on every merge to `main` and moves
+`latest` (what Watchtower pulls) only if it passes. One-time setup and running it locally:
+`tests/Assistant.SmokeTests/README.md`.
+
+To check a running deployment by hand, the essentials are: the log prints a one-time claim code
+(send `/claim <code>` to the manager bot in a DM); `/newbot <role>` returns a creation link; adding
+a role bot to a group DMs the owner a Yes/No approval; `/settings` lists bots, places and users; and
+a restart neither duplicates rows nor replies.
 
 ## Rollback
+
+`latest` only moves after the smoke test passes, so pinning is only needed to go back to an older
+release. A `sha-` tag of a build that failed smoke exists in GHCR but was never promoted; don't pin it.
 
 Pin a previous image by setting `IMAGE_TAG` in `deploy/.env` to a known-good short SHA (from a past
 successful build, e.g. `sha-abc1234`), then:

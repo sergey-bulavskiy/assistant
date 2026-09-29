@@ -53,3 +53,16 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   (Postgres refuses `CREATE DATABASE ... TEMPLATE` while connections are open) — don't remove it.
 - Intermittent IntegreSQL 423/503/500 on CI usually means pool exhaustion, not a flaky test; read
   the comments in `IntegreSqlPool.cs` before changing pool sizes.
+
+## Smoke test (`Assistant.SmokeTests`)
+
+- Opt-in: every test uses `[SmokeFact]`, skipped unless `SMOKE=1`. Never remove that gate: a plain
+  `dotnet test` must not start containers or log in to Telegram. Run it with
+  `SMOKE=1 dotnet test tests/Assistant.SmokeTests -c Release` (setup and secrets:
+  `tests/Assistant.SmokeTests/README.md`).
+- CD runs it against the `sha-` image before `latest` is promoted (`.github/AGENTS.md`).
+- One ordered scenario; the first failing step stops the run and names itself. The scenario matches
+  the bot's literal Russian texts and button labels: change them together with `ManagerUpdateHandler`,
+  `ApprovalService` and `ReplyPolicy`.
+- One poller per bot token: don't run it locally with the same bots/groups while CD's smoke job runs.
+- Synthetic data only, like every other test; the account and bots are throwaway.
