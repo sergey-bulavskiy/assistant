@@ -1,0 +1,75 @@
+# Smoke test (real Telegram)
+
+Drives the app through real Telegram: one throwaway user account (the owner, via MTProto)
+talks to a smoke manager bot and a role bot running in a disposable Docker stack (fresh Postgres +
+the app image). It covers the M2 checklist: claim, private chat, group, forum topic, `/settings`
+(disable/enable/remove), restart without duplicates. Unknown-user approval and second-owner
+promotion need a second real user; the integration tests cover them (`ApprovalServiceTests`,
+`ManagerUpdateHandlerCallbackTests`).
+
+It is **opt-in**: a plain `dotnet test` skips it. CD runs it against the just-built `sha-` image
+and promotes `latest` only if it passes.
+
+## One-time setup (a human, once)
+
+1. One throwaway Telegram account (the "owner") and an `api_id`/`api_hash` from
+   https://my.telegram.org (API development tools). Use dedicated numbers: Telegram may restrict
+   automated accounts.
+2. In BotFather create the **smoke manager bot** (`/newbot`). Then `/mybots` → the bot → Bot
+   Settings → enable **"Allow bot to manage other bots"**. Confirm it is on.
+3. In BotFather create a **role bot** by hand (`/newbot`). The test inserts it into the smoke
+   database instead of creating it through `/newbot` (Telegram needs a human tap for that).
+4. With the owner account create a normal group and a forum supergroup (Group settings → Topics).
+   The owner must be admin in both. Note both titles exactly.
+5. Generate the account's session string (asks for the phone number and the login code sent by
+   Telegram, and the 2FA password if set):
+
+   ```bash
+   dotnet run --project tests/Assistant.SmokeTests.Login
+   ```
+
+   It prints a base64 string. That string is a secret.
+6. Put the values into `tests/Assistant.SmokeTests/smoke.env` (gitignored) for local runs, and into
+   the GitHub Environment `smoke` secrets for CD:
+
+| Setting | Meaning |
+|---|---|
+| `SMOKE_TG_API_ID`, `SMOKE_TG_API_HASH` | From my.telegram.org |
+| `SMOKE_OWNER_SESSION` | Session string from step 5 |
+| `SMOKE_MANAGER_BOT_TOKEN`, `SMOKE_MANAGER_BOT_USERNAME` | Smoke manager bot (username without `@`) |
+| `SMOKE_ROLE_BOT_TOKEN`, `SMOKE_ROLE_BOT_USERNAME` | Hand-made role bot |
+| `SMOKE_GROUP_TITLE`, `SMOKE_FORUM_TITLE` | Exact titles from step 4 |
+| `SMOKE_IMAGE` | Optional. Image to test (CD sets it to the `sha-` tag). Unset: built from the `Dockerfile` |
+
+`smoke.env` is `KEY=VALUE` lines; real environment variables win over it.
+
+## Run it locally
+
+Docker must be running. From the repo root:
+
+```bash
+SMOKE=1 dotnet test tests/Assistant.SmokeTests -c Release
+```
+
+PowerShell: `$env:SMOKE = "1"; dotnet test tests/Assistant.SmokeTests -c Release`.
+
+A failure names the step (`Smoke step '7 settings' failed: ...`).
+
+## Rules and gotchas
+
+- **One poller per bot token.** Do not run the test locally with the same bot tokens (or the same
+  test groups) while CD's smoke job is running: two pollers on one token conflict and steps time
+  out. Use a separate smoke manager bot, role bot and pair of groups for local runs; the same
+  throwaway account can serve both.
+- Test messages are invented; never send real content from the test account.
+- Session expired (`Telegram asked for 'phone_number'`): regenerate it with the login tool and update
+  `smoke.env` and the GitHub secret.
+- Telegram flood limits: the driver pauses after each send. If a run still hits a limit, wait and rerun.
+- Each run leaves the role bot as a member of the test groups and adds one forum topic. That is harmless.
+
+## Not automated
+
+- Step 1 of the old checklist (the BotFather toggle) is the one-time setup above.
+- Managed-bot creation through `/newbot` (a human confirms in Telegram's UI). The hand-made role bot stands in.
+- Open observations to check by hand when relevant: whether there is a cap on managed bots per
+  manager, and whether privacy mode / admin rights differ for a managed bot in groups.
