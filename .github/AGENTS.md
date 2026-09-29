@@ -6,8 +6,14 @@ This repo is public; workflows run on code from anyone who opens a PR.
 - Workflows that use repository secrets (API keys, tokens you added) run only on triggers that
   need write access, and never on code from forks. Allowed: `workflow_dispatch`, and
   `pull_request` `labeled` guarded by `github.event.pull_request.head.repo.full_name ==
-  github.repository` (`claude-review.yml`). `cd.yml` uses only the ephemeral `GITHUB_TOKEN` via
-  `workflow_run`, gated to successful `ci` runs of pushes to `main` in this repository.
+  github.repository` (`claude-review.yml`). `cd.yml` runs via `workflow_run`, gated to successful
+  `ci` runs of pushes to `main` in this repository; its `smoke` job uses the secrets of the GitHub
+  Environment `smoke` (keep that environment restricted to `main`; smoke secrets appear in no other
+  workflow).
+- `cd.yml` has three jobs: `build-and-push` pushes only the `sha-<7>` image, `smoke`
+  (real Telegram, `tests/Assistant.SmokeTests`) runs against that tag, `promote` retags it as
+  `latest` only when smoke passed. Watchtower follows `latest`, so a failing smoke run never
+  reaches the home PC. Re-run failed jobs from the Actions UI; the `sha-` image is reused.
 - `claude-review.yml` (secret `CLAUDE_CODE_OAUTH_TOKEN`) reviews a PR when the `claude-review`
   label is added; remove and re-add the label to review again after new pushes. It is optional
   and runs only on the owner's request (see "Delivering a change" in the root `AGENTS.md`). Its prompt
