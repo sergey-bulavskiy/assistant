@@ -49,12 +49,13 @@ public static class TelegramUpdateMapper
 
         var topicId = tgMessage.IsTopicMessage ? tgMessage.MessageThreadId : null;
         var text = TextSanitizer.SanitizeText(tgMessage.Text ?? tgMessage.Caption);
+        var chatTitle = TextSanitizer.SanitizeText(tgMessage.Chat.Title);
         var rawJson = TextSanitizer.SanitizeRawJson(JsonSerializer.Serialize(update, JsonBotAPI.Options));
 
         var message = new IncomingMessage(
             ChatId: tgMessage.Chat.Id,
             ChatType: chatType,
-            ChatTitle: tgMessage.Chat.Title,
+            ChatTitle: chatTitle,
             TopicId: topicId,
             MessageId: tgMessage.Id,
             UserId: tgMessage.From?.Id,
