@@ -102,7 +102,7 @@ public class BotPollingCoordinator : IHostedService
 
         foreach (var handle in handles)
         {
-            DisposeIgnoringDisposed(handle);
+            handle.Cts.Dispose();
         }
     }
 
@@ -140,14 +140,16 @@ public class BotPollingCoordinator : IHostedService
     }
 
     /// <summary>Cancels a worker's token, awaits its run task to finish draining, then disposes the
-    /// token source — tolerating the Cts already being disposed (e.g. by a racing/duplicate stop of
-    /// the same handle elsewhere), since Cancel()/Dispose() both throw ObjectDisposedException in
-    /// that case and stopping a worker must stay idempotent.</summary>
+    /// token source. Every handle is reachable here at most once per `TryRemove`'s atomicity, so this
+    /// only tolerates an already-cancelled Cts in the narrow window where two overlapping `StopAsync`
+    /// calls raced: one already removed and is draining/disposing the handle while the other's key
+    /// snapshot (taken just before) still calls in. `Dispose()` itself is idempotent per the BCL
+    /// contract and never throws on a repeat call, so only `Cancel()` needs the guard.</summary>
     private static async Task StopWorkerAsync(WorkerHandle handle)
     {
         CancelIgnoringDisposed(handle);
         await handle.RunTask;
-        DisposeIgnoringDisposed(handle);
+        handle.Cts.Dispose();
     }
 
     private static void CancelIgnoringDisposed(WorkerHandle handle)
@@ -158,19 +160,7 @@ public class BotPollingCoordinator : IHostedService
         }
         catch (ObjectDisposedException)
         {
-            // Already stopped by a racing or duplicate call; nothing left to cancel.
-        }
-    }
-
-    private static void DisposeIgnoringDisposed(WorkerHandle handle)
-    {
-        try
-        {
-            handle.Cts.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already disposed by a racing or duplicate call.
+            // Already cancelled by an overlapping stop of the same handle; nothing left to cancel.
         }
     }
 
