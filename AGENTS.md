@@ -3,7 +3,9 @@
 Family assistant: Telegram role-bots backed by LLMs (C# / .NET 10, PostgreSQL).
 
 Instructions for any coding agent (Claude Code, Codex, Copilot, Cursor, …) working in this repo.
-`CLAUDE.md` files only import the `AGENTS.md` next to them; edit `AGENTS.md`, never the stubs.
+`AGENTS.md` files are the only instruction files; don't add tool-specific ones (`CLAUDE.md`,
+`.cursorrules`, `copilot-instructions.md`, …). Keep the rules tool-neutral: name a tool's
+command only as an example next to a generic fallback.
 
 ## Repositories
 
@@ -27,7 +29,7 @@ Instructions for any coding agent (Claude Code, Codex, Copilot, Cursor, …) wor
 Before editing files under a path with a local guide, read that guide. Rules live in exactly one
 file: a rule that applies to one folder goes in that folder's guide, not here. Add a new local
 guide only for knowledge that is not obvious from the code (a gotcha, an invariant, a command),
-and add it to the table above together with a `CLAUDE.md` stub containing `@AGENTS.md`.
+and add it to the table above.
 
 ## Privacy rules (mandatory)
 
@@ -78,12 +80,13 @@ one per stage. Keep command output small: read logs only when something failed.
    subagent or a separate session with no stake in the change). Fix or explicitly answer each
    blocking and should-fix finding.
    - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 3 is enough.
-   - Code changes: one `/code-review` in Claude Code (any fresh-reviewer subagent elsewhere).
-   - Work executed task by task with per-task reviews (e.g. superpowers
-     `subagent-driven-development`): those reviews plus its final whole-branch review are the
-     review. Do not run another one.
-   - Run the `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`)
-     only when the PR adds new test classes or rewrites existing tests, not for small test edits.
+   - Code changes: one review, using the tool's built-in review command if it has one (e.g.
+     `/code-review` in Claude Code), otherwise a fresh subagent given this checklist.
+   - Work executed task by task with per-task reviews (e.g. a subagent-per-task plan executor):
+     those reviews plus one final whole-branch review are the review. Do not run another one.
+   - A dedicated test-quality review (e.g. the `test-quality-auditor` agent from the
+     `dotnet-test` plugin, see `tests/AGENTS.md`) only when the PR adds new test classes or
+     rewrites existing tests, not for small test edits.
    - Do not rerun a full review after fixing findings; check the fixes yourself.
 5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
@@ -91,8 +94,8 @@ one per stage. Keep command output small: read logs only when something failed.
    `gh pr checks <n> --watch --fail-fast > /dev/null; echo "exit=$?"` (if it reports no checks
    yet, retry after a few seconds). On failure: `gh run view <run-id> --log-failed`, fix, push,
    wait again. A red or pending check is not done.
-   **Claude CI review** (`claude-review` label) is **not** part of the flow; run it only when the
-   owner asks. Then: `gh pr edit <n> --add-label claude-review`, wait for its run
+   **AI CI review** (`claude-review` label, `.github/AGENTS.md`) is **not** part of the flow;
+   run it only when the owner asks. Then: `gh pr edit <n> --add-label claude-review`, wait for its run
    (`gh run list --workflow claude-review.yml --limit 1`,
    `gh run watch <run-id> --exit-status > /dev/null`), read its summary
    (`gh pr view <n> --comments`) and inline comments
@@ -137,6 +140,12 @@ privacy rules too.
 
 ## Environment pitfalls (Windows dev PC)
 
+- **Other agents may be working at the same time**, in this checkout or another worktree, and
+  may be running builds or tests. Before starting, check `git status` and running
+  `dotnet`/`testhost` processes. Never switch branches, stash or reset in a checkout you didn't
+  create; do your own work in a separate worktree (`git worktree add ../assistant-<topic> -b
+  <branch> main`). Don't run builds or tests the task doesn't need; a failing test may be one
+  another agent is fixing. Locked files in `bin/`/`obj/` usually mean another agent's run.
 - Git Bash mangles Windows backslash paths in `sed`/heredocs (`\a`, `\s`) — use forward slashes,
   a file-editing tool, or PowerShell for such edits.
 - A corporate NuGet source may exist on the machine; `nuget.config` pins nuget.org. Keep it.
