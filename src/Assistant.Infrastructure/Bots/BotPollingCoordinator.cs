@@ -68,23 +68,39 @@ public class BotPollingCoordinator : IHostedService
             var handle = StartWorker(bot);
             if (!_workers.TryAdd(bot.Id, handle))
             {
-                handle.Cts.Cancel();
-                await handle.RunTask;
-                handle.Cts.Dispose();
+                await StopWorkerAsync(handle);
             }
         }
     }
 
+    /// <summary>Stops every currently tracked worker and clears `_workers`, so a repeat call (the
+    /// hosting layer does not guarantee IHostedService.StopAsync is invoked exactly once — ASP.NET
+    /// Core's test host in particular can call it more than once during teardown) finds nothing left
+    /// to stop and is a no-op rather than re-cancelling/re-disposing an already-stopped worker's
+    /// CancellationTokenSource.</summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        foreach (var handle in _workers.Values)
+        // Snapshot-and-remove each entry (rather than iterating _workers.Values directly) so a
+        // concurrent StopBotAsync/StartBotAsync racing for the same bot id can never observe or
+        // touch the same handle we're stopping here.
+        var botIds = _workers.Keys.ToList();
+        var handles = new List<WorkerHandle>();
+        foreach (var botId in botIds)
+        {
+            if (_workers.TryRemove(botId, out var handle))
+            {
+                handles.Add(handle);
+            }
+        }
+
+        foreach (var handle in handles)
         {
             handle.Cts.Cancel();
         }
 
-        await Task.WhenAll(_workers.Values.Select(h => h.RunTask));
+        await Task.WhenAll(handles.Select(h => h.RunTask));
 
-        foreach (var handle in _workers.Values)
+        foreach (var handle in handles)
         {
             handle.Cts.Dispose();
         }
@@ -108,21 +124,32 @@ public class BotPollingCoordinator : IHostedService
         {
             // Another concurrent StartBotAsync call already registered a worker for this bot id first;
             // cancel and drain the losing worker so it never runs orphaned.
-            handle.Cts.Cancel();
-            await handle.RunTask;
-            handle.Cts.Dispose();
+            await StopWorkerAsync(handle);
         }
     }
 
     /// <summary>Stops polling a bot (e.g. /settings' Remove action). No-op if it isn't running.</summary>
     public async Task StopBotAsync(long botDbId)
     {
+        // TryRemove is atomic against a concurrent StopAsync (also a remove-then-stop), so the two
+        // can never both grab the same handle and double-cancel/double-dispose its Cts.
         if (_workers.TryRemove(botDbId, out var handle))
         {
-            handle.Cts.Cancel();
-            await handle.RunTask;
-            handle.Cts.Dispose();
+            await StopWorkerAsync(handle);
         }
+    }
+
+    /// <summary>Cancels a worker's token, awaits its run task to finish draining, then disposes the
+    /// token source. A given `WorkerHandle` is only ever reachable from one call site: it's either
+    /// never added to `_workers` (a losing `TryAdd` in `StartAsync`/`StartBotAsync`, so no one else
+    /// can find it), or removed by exactly one atomic `TryRemove` (`StopAsync`/`StopBotAsync`), which
+    /// guarantees only the winning caller ever touches that handle's Cts — so no guard is needed
+    /// here against a handle being cancelled or disposed twice.</summary>
+    private static async Task StopWorkerAsync(WorkerHandle handle)
+    {
+        handle.Cts.Cancel();
+        await handle.RunTask;
+        handle.Cts.Dispose();
     }
 
     private WorkerHandle StartWorker(Bot bot)
