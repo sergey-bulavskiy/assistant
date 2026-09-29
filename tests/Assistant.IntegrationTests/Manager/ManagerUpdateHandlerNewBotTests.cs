@@ -129,7 +129,7 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
 
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("https://t.me/newbot/test_manager_bot/"));
-        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("cook");
+        (await pending.GetRoleAsync(111, CancellationToken.None)).ShouldBe("cook");
     }
 
     [Fact]
@@ -177,18 +177,24 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
         await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
         await handler.HandleAsync(ManagerBot, telegram, Command(2, 111, "/newbot driver"), CancellationToken.None);
 
-        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("driver");
+        (await pending.GetRoleAsync(111, CancellationToken.None)).ShouldBe("driver");
     }
 
     [Fact]
-    public async Task A_pending_role_can_be_taken_only_once()
+    public async Task A_failed_bot_creation_keeps_the_pending_role_for_the_redelivered_update()
     {
         var (handler, _, pending, _) = await SetupAsync();
         var telegram = new FakeTelegramClient();
         await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/newbot cook"), CancellationToken.None);
+        var managedBotUpdate = new IncomingUpdate(2, null, ManagedBotCreatorUserId: 111, ManagedBotUserId: 555);
 
-        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBe("cook");
-        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBeNull();
+        telegram.ManagedBotTokenToReturn = null; // the token fetch fails
+        await Should.ThrowAsync<InvalidOperationException>(() => handler.HandleAsync(ManagerBot, telegram, managedBotUpdate, CancellationToken.None));
+        telegram.ManagedBotTokenToReturn = "test-managed-bot-token";
+        await handler.HandleAsync(ManagerBot, telegram, managedBotUpdate, CancellationToken.None);
+
+        (await Db.Bots.IgnoreQueryFilters().SingleAsync(b => b.TelegramBotId == 999)).Role.ShouldBe("cook");
+        (await pending.GetRoleAsync(111, CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
@@ -200,7 +206,7 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
 
         _clock.Advance(TimeSpan.FromHours(25));
 
-        (await pending.TakeRoleAsync(111, CancellationToken.None)).ShouldBeNull();
+        (await pending.GetRoleAsync(111, CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]

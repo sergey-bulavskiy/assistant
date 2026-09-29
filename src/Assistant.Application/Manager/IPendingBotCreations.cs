@@ -13,7 +13,11 @@ public interface IPendingBotCreations
 
     Task SetPendingRoleAsync(long creatorTelegramUserId, string role, CancellationToken cancellationToken);
 
-    /// <summary>Removes and returns the pending role for this creator, or null if there is none or
-    /// it is older than <see cref="MaxAge"/>.</summary>
-    Task<string?> TakeRoleAsync(long creatorTelegramUserId, CancellationToken cancellationToken);
+    /// <summary>The pending role for this creator, or null if there is none or it is older than
+    /// <see cref="MaxAge"/>. Does not remove it: call <see cref="RemoveAsync"/> in the same
+    /// transaction that saves the created bot, so a failure in between leaves the role for the
+    /// redelivered update.</summary>
+    Task<string?> GetRoleAsync(long creatorTelegramUserId, CancellationToken cancellationToken);
+
+    Task RemoveAsync(long creatorTelegramUserId, CancellationToken cancellationToken);
 }

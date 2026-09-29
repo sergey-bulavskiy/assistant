@@ -490,7 +490,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             return;
         }
 
-        var role = await _pendingBotCreations.TakeRoleAsync(creatorUserId, cancellationToken) ?? "unspecified";
+        var role = await _pendingBotCreations.GetRoleAsync(creatorUserId, cancellationToken) ?? "unspecified";
 
         var token = await telegramClient.GetManagedBotTokenAsync(newBotUserId, cancellationToken);
         var newBotClient = _clientFactory.Create(token);
@@ -507,8 +507,15 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             LastUpdateId = 0,
             CreatedAt = _clock.UtcNow
         };
-        _db.Bots.Add(bot);
-        await _db.SaveChangesAsync(cancellationToken);
+        // The pending role is removed only together with saving the bot: if anything above fails,
+        // the update is redelivered and the retry still finds the role.
+        await using (var transaction = await _db.Database.BeginTransactionAsync(cancellationToken))
+        {
+            _db.Bots.Add(bot);
+            await _db.SaveChangesAsync(cancellationToken);
+            await _pendingBotCreations.RemoveAsync(creatorUserId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         await _coordinator.StartBotAsync(bot.Id, cancellationToken);
 

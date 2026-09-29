@@ -35,21 +35,18 @@ public class PendingBotCreations : IPendingBotCreations
             cancellationToken);
     }
 
-    public async Task<string?> TakeRoleAsync(long creatorTelegramUserId, CancellationToken cancellationToken)
+    public async Task<string?> GetRoleAsync(long creatorTelegramUserId, CancellationToken cancellationToken)
     {
         var expiredBefore = _clock.UtcNow - IPendingBotCreations.MaxAge;
-
-        // DELETE ... RETURNING takes the row atomically: a redelivered managed_bot update cannot
-        // read the same role twice.
-        var roles = await _db.Database
-            .SqlQuery<string>(
-                $"""
-                DELETE FROM pending_bot_creations
-                WHERE creator_telegram_user_id = {creatorTelegramUserId}
-                RETURNING CASE WHEN created_at >= {expiredBefore} THEN role END AS "Value"
-                """)
-            .ToListAsync(cancellationToken);
-
-        return roles.SingleOrDefault();
+        return await _db.PendingBotCreations
+            .AsNoTracking()
+            .Where(p => p.CreatorTelegramUserId == creatorTelegramUserId && p.CreatedAt >= expiredBefore)
+            .Select(p => p.Role)
+            .FirstOrDefaultAsync(cancellationToken);
     }
+
+    // Runs in the caller's current transaction, if any (EF Core enlists raw SQL in it).
+    public async Task RemoveAsync(long creatorTelegramUserId, CancellationToken cancellationToken) =>
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"DELETE FROM pending_bot_creations WHERE creator_telegram_user_id = {creatorTelegramUserId}", cancellationToken);
 }
