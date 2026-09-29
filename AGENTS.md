@@ -43,9 +43,9 @@ command only as an example next to a generic fallback.
 | Path | What | Local guide |
 |---|---|---|
 | `src/Assistant.Domain` | Entities, no dependencies | `src/Assistant.Domain/AGENTS.md` |
-| `src/Assistant.Application` | Use cases, ports (`IMessageStore`, `ITelegramClient`, `IClock`) | — |
-| `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter | `src/Assistant.Infrastructure/AGENTS.md` |
-| `src/Assistant.Host` | ASP.NET host, polling loop, `/health`, config | `src/Assistant.Host/AGENTS.md` |
+| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing; ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, …) | — |
+| `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption | `src/Assistant.Infrastructure/AGENTS.md` |
+| `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
 | `tests/` | Unit + integration (IntegreSQL) tests | `tests/AGENTS.md` |
 | `deploy/` | Production compose, `.env.example` | `deploy/AGENTS.md` |
 | `.github/` | CI/CD workflows, Dependabot | `.github/AGENTS.md` |
@@ -84,7 +84,7 @@ Faster local loop and test infrastructure details: `tests/AGENTS.md`.
 ## Delivering a change
 
 Every change, including docs, goes through these steps. Do not report a change as done before
-step 8.
+step 9.
 
 The owner is the only developer. Each check runs **once**, where it is cheapest: tests run
 locally and again in CI (CI costs no model tokens), but a change gets **one** model review, not
@@ -98,12 +98,17 @@ one per stage. Keep command output small: read logs only when something failed.
    Skip it for changes that touch no code, tests or build files (docs, `AGENTS.md`, workflows):
    CI runs anyway. After fixing review findings, rerun only the build and the affected tests;
    CI runs the full suite.
-3. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
+3. **Docs current.** A PR that adds, changes or removes behaviour updates, in the same PR, every
+   doc that describes it: `README.md` (what the bots do, commands, setup, smoke checklist), the
+   layout table above, the local `AGENTS.md` guides, `deploy/.env.example`, and code comments
+   that name the changed behaviour or config. Don't leave milestone-specific docs behind once the
+   milestone is done. Update `docs/status.md` in `../assistant-specs` after merging.
+4. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
    about to publish against the privacy rules above.
-4. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
+5. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
    subagent or a separate session with no stake in the change). Fix or explicitly answer each
    blocking and should-fix finding.
-   - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 3 is enough.
+   - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 4 is enough.
    - Code changes: one review, using the tool's built-in review command if it has one (e.g.
      `/code-review` in Claude Code), otherwise a fresh subagent given this checklist.
    - Work executed task by task with per-task reviews (e.g. a subagent-per-task plan executor):
@@ -112,9 +117,9 @@ one per stage. Keep command output small: read logs only when something failed.
      `dotnet-test` plugin, see `tests/AGENTS.md`) only when the PR adds new test classes or
      rewrites existing tests, not for small test edits.
    - Do not rerun a full review after fixing findings; check the fixes yourself.
-5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
+6. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
-6. **CI.** Wait without streaming progress:
+7. **CI.** Wait without streaming progress:
    `gh pr checks <n> --watch --fail-fast > /dev/null; echo "exit=$?"` (if it reports no checks
    yet, retry after a few seconds). On failure: `gh run view <run-id> --log-failed`, fix, push,
    wait again. A red or pending check is not done.
@@ -125,9 +130,9 @@ one per stage. Keep command output small: read logs only when something failed.
    (`gh pr view <n> --comments`) and inline comments
    (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`),
    and fix or explicitly answer every blocking and should-fix finding.
-7. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
+8. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
    below) only when CI is green and the owner has approved merging in the current session.
-8. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
+9. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
    `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`.
    Report the deployed image tag (`sha-<first 7 of the merge commit>`). If CD fails, say so and
@@ -150,7 +155,8 @@ Reviewers (human, subagent or CI bot) check, in this order:
 5. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
    infrastructure types do not leak into Application.
 6. **Workflows**: `.github/AGENTS.md` rules hold.
-7. **Local guides**: if the change adds a gotcha or invariant, the matching `AGENTS.md` is updated.
+7. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
+   invariant goes into the matching local `AGENTS.md`.
 
 Report findings as blocking / should-fix / nit. Review comments on the public repo follow the
 privacy rules too.

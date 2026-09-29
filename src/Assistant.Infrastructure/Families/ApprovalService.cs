@@ -19,7 +19,7 @@ namespace Assistant.Infrastructure.Families;
 public class ApprovalService : IApprovalService
 {
     // approvalKey ("place"/placeId or "member"/memberId) -> owner DM locations. Best-effort,
-    // in-memory only (Judgment Call 5): if the process restarts between sending and resolving, a
+    // in-memory only: if the process restarts between sending and resolving, a
     // redundant tap still answers correctly, it just can't visually disable the other owners'
     // buttons any more.
     private static readonly ConcurrentDictionary<(string Kind, long Id), List<(long ChatId, int MessageId)>> SentMessages = new();

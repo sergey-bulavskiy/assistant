@@ -19,11 +19,31 @@
 - Message storage must stay idempotent per Telegram `update_id` (restart + redelivery must not
   create duplicates or duplicate replies); integration tests in `tests/.../Persistence` cover it.
 
+## Bot polling (`Bots/`)
+
+- Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,
+  so restarts resume every bot independently. `BotPollingCoordinator` (singleton hosted service)
+  runs one `BotPollingWorker` per active `bots` row and starts or stops workers at runtime, without
+  a process restart, when a role bot finishes creation or is disabled/enabled/removed in
+  `/settings`. Each worker keeps its own per-update failure count and skips poison updates after
+  `PoisonUpdateFailureCap` attempts.
+- Allowed updates differ per bot: the manager gets messages, callback queries and `managed_bot`
+  events; role bots get messages and `my_chat_member` (added to / removed from a chat).
+
+## Manager bot and approvals (`Manager/`, `Families/`)
+
+- Some state is in memory only and lost on restart: the role chosen in `/newbot` until Telegram
+  reports the created bot (`PendingBotCreations`; a restart in between stores the bot with role
+  `unspecified`), and which owner DMs to edit once an approval is resolved (`ApprovalService`).
+- Callback data carries sequential ids (`place_approve:1`), so every callback re-checks that the
+  tapping user is an approved owner of the row's family.
+
 ## Telegram
 
 - The `telegram` named HttpClient has its loggers removed on purpose: Bot API URLs contain the
   token. Any new HttpClient that talks to an API with secrets in the URL needs the same.
 - `TelegramClientAdapter` is the only place that touches `Telegram.Bot` types; map to our own
   types in `TelegramUpdateMapper` so Application stays library-free.
-- Groups: bots see ordinary group messages only with privacy mode off or admin rights. Chats can
+- Groups: bots see ordinary group messages only with privacy mode off or admin rights. Bots
+  created through Managed Bots start with privacy mode on (README step 5). Chats can
   migrate (group → supergroup changes the chat id); migrations are recorded in `chat_migrations`.

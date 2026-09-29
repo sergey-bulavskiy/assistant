@@ -1,8 +1,29 @@
 # Assistant
 
-A Telegram bot that quietly records messages in PostgreSQL and replies with a confirmation. This is
-the M1 "foundation" milestone: no LLM, no product features yet — just the storage and delivery
-pipeline that later milestones build on.
+A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
+**role bots** for it; role bots quietly record the messages of approved people in approved chats
+into PostgreSQL. There is no LLM yet: role bots only store messages and confirm them in private
+chats. Later milestones add the assistant features on top of this pipeline.
+
+## What it does
+
+**Manager bot** (the bot whose token you configure):
+
+| Command | Who | What |
+|---|---|---|
+| `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
+| `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot. Once confirmed, the bot starts polling without a restart. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, disable/enable a user, make a user an owner. |
+
+**Role bots:**
+
+- A new **place** (a group the bot is added to, or a forum topic it sees for the first time) needs
+  an owner's Yes/No in a DM from the manager bot before any message from it is stored.
+- A new **user** writing to any of the family's bots needs an owner's Allow/Deny; once allowed, they
+  can use every bot of the family.
+- Messages from approved users in approved places are stored exactly once per Telegram update, even
+  across restarts. In private chats the bot replies `Получил ✅ #<id>`; in groups it stays silent.
+- `/start` (private chats) and `/version` (any chat) reply with a greeting and the running version.
 
 ## Privacy
 
@@ -78,20 +99,33 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 > the repo's **Packages** tab → `assistant` → **Package settings** → **Change visibility** →
 > **Public**.
 
-## 5. Smoke checklist
+## 5. For every new role bot: turn off Group Privacy
 
-- On first startup with no family yet, the log prints a one-time claim code — send
+Bots created with `/newbot` have Telegram's Group Privacy mode on, so in groups they only see
+commands and replies, not ordinary messages. Before adding a role bot to a group: in BotFather,
+`/mybots` → the role bot → Bot Settings → **Group Privacy** → **Turn off**. (Making the bot a group
+admin also works.)
+
+## 6. Smoke checklist
+
+Run after setup and after any release that changes bot behaviour. It creates real bots and a real
+family.
+
+- On startup with no family yet, the log prints a claim code (new on every start) — send
   `/claim <code>` to the manager bot in a DM. It replies confirming you're the platform owner.
 - Send `/newbot <role>` (e.g. `/newbot general`) → the manager replies with a Telegram creation
-  link. Tap it, confirm creation in Telegram's own UI — the manager starts polling the new bot
-  automatically, no restart needed.
-- Add the new role bot to a group → every family owner gets a DM with Yes/No buttons; tapping
-  Yes lets it start recording messages there.
+  link. Tap it, confirm creation in Telegram's own UI → the manager DMs you that the bot is
+  running, with no restart needed.
+- Turn off Group Privacy for it (step 5), add it to a group → every family owner gets a DM with
+  Yes/No buttons; tapping Yes lets it start recording messages there. The group stays silent;
+  a private chat with the bot gets `Получил ✅ #<id>`.
+- In a forum group, post in a topic the bot hasn't seen → a separate Yes/No DM for that topic.
 - Have an unrecognized Telegram account message the role bot → every owner gets an Allow/Deny DM
-  for that user.
-- `/settings` on the manager bot lists bots/places/users with buttons that actually change
-  behavior (Disable a bot and confirm it stops replying; Remove a place and confirm new messages
-  from it start a fresh approval).
+  for that user. After Allow, that account can use every bot of the family.
+- `/settings` on the manager bot lists bots/places/users matching reality. Disable a bot → it
+  stops replying and storing; Enable → it resumes. Remove a place → a new message from it starts
+  a fresh approval. "Сделать владельцем" on a user → they can use `/settings` and get owner DMs.
+- Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.
 
