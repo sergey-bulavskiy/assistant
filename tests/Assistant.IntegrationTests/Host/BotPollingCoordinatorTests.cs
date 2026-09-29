@@ -108,6 +108,6 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
         var coordinator = factory.Services.GetRequiredService<BotPollingCoordinator>();
 
         await coordinator.StopAsync(CancellationToken.None);
-        await coordinator.StopAsync(CancellationToken.None);
+        await Should.NotThrowAsync(() => coordinator.StopAsync(CancellationToken.None));
     }
 }

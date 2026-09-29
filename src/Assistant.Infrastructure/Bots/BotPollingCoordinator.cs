@@ -95,7 +95,7 @@ public class BotPollingCoordinator : IHostedService
 
         foreach (var handle in handles)
         {
-            CancelIgnoringDisposed(handle);
+            handle.Cts.Cancel();
         }
 
         await Task.WhenAll(handles.Select(h => h.RunTask));
@@ -140,28 +140,16 @@ public class BotPollingCoordinator : IHostedService
     }
 
     /// <summary>Cancels a worker's token, awaits its run task to finish draining, then disposes the
-    /// token source. Every handle is reachable here at most once per `TryRemove`'s atomicity, so this
-    /// only tolerates an already-cancelled Cts in the narrow window where two overlapping `StopAsync`
-    /// calls raced: one already removed and is draining/disposing the handle while the other's key
-    /// snapshot (taken just before) still calls in. `Dispose()` itself is idempotent per the BCL
-    /// contract and never throws on a repeat call, so only `Cancel()` needs the guard.</summary>
+    /// token source. A given `WorkerHandle` is only ever reachable from one call site: it's either
+    /// never added to `_workers` (a losing `TryAdd` in `StartAsync`/`StartBotAsync`, so no one else
+    /// can find it), or removed by exactly one atomic `TryRemove` (`StopAsync`/`StopBotAsync`), which
+    /// guarantees only the winning caller ever touches that handle's Cts — so no guard is needed
+    /// here against a handle being cancelled or disposed twice.</summary>
     private static async Task StopWorkerAsync(WorkerHandle handle)
     {
-        CancelIgnoringDisposed(handle);
+        handle.Cts.Cancel();
         await handle.RunTask;
         handle.Cts.Dispose();
-    }
-
-    private static void CancelIgnoringDisposed(WorkerHandle handle)
-    {
-        try
-        {
-            handle.Cts.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already cancelled by an overlapping stop of the same handle; nothing left to cancel.
-        }
     }
 
     private WorkerHandle StartWorker(Bot bot)
