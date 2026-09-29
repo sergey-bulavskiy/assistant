@@ -1,9 +1,12 @@
 using System.Net;
+using System.Threading;
 using Assistant.Application.Telegram;
 using Assistant.Host;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Assistant.IntegrationTests.Host;
 
@@ -89,5 +92,22 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
             var managerBot = db.Bots.IgnoreQueryFilters().Single(b => b.Role == "manager");
             return managerBot.LastUpdateId == 1;
         });
+    }
+
+    [Fact]
+    public async Task StopAsync_is_safe_to_call_more_than_once()
+    {
+        // The ASP.NET Core hosting layer does not guarantee IHostedService.StopAsync is invoked
+        // exactly once (WebApplicationFactory's own teardown is one place that can call it twice).
+        // A repeat call must be a no-op, not throw ObjectDisposedException from re-cancelling or
+        // re-disposing an already-stopped worker's CancellationTokenSource.
+        using var factory = new AssistantWebApplicationFactory(_connectionString);
+        var client = factory.CreateClient();
+        await WaitUntilHealthyAsync(client);
+
+        var coordinator = factory.Services.GetRequiredService<BotPollingCoordinator>();
+
+        await coordinator.StopAsync(CancellationToken.None);
+        await coordinator.StopAsync(CancellationToken.None);
     }
 }
