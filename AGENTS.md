@@ -58,34 +58,51 @@ Faster local loop and test infrastructure details: `tests/AGENTS.md`.
 ## Delivering a change
 
 Every change, including docs, goes through these steps. Do not report a change as done before
-step 7.
+step 8.
+
+The owner is the only developer. Each check runs **once**, where it is cheapest: tests run
+locally and again in CI (CI costs no model tokens), but a change gets **one** model review, not
+one per stage. Keep command output small: read logs only when something failed.
 
 1. **Branch.** Never commit to `main`. Name branches `feat/…`, `fix/…` or `chore/…`.
-2. **Local gate.** Run the build and test commands above; both must pass. If you could not run a
-   step (e.g. Docker unavailable), say so explicitly — never claim it passed.
+2. **Local gate.** Run the build and test commands above with quiet output
+   (`dotnet build -c Release -warnaserror -v q -nologo`,
+   `dotnet test -c Release -v q --logger "console;verbosity=minimal"`); both must pass. If you
+   could not run a step (e.g. Docker unavailable), say so explicitly — never claim it passed.
+   Skip it for changes that touch no code, tests or build files (docs, `AGENTS.md`, workflows):
+   CI runs anyway. After fixing review findings, rerun only the build and the affected tests;
+   CI runs the full suite.
 3. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
    about to publish against the privacy rules above.
-4. **Review.** Get a review against the checklist below from a fresh reviewer (a subagent or a
-   separate session with no stake in the change). Fix or explicitly answer each finding.
-   In Claude Code use the built-in `/code-review`; when tests changed, also run the
-   `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`).
+4. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
+   subagent or a separate session with no stake in the change). Fix or explicitly answer each
+   blocking and should-fix finding.
+   - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 3 is enough.
+   - Code changes: one `/code-review` in Claude Code (any fresh-reviewer subagent elsewhere).
+   - Work executed task by task with per-task reviews (e.g. superpowers
+     `subagent-driven-development`): those reviews plus its final whole-branch review are the
+     review. Do not run another one.
+   - Run the `test-quality-auditor` agent from the `dotnet-test` plugin (see `tests/AGENTS.md`)
+     only when the PR adds new test classes or rewrites existing tests, not for small test edits.
+   - Do not rerun a full review after fixing findings; check the fixes yourself.
 5. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
    saying what changed and how it was verified.
-6. **CI.** `gh pr checks --watch`. On failure: `gh run view <run-id> --log-failed`, fix, push,
-   watch again. A red or pending check is not done.
-   **CI review:** if the PR adds or changes functionality (anything under `src/`, behaviour, config
-   or schema), run the Claude CI review: `gh pr edit <n> --add-label claude-review`, then wait for
-   its run (`gh run list --workflow claude-review.yml --limit 1`, `gh run watch <run-id>`) and read
-   its summary (`gh pr view <n> --comments`) and inline comments
-   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`). Fix or explicitly answer every blocking and
-   should-fix finding; after fixing, remove and re-add the label to review again. Optional for
-   docs-only and chore PRs. It complements, never replaces, the local review in step 4.
+6. **CI.** Wait without streaming progress:
+   `gh pr checks <n> --watch --fail-fast > /dev/null; echo "exit=$?"` (if it reports no checks
+   yet, retry after a few seconds). On failure: `gh run view <run-id> --log-failed`, fix, push,
+   wait again. A red or pending check is not done.
+   **Claude CI review** (`claude-review` label) is **not** part of the flow; run it only when the
+   owner asks. Then: `gh pr edit <n> --add-label claude-review`, wait for its run
+   (`gh run list --workflow claude-review.yml --limit 1`,
+   `gh run watch <run-id> --exit-status > /dev/null`), read its summary
+   (`gh pr view <n> --comments`) and inline comments
+   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`),
+   and fix or explicitly answer every blocking and should-fix finding.
 7. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
-   below) only when CI is green, required CI review findings are resolved, and the owner has
-   approved merging in the current session.
+   below) only when CI is green and the owner has approved merging in the current session.
 8. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
-   `gh run watch <run-id>`.
+   `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`.
    Report the deployed image tag (`sha-<first 7 of the merge commit>`). If CD fails, say so and
    investigate; the change is merged but not delivered.
 

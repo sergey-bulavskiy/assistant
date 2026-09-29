@@ -9,7 +9,8 @@ This repo is public; workflows run on code from anyone who opens a PR.
   github.repository` (`claude-review.yml`). `cd.yml` uses only the ephemeral `GITHUB_TOKEN` via
   `workflow_run`, gated to successful `ci` runs of pushes to `main` in this repository.
 - `claude-review.yml` (secret `CLAUDE_CODE_OAUTH_TOKEN`) reviews a PR when the `claude-review`
-  label is added; remove and re-add the label to review again after new pushes. Its prompt
+  label is added; remove and re-add the label to review again after new pushes. It is optional
+  and runs only on the owner's request (see "Delivering a change" in the root `AGENTS.md`). Its prompt
   points at the checklist in the root `AGENTS.md` — keep review rules there, not in the workflow.
 - Keep `permissions:` minimal and explicit per workflow.
 - `ci.yml` builds with `-warnaserror` and runs all tests in Release; the local gate in the root
