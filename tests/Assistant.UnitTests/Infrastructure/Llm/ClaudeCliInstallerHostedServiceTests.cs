@@ -46,6 +46,7 @@ public class ClaudeCliInstallerHostedServiceTests
 
         var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet", "haiku" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
         await service.StartAsync(CancellationToken.None);
+        await (service.ExecuteTask ?? Task.CompletedTask);
 
         availability.IsAvailable("sonnet").ShouldBeTrue();
         availability.IsAvailable("haiku").ShouldBeTrue();
@@ -73,6 +74,7 @@ public class ClaudeCliInstallerHostedServiceTests
 
         var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
         await service.StartAsync(CancellationToken.None);
+        await (service.ExecuteTask ?? Task.CompletedTask);
 
         calls.Count.ShouldBe(2); // version check, then install
         availability.IsAvailable("sonnet").ShouldBeTrue();
@@ -93,6 +95,7 @@ public class ClaudeCliInstallerHostedServiceTests
 
         var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet" }, logger);
         await service.StartAsync(CancellationToken.None); // must not throw
+        await (service.ExecuteTask ?? Task.CompletedTask);
 
         availability.IsAvailable("sonnet").ShouldBeFalse();
         logger.Entries.ShouldContain(e => e.Level == LogLevel.Error);
@@ -104,5 +107,47 @@ public class ClaudeCliInstallerHostedServiceTests
         var service = new ClaudeCliInstallerHostedService(new FakeProcessRunner(), Options(), new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow)), new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
 
         await service.StopAsync(CancellationToken.None); // must not throw even though StartAsync was never called
+    }
+
+    [Fact]
+    public async Task StartAsync_returns_promptly_while_the_install_is_still_running()
+    {
+        // Proves the fix: a BackgroundService's StartAsync only kicks off ExecuteAsync in the
+        // background and returns -- it never awaits the install itself, so a slow/hanging download
+        // (the real installer pipes curl through bash, with no bound on how long that can take)
+        // cannot block ASP.NET Core's own startup, /health or bot polling.
+        var installStarted = new TaskCompletionSource();
+        var releaseInstall = new TaskCompletionSource<ProcessRunResult>();
+        var runner = new FakeProcessRunner
+        {
+            AsyncHandler = async req =>
+            {
+                if (req.Arguments.Contains("--version"))
+                {
+                    return new ProcessRunResult(1, "", "no such file", false); // not installed yet
+                }
+
+                installStarted.SetResult();
+                return await releaseInstall.Task; // never completes until the test releases it
+            }
+        };
+        var availability = new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow));
+        availability.MarkUnavailable("sonnet", DateTimeOffset.MaxValue);
+
+        var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
+
+        var startTask = service.StartAsync(CancellationToken.None);
+        var completedTask = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(5)));
+        completedTask.ShouldBe(startTask); // StartAsync itself must complete well before the installer does
+        await startTask;
+
+        await Task.WhenAny(installStarted.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        installStarted.Task.IsCompleted.ShouldBeTrue(); // the installer is genuinely running in the background
+        service.ExecuteTask!.IsCompleted.ShouldBeFalse(); // and has not finished
+        availability.IsAvailable("sonnet").ShouldBeFalse(); // so the model is still marked unavailable
+
+        releaseInstall.SetResult(new ProcessRunResult(0, "", "", false));
+        await service.ExecuteTask!;
+        availability.IsAvailable("sonnet").ShouldBeTrue();
     }
 }

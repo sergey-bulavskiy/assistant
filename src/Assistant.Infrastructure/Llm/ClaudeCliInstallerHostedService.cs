@@ -9,13 +9,17 @@ namespace Assistant.Infrastructure.Llm;
 /// background, and installs the pinned version into ClaudeCliOptions.HomeDirectory
 /// ($CLAUDE_HOME -- a dedicated volume, Task 10 Dockerfile/compose) if it isn't already there at the
 /// right version. Every claude-cli catalog entry is marked unavailable (Task 9 does this
-/// synchronously before this service's StartAsync even runs, at DI composition time -- see
+/// synchronously before this service's ExecuteAsync even runs, at DI composition time -- see
 /// InfrastructureServiceCollectionExtensions) until the check/install here succeeds, so callers get
-/// AllModelsUnavailable rather than a confusing process-launch failure. Never blocks
+/// AllModelsUnavailable rather than a confusing process-launch failure. A <see cref="BackgroundService"/>
+/// (not a plain IHostedService) on purpose: ASP.NET Core awaits every hosted service's StartAsync
+/// before the server starts accepting traffic, so a slow or hanging download there would block
+/// /health and bot polling too -- BackgroundService's StartAsync only kicks off ExecuteAsync and
+/// returns immediately, letting the rest of startup proceed while the install runs. Never blocks
 /// Program.cs's own startup and never throws out of the app -- an install failure logs exactly one
 /// Error (exception type / stderr never included) and is retried only on the next app start, never
 /// on an in-process timer.</summary>
-public class ClaudeCliInstallerHostedService : IHostedService
+public class ClaudeCliInstallerHostedService : BackgroundService
 {
     private readonly IProcessRunner _runner;
     private readonly ClaudeCliOptions _options;
@@ -37,13 +41,13 @@ public class ClaudeCliInstallerHostedService : IHostedService
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
-            if (!await IsAlreadyAtPinnedVersionAsync(cancellationToken))
+            if (!await IsAlreadyAtPinnedVersionAsync(stoppingToken))
             {
-                var installResult = await RunInstallerAsync(cancellationToken);
+                var installResult = await RunInstallerAsync(stoppingToken);
                 if (installResult.ExitCode != 0)
                 {
                     _logger.LogError("claude-cli install failed: exit code {ExitCode}", installResult.ExitCode);
@@ -56,6 +60,10 @@ public class ClaudeCliInstallerHostedService : IHostedService
                 _availability.MarkAvailable(modelName);
             }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Ordinary shutdown (the host is stopping) -- not an install failure, nothing to log.
+        }
         catch (Exception ex)
         {
             // Never let an install failure crash the app (spec §8.10) -- only exception type, never
@@ -63,8 +71,6 @@ public class ClaudeCliInstallerHostedService : IHostedService
             _logger.LogError("claude-cli install failed: {ExceptionType}", ex.GetType().Name);
         }
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private async Task<bool> IsAlreadyAtPinnedVersionAsync(CancellationToken cancellationToken)
     {

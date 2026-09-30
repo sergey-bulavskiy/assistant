@@ -137,14 +137,14 @@ public class GeneralAssistant : IGeneralAssistant
 
         if (arg is null)
         {
-            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, current.PreferredModel), cancellationToken);
+            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, current.PreferredModel, _clock.UtcNow), cancellationToken);
             return;
         }
 
         if (string.Equals(arg, "auto", StringComparison.OrdinalIgnoreCase))
         {
             await _chatSettings.SetPreferredModelAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, null, cancellationToken);
-            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, null), cancellationToken);
+            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, null, _clock.UtcNow), cancellationToken);
             return;
         }
 
@@ -154,22 +154,22 @@ public class GeneralAssistant : IGeneralAssistant
         var match = models.FirstOrDefault(m => string.Equals(m.Name, arg, StringComparison.OrdinalIgnoreCase));
         if (match is null)
         {
-            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, current.PreferredModel), cancellationToken);
+            await ReplyAsync(bot, telegramClient, message, DescribeModels(models, current.PreferredModel, _clock.UtcNow), cancellationToken);
             return;
         }
 
         await _chatSettings.SetPreferredModelAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, match.Name, cancellationToken);
-        await ReplyAsync(bot, telegramClient, message, DescribeModels(models, match.Name), cancellationToken);
+        await ReplyAsync(bot, telegramClient, message, DescribeModels(models, match.Name, _clock.UtcNow), cancellationToken);
     }
 
-    private static string DescribeModels(IReadOnlyList<ModelStatus> models, string? preferred)
+    private static string DescribeModels(IReadOnlyList<ModelStatus> models, string? preferred, DateTimeOffset now)
     {
         var lines = models.Select(m =>
         {
             var marker = string.Equals(m.Name, preferred, StringComparison.OrdinalIgnoreCase) ? " (текущая)" : string.Empty;
             var status = m.IsAvailable
                 ? "доступна"
-                : m.RetryAt is { } retryAt
+                : m.RetryAt is { } retryAt && IsKnownRetryTime(retryAt, now)
                     ? $"недоступна до {FormatTime(retryAt)} UTC"
                     : "недоступна";
             return $"- {m.Name}: {status}{marker}";
@@ -225,7 +225,7 @@ public class GeneralAssistant : IGeneralAssistant
         }
         else
         {
-            await ReplyAsync(bot, telegramClient, message, RefusalText(result), cancellationToken);
+            await ReplyAsync(bot, telegramClient, message, RefusalText(result, _clock.UtcNow), cancellationToken);
         }
     }
 
@@ -245,11 +245,11 @@ public class GeneralAssistant : IGeneralAssistant
 
     private const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
 
-    private static string RefusalText(LlmResult result) => result.RefusalReason switch
+    private static string RefusalText(LlmResult result, DateTimeOffset now) => result.RefusalReason switch
     {
         LlmRefusalReason.RateLimited => "Слишком много запросов, подождите минуту.",
         LlmRefusalReason.DailyCapReached => "Дневной лимит запросов исчерпан, продолжим завтра.",
-        LlmRefusalReason.AllModelsUnavailable => result.RetryAt is { } retryAt
+        LlmRefusalReason.AllModelsUnavailable => result.RetryAt is { } retryAt && IsKnownRetryTime(retryAt, now)
             ? $"Все модели сейчас недоступны (лимиты), попробуйте позже. Не раньше {FormatTime(retryAt)} UTC."
             : "Все модели сейчас недоступны (лимиты), попробуйте позже.",
         LlmRefusalReason.Failed => FailedText,
@@ -258,6 +258,13 @@ public class GeneralAssistant : IGeneralAssistant
 
     private static string FormatTime(DateTimeOffset time) =>
         time.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture);
+
+    // A retry time far in the future (e.g. DateTimeOffset.MaxValue, used while a model has never
+    // been marked available -- see ClaudeCliInstallerHostedService) is not a real ETA: showing it
+    // verbatim would print a nonsensical date/time. Anything more than a week out is treated the
+    // same as "unknown" and simply omitted.
+    private static bool IsKnownRetryTime(DateTimeOffset retryAt, DateTimeOffset now) =>
+        retryAt - now <= TimeSpan.FromDays(7);
 
     private static bool IsAddressed(ReceivingBot bot, IncomingMessage message, string text)
     {

@@ -176,6 +176,28 @@ public class LlmGatewayTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task A_model_never_marked_available_does_not_win_the_earliest_retry_race()
+    {
+        // ModelA starts unavailable until DateTimeOffset.MaxValue, as claude-cli models are before
+        // ClaudeCliInstallerHostedService's first successful install -- it must never beat a real,
+        // much sooner retry time reported for another candidate in the same call.
+        var config = MakeConfig();
+        var client = new ScriptedChatClient();
+        var now = DateTimeOffset.UtcNow;
+        client.EnqueueException(new ModelLimitReachedException("limit", LlmLimitScope.Model, now.AddMinutes(5)));
+        var availability = new ModelAvailability(new SystemClock());
+        availability.MarkUnavailable(ModelA, DateTimeOffset.MaxValue);
+        var gateway = CreateGateway(config, client, availability);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 22), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        result.RefusalReason.ShouldBe(LlmRefusalReason.AllModelsUnavailable);
+        result.RetryAt.ShouldNotBeNull();
+        result.RetryAt!.Value.ShouldBe(now.AddMinutes(5), TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task Non_limit_exception_fails_without_trying_next_candidate()
     {
         var config = MakeConfig();

@@ -386,6 +386,27 @@ public class GeneralAssistantTests
     }
 
     [Fact]
+    public async Task Model_list_hides_a_retry_time_that_is_not_a_real_eta()
+    {
+        // DateTimeOffset.MaxValue is what a model is marked unavailable with before the claude-cli
+        // install has ever succeeded (ClaudeCliInstallerHostedService) -- it is not a real ETA and
+        // must never be printed verbatim.
+        _gateway.Models = new()
+        {
+            new ModelStatus("sonnet", false, DateTimeOffset.MaxValue),
+            new ModelStatus("haiku", false, Now.AddDays(30)),
+        };
+
+        await HandleAsync(Msg("/model"));
+
+        var text = _telegram.Sent.ShouldHaveSingleItem().Text;
+        text.ShouldContain("sonnet: недоступна");
+        text.ShouldNotContain("sonnet: недоступна до");
+        text.ShouldContain("haiku: недоступна");
+        text.ShouldNotContain("haiku: недоступна до");
+    }
+
+    [Fact]
     public async Task Model_with_a_known_name_sets_the_preference_used_by_the_next_request()
     {
         await HandleAsync(Msg("/model HAIKU"));
@@ -503,6 +524,17 @@ public class GeneralAssistantTests
         await HandleAsync(Msg("test question"));
 
         _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Все модели сейчас недоступны (лимиты), попробуйте позже. Не раньше 14:05 UTC.");
+    }
+
+    [Fact]
+    public async Task All_models_unavailable_with_an_unknown_retry_time_omits_it()
+    {
+        // DateTimeOffset.MaxValue (never installed) must never be printed as an ETA.
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, DateTimeOffset.MaxValue);
+
+        await HandleAsync(Msg("test question"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Все модели сейчас недоступны (лимиты), попробуйте позже.");
     }
 
     [Fact]
