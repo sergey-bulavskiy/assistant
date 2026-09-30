@@ -30,11 +30,20 @@ public class ClaudeCliChatClient : IChatClient
     private static readonly Regex SpendOrBudgetRegex = new(
         @"spend limit|shared budget", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Review should-fix #3: other account-wide phrasings that don't fit the "your X limit" shape
+    // above -- "You've hit your limit" (no word between "your" and "limit"), "usage limit" (no
+    // "your" at all) and "N-hour limit" (e.g. "5-hour limit reached"). Unlike spend/budget these DO
+    // carry a reset time, so (unlike SpendOrBudgetRegex) matching this still falls through to the
+    // reset-time parsing below.
+    private static readonly Regex GenericAccountLimitRegex = new(
+        @"hit your limit|usage limit|\d+-hour limit", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     // Finding S6: the weekday (e.g. "Mon") is captured, not just skipped, so a limit message like
     // "...weekly limit · resets Mon 12:00am" resolves against that specific weekday rather than
-    // "the next occurrence of this clock time", which could be the wrong day.
+    // "the next occurrence of this clock time", which could be the wrong day. Review should-fix #3:
+    // the minute is optional ("resets 3pm" carries no minute at all -- treated as :00).
     private static readonly Regex ResetTimeRegex = new(
-        @"resets\s+(?:(?<weekday>[A-Za-z]{3})\s+)?(?<hour>\d{1,2}):(?<minute>\d{2})\s*(?<ampm>am|pm)",
+        @"resets\s+(?:(?<weekday>[A-Za-z]{3})\s+)?(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<ampm>am|pm)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // Finding S5.
@@ -72,6 +81,8 @@ public class ClaudeCliChatClient : IChatClient
         // current working directory happens to be, defeating the point of a dedicated $CLAUDE_HOME.
         if (string.IsNullOrWhiteSpace(_options.HomeDirectory) || !Path.IsPathRooted(_options.HomeDirectory))
         {
+            // Nit: one distinct Error line naming the reason category, never any configured value.
+            _logger.LogError("claude-cli refused to run: home directory not an absolute path");
             throw new InvalidOperationException("claude cli invocation refused: HomeDirectory is not configured as an absolute path.");
         }
 
@@ -80,6 +91,7 @@ public class ClaudeCliChatClient : IChatClient
         // without it.
         if (!VersionAtLeast(_options.PinnedVersion, 2, 1, 248))
         {
+            _logger.LogError("claude-cli refused to run: pinned version does not support restricted mode");
             throw new InvalidOperationException("claude cli invocation refused: the pinned CLI version does not support required restricted mode.");
         }
 
@@ -187,9 +199,7 @@ public class ClaudeCliChatClient : IChatClient
     /// resolution order in the child's cleaned environment. An explicitly configured
     /// ExecutablePath is always used as-is.</summary>
     private string ResolveExecutablePath() =>
-        _options.ExecutablePath == ClaudeCliOptions.UnsetExecutablePath
-            ? _options.HomeDirectory.TrimEnd('/') + "/.local/bin/claude"
-            : _options.ExecutablePath;
+        _options.ExecutablePath ?? _options.HomeDirectory.TrimEnd('/') + "/.local/bin/claude";
 
     /// <summary>Renders the conversation as spec §8.4's delimited blocks:
     /// `&lt;msg role="user|assistant" author="..."&gt;...&lt;/msg&gt;`. `&lt;`/`&gt;` inside the text
@@ -258,6 +268,15 @@ public class ClaudeCliChatClient : IChatClient
 
         if (parsed is null)
         {
+            // Nit: a non-zero exit with no JSON at all (the CLI crashed/refused before ever printing
+            // its --output-format json result) may still be an auth failure -- check stderr for the
+            // same marker, but never log its text (only the fixed Error line, same as the JSON path).
+            if (result.ExitCode != 0 && AuthFailureRegex.IsMatch(result.StandardError))
+            {
+                _logger.LogError("claude-cli authentication failed");
+                throw new InvalidOperationException($"claude cli authentication failed for model '{modelName}'.");
+            }
+
             throw new InvalidOperationException($"claude cli produced no parseable JSON result for model '{modelName}' (exit code {result.ExitCode}).");
         }
 
@@ -335,13 +354,19 @@ public class ClaudeCliChatClient : IChatClient
         }
 
         var kindMatch = LimitKindRegex.Match(text);
-        if (!kindMatch.Success)
+        if (kindMatch.Success)
+        {
+            var kind = kindMatch.Groups["kind"].Value.ToLowerInvariant();
+            scope = AccountWideLimitKinds.Contains(kind) ? LlmLimitScope.Provider : LlmLimitScope.Model;
+        }
+        else if (GenericAccountLimitRegex.IsMatch(text))
+        {
+            scope = LlmLimitScope.Provider;
+        }
+        else
         {
             return false;
         }
-
-        var kind = kindMatch.Groups["kind"].Value.ToLowerInvariant();
-        scope = AccountWideLimitKinds.Contains(kind) ? LlmLimitScope.Provider : LlmLimitScope.Model;
 
         var timeMatch = ResetTimeRegex.Match(text);
         if (timeMatch.Success)
@@ -373,7 +398,15 @@ public class ClaudeCliChatClient : IChatClient
             return null;
         }
 
-        if (!int.TryParse(timeMatch.Groups["minute"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var minute) ||
+        // Review should-fix #3: the minute group is optional ("resets 3pm" carries none) -- absent
+        // means :00, present but unparsable/out-of-range still fails the whole match as before.
+        var minuteGroup = timeMatch.Groups["minute"];
+        int minute;
+        if (!minuteGroup.Success)
+        {
+            minute = 0;
+        }
+        else if (!int.TryParse(minuteGroup.Value, NumberStyles.None, CultureInfo.InvariantCulture, out minute) ||
             minute < 0 || minute > 59)
         {
             return null;

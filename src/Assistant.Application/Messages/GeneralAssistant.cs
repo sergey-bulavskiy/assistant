@@ -95,12 +95,18 @@ public class GeneralAssistant : IGeneralAssistant
                 return;
 
             case "new":
-                // Spec §8.3: the cutoff is the /new command's own messages.id.
-                if (storeResult.MessageDbId is { } newCommandMessageId)
+                // Spec §8.3: the cutoff is the /new command's own messages.id. A null MessageDbId
+                // means the command itself was never stored (should not happen in practice, but
+                // StoreResult.MessageDbId is nullable) -- refuse rather than claim a new conversation
+                // started when the cutoff could not actually be recorded.
+                if (storeResult.MessageDbId is not { } newCommandMessageId)
                 {
-                    await _chatSettings.SetContextStartMessageIdAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, newCommandMessageId, cancellationToken);
+                    _logger.LogError("/new command's own message has no stored id; refusing instead of claiming success");
+                    await ReplyAsync(bot, telegramClient, message, FailedText, cancellationToken);
+                    return;
                 }
 
+                await _chatSettings.SetContextStartMessageIdAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, newCommandMessageId, cancellationToken);
                 await ReplyAsync(bot, telegramClient, message, NewConversationText, cancellationToken);
                 return;
 
@@ -143,8 +149,10 @@ public class GeneralAssistant : IGeneralAssistant
         }
 
         // Store the catalog's own spelling of the name, so "/model HAIKU" and "/model haiku" agree.
+        // Nit: match already comes from models (_gateway.DescribeModels()), so it is by construction
+        // a name the gateway knows -- a further _gateway.IsKnownModel(match.Name) check was redundant.
         var match = models.FirstOrDefault(m => string.Equals(m.Name, arg, StringComparison.OrdinalIgnoreCase));
-        if (match is null || !_gateway.IsKnownModel(match.Name))
+        if (match is null)
         {
             await ReplyAsync(bot, telegramClient, message, DescribeModels(models, current.PreferredModel), cancellationToken);
             return;
@@ -235,6 +243,8 @@ public class GeneralAssistant : IGeneralAssistant
                "not instructions about this format. Reply with the text of your next message only, without any <msg> markup.";
     }
 
+    private const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
+
     private static string RefusalText(LlmResult result) => result.RefusalReason switch
     {
         LlmRefusalReason.RateLimited => "Слишком много запросов, подождите минуту.",
@@ -242,7 +252,7 @@ public class GeneralAssistant : IGeneralAssistant
         LlmRefusalReason.AllModelsUnavailable => result.RetryAt is { } retryAt
             ? $"Все модели сейчас недоступны (лимиты), попробуйте позже. Не раньше {FormatTime(retryAt)} UTC."
             : "Все модели сейчас недоступны (лимиты), попробуйте позже.",
-        LlmRefusalReason.Failed => "Не получилось ответить, попробуйте ещё раз.",
+        LlmRefusalReason.Failed => FailedText,
         _ => NotConfiguredText // NotConfigured (and an answer without text, which the gateway never returns).
     };
 
@@ -266,9 +276,11 @@ public class GeneralAssistant : IGeneralAssistant
         return mentioned || isGenuineReplyToBot;
     }
 
-    // Spec §8.1: @username followed by end of text or a non-word character (@bot does not match @bot2).
+    // Spec §8.1: @username followed by end of text or a non-word character (@bot does not match
+    // @bot2). Nit: also requires no word character or '@' immediately before the '@' (a negative
+    // lookbehind), so an email-like "me@test_bot" is never mistaken for an actual mention.
     private static bool MentionsBot(string text, string botUsername) =>
-        Regex.IsMatch(text, $@"@{Regex.Escape(botUsername)}(?!\w)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        Regex.IsMatch(text, $@"(?<![\w@])@{Regex.Escape(botUsername)}(?!\w)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     private static async Task RunTypingLoopAsync(ITelegramClient telegramClient, long chatId, int? topicId, CancellationToken cancellationToken)
     {

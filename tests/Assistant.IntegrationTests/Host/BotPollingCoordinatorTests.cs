@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Assistant.IntegrationTests.Host;
 
+[Collection(HostFactoryCollection.Name)]
 public class BotPollingCoordinatorTests : IAsyncLifetime
 {
     private string _connectionString = string.Empty;

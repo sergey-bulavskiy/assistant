@@ -207,6 +207,16 @@ public class GeneralAssistantTests
     }
 
     [Fact]
+    public async Task An_email_like_mention_is_not_addressed()
+    {
+        // "me@test_bot" must never count as an @-mention (no word/'@' may precede the '@').
+        await HandleAsync(Msg("contact me@test_bot please", chatType: "group"));
+
+        _gateway.Requests.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Group_reply_to_the_bots_own_message_is_answered()
     {
         var message = Msg("test question", chatType: "group", replyToMessageId: 50, replyToUserId: BotTelegramId);
@@ -288,6 +298,21 @@ public class GeneralAssistantTests
         var settings = await _chatSettings.GetAsync(FamilyId, BotTelegramId, PrivateChatId, null, CancellationToken.None);
         settings.ContextStartMessageId.ShouldNotBeNull();
         settings.ContextStartMessageId.ShouldBe(result.MessageDbId);
+    }
+
+    [Fact]
+    public async Task New_with_no_stored_message_id_refuses_instead_of_claiming_success()
+    {
+        // StoreResult.MessageDbId is nullable; if the /new command's own message somehow has none,
+        // the cutoff cannot be recorded, so the reply must be the Failed refusal text, never the
+        // "new conversation started" confirmation.
+        var message = Msg("/new");
+
+        await CreateAssistant().HandleAsync(Bot, _telegram, message, new StoreResult(StoreOutcome.Stored, null), CancellationToken.None);
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Не получилось ответить, попробуйте ещё раз.");
+        var settings = await _chatSettings.GetAsync(FamilyId, BotTelegramId, PrivateChatId, null, CancellationToken.None);
+        settings.ContextStartMessageId.ShouldBeNull();
     }
 
     [Fact]

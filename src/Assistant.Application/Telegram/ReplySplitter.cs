@@ -15,7 +15,8 @@ public static class ReplySplitter
     {
         if (text.Length <= maxLength)
         {
-            return new[] { text };
+            // Nit: never emit an empty/whitespace-only chunk, even in the trivial single-chunk case.
+            return string.IsNullOrWhiteSpace(text) ? Array.Empty<string>() : new[] { text };
         }
 
         var chunks = new List<string>();
@@ -24,11 +25,21 @@ public static class ReplySplitter
         while (remaining.Length > maxLength)
         {
             var splitAt = FindSplitPoint(remaining, maxLength);
-            chunks.Add(remaining[..splitAt].TrimEnd());
-            remaining = remaining[splitAt..].TrimStart('\n', ' ');
+            // Nit: a split point that lands right after a leading run of whitespace (e.g. the text
+            // starts with " \n\n...") would otherwise produce an empty/whitespace-only chunk here --
+            // skip it instead of adding it.
+            var chunk = remaining[..splitAt].TrimEnd();
+            if (!string.IsNullOrWhiteSpace(chunk))
+            {
+                chunks.Add(chunk);
+            }
+
+            // Nit: \r and \t belong alongside \n/space here -- a CRLF line break or a tab-indented
+            // blank line must not survive as leading whitespace on the next chunk either.
+            remaining = remaining[splitAt..].TrimStart('\r', '\n', ' ', '\t');
         }
 
-        if (remaining.Length > 0)
+        if (!string.IsNullOrWhiteSpace(remaining))
         {
             chunks.Add(remaining);
         }

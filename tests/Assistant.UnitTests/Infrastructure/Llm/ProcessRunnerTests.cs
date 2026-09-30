@@ -65,15 +65,34 @@ public class ProcessRunnerTests
         var runner = new ProcessRunner();
         var stopwatch = Stopwatch.StartNew();
 
-        // ~2 MB of output, well beyond the 1 MB cap. Once the cap is hit we stop reading, so `head`
-        // blocks writing into the now-unread pipe and never exits on its own -- the call must still
-        // return (via the timeout killing the whole tree), not hang forever waiting for the stream.
+        // ~2 MB of output, well beyond the 1 MB cap, with a timeout far longer than it should ever
+        // take: overflow must kill the tree the moment the cap is hit (not wait out the timeout), so
+        // this returns promptly as a failure.
         var result = await runner.RunAsync(
-            Request("/bin/sh", new[] { "-c", "yes | head -c 2000000" }, timeout: TimeSpan.FromSeconds(2)),
+            Request("/bin/sh", new[] { "-c", "yes | head -c 2000000" }, timeout: TimeSpan.FromSeconds(30)),
             CancellationToken.None);
 
         stopwatch.Stop();
-        stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(8)); // generous margin over the 2s request timeout
+        stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10)); // promptly, nowhere near the 30s timeout
         result.ExitCode.ShouldBe(-1);
+        result.TimedOut.ShouldBeFalse(); // it's an overflow failure, not a timeout
+    }
+
+    [UnixOnlyFact]
+    public async Task A_child_ignoring_a_large_stdin_write_times_out_instead_of_hanging_in_the_write()
+    {
+        var runner = new ProcessRunner();
+        var stopwatch = Stopwatch.StartNew();
+
+        // A child that never reads stdin and a stdin payload well beyond the OS pipe buffer size: the
+        // WriteAsync call itself blocks and must be cancelled by the timeout (covers the stdin-write
+        // cancellation path), not left to hang.
+        var result = await runner.RunAsync(
+            Request("/bin/sh", new[] { "-c", "sleep 30" }, standardInput: new string('x', 5_000_000), timeout: TimeSpan.FromMilliseconds(500)),
+            CancellationToken.None);
+
+        stopwatch.Stop();
+        result.TimedOut.ShouldBeTrue();
+        stopwatch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
     }
 }

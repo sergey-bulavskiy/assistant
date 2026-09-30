@@ -136,7 +136,7 @@ public class MessageStore : IMessageStore
         var bot = await _db.Bots.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(b => b.TelegramBotId == botId, cancellationToken)
             ?? throw new InvalidOperationException($"bots row for telegram bot id {botId} not found.");
 
-        _db.Messages.Add(new StoredMessage
+        var entity = new StoredMessage
         {
             BotId = botId,
             FamilyId = bot.FamilyId,
@@ -152,8 +152,23 @@ public class MessageStore : IMessageStore
             SentAt = _clock.UtcNow,
             Raw = "{}", // spec §8.2: outgoing rows get raw = '{}', not null/empty -- there is no Telegram update to store.
             CreatedAt = _clock.UtcNow
-        });
-        await _db.SaveChangesAsync(cancellationToken);
+        };
+        var entry = _db.Messages.Add(entity);
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            // A failed SaveChanges (e.g. a unique-index violation) must not leave this entry tracked:
+            // the same DbContext/scope is reused for the rest of the request (e.g. the next split
+            // part's own StoreOutgoingAsync call), and an EF Core DbContext re-attempts every
+            // still-tracked Added entity on its next SaveChangesAsync, which would otherwise repeat
+            // this same failure forever and take down unrelated writes with it.
+            entry.State = EntityState.Detached;
+            throw;
+        }
         // Deliberately does NOT touch bot state / LastUpdateId: outgoing replies never advance the
         // bot's Telegram offset (spec §8.2) -- only StoreAsync, for inbound updates, does that.
     }

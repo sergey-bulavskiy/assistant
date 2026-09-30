@@ -24,6 +24,7 @@ namespace Assistant.IntegrationTests.Host;
 /// `finally` immediately after the host has finished starting (by which point the eager read has
 /// already happened and is baked into the built DI container), keeping the window in which another,
 /// unrelated test's host could observe a stray value as short as possible.</summary>
+[Collection(HostFactoryCollection.Name)]
 public class LlmWiringTests : IAsyncLifetime
 {
     private string _connectionString = string.Empty;

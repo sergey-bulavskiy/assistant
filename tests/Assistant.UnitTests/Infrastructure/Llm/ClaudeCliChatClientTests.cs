@@ -57,7 +57,7 @@ public class ClaudeCliChatClientTests
         string pinnedVersion = PinnedVersionWithAllFlags,
         ILogger<ClaudeCliChatClient>? logger = null,
         string homeDirectory = "/home/app/.claude-home",
-        string executablePath = "claude") => new(
+        string? executablePath = "claude") => new(
         runner,
         new ClaudeCliOptions
         {
@@ -434,6 +434,32 @@ public class ClaudeCliChatClientTests
     }
 
     [Fact]
+    public async Task A_non_zero_exit_with_no_json_at_all_still_checks_stderr_for_an_auth_failure_without_logging_it()
+    {
+        var logger = new CapturingLogger<ClaudeCliChatClient>();
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, "", "Invalid API key · Please run /login", false)
+        };
+        var client = CreateClient(runner, logger: logger);
+
+        var ex = await Should.ThrowAsync<Exception>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.ShouldNotBeOfType<ModelLimitReachedException>();
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Error && e.Message == "claude-cli authentication failed");
+        logger.Entries.ShouldNotContain(e => e.Message.Contains("Invalid API key")); // stderr text is never logged
+    }
+
+    [Fact]
+    public async Task A_non_zero_exit_with_no_json_and_no_auth_marker_in_stderr_is_a_plain_failure()
+    {
+        var runner = new FakeProcessRunner { Handler = _ => new ProcessRunResult(1, "", "some unrelated crash trace", false) };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<Exception>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.ShouldNotBeOfType<ModelLimitReachedException>();
+    }
+
+    [Fact]
     public async Task A_timed_out_process_run_throws_TimeoutException()
     {
         var runner = new FakeProcessRunner { Handler = _ => new ProcessRunResult(-1, "", "", true) };
@@ -649,6 +675,25 @@ public class ClaudeCliChatClientTests
 
         var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
         ex.RetryAt.ShouldBe(new DateTimeOffset(2026, 1, 12, 12, 30, 0, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("You've hit your limit · resets 3pm", LlmLimitScope.Provider, 15, 0)]
+    [InlineData("5-hour limit reached · resets 4:30am", LlmLimitScope.Provider, 4, 30)]
+    [InlineData("You've hit your usage limit · resets 3pm", LlmLimitScope.Provider, 15, 0)]
+    public async Task Generic_account_wide_limit_phrasings_are_provider_scoped_with_a_parsed_reset_time(
+        string message, LlmLimitScope expectedScope, int expectedHour, int expectedMinute)
+    {
+        // Clock is fixed at 2026-01-01T00:00:00Z (see CreateClient).
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, $$"""{"is_error":true,"subtype":"error_during_execution","result":"{{message}}"}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.Scope.ShouldBe(expectedScope);
+        ex.RetryAt.ShouldBe(new DateTimeOffset(2026, 1, 1, expectedHour, expectedMinute, 0, TimeSpan.Zero));
     }
 
     [Theory]

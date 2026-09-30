@@ -165,6 +165,27 @@ public class MessageStoreTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task StoreOutgoingAsync_failure_detaches_the_entry_so_a_later_call_in_the_same_scope_still_succeeds()
+    {
+        // Review should-fix #4: a SaveChanges failure (here, a unique-index violation -- same bot,
+        // chat and Telegram message id twice) must not leave the failed Added entity tracked on the
+        // shared DbContext, or every later SaveChangesAsync in the same scope (e.g. GeneralAssistant
+        // storing the next split part) would re-attempt and fail on it too.
+        await EnsureBotAsync();
+        var store = CreateStore();
+
+        await store.StoreOutgoingAsync(BotId, 111, null, "private", 500, "first part", CancellationToken.None);
+
+        await Should.ThrowAsync<DbUpdateException>(() =>
+            store.StoreOutgoingAsync(BotId, 111, null, "private", 500, "duplicate message id", CancellationToken.None));
+
+        await Should.NotThrowAsync(() =>
+            store.StoreOutgoingAsync(BotId, 111, null, "private", 501, "second part", CancellationToken.None));
+
+        (await Db.Messages.CountAsync()).ShouldBe(2);
+    }
+
+    [Fact]
     public async Task Unsanitized_nul_character_in_text_is_rejected_by_postgres()
     {
         await EnsureBotAsync();

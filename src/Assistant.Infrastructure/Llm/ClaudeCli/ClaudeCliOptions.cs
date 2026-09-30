@@ -14,10 +14,12 @@ public class ClaudeCliOptions
     /// <summary>The sentinel meaning "not explicitly configured" for <see cref="ExecutablePath"/>:
     /// <see cref="ClaudeCliChatClient"/> then derives the path from <see cref="HomeDirectory"/>
     /// (`$HomeDirectory/.local/bin/claude`, the plan's verified install path) instead of relying on
-    /// `claude` being resolved through PATH.</summary>
-    public const string UnsetExecutablePath = "claude";
+    /// `claude` being resolved through PATH. Nit: `null` rather than the literal string `"claude"` --
+    /// a real executable path can legitimately equal "claude" (e.g. resolved through PATH on
+    /// purpose), so only an actual absence of configuration should trigger the derived path.</summary>
+    public const string? UnsetExecutablePath = null;
 
-    public string ExecutablePath { get; init; } = UnsetExecutablePath;
+    public string? ExecutablePath { get; init; } = UnsetExecutablePath;
 
     /// <summary>$CLAUDE_HOME (Task 10): a dedicated, writable directory, never the app's own process
     /// HOME -- the child's entire "HOME" env var points here, per spec §8.6.</summary>

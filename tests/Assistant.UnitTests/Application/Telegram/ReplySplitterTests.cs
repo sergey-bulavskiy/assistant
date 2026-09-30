@@ -93,6 +93,25 @@ public class ReplySplitterTests
     }
 
     [Fact]
+    public void Leading_whitespace_before_a_single_long_paragraph_never_produces_an_empty_chunk()
+    {
+        // The only "\n\n" in the text is the leading one, so the paragraph-break split point would
+        // otherwise fall right after it, producing an empty/whitespace-only first chunk.
+        var text = " \n\n" + new string('a', 5000);
+
+        var chunks = ReplySplitter.Split(text, maxLength: 4096);
+
+        chunks.ShouldAllBe(c => c.Length > 0 && !string.IsNullOrWhiteSpace(c));
+        string.Concat(chunks).ShouldBe(new string('a', 5000));
+    }
+
+    [Fact]
+    public void A_whitespace_only_reply_produces_no_chunks_at_all()
+    {
+        ReplySplitter.Split(" \n\t ").ShouldBeEmpty();
+    }
+
+    [Fact]
     public void A_text_with_no_spaces_longer_than_the_limit_is_hard_cut_into_full_chunks()
     {
         var text = new string('x', 9000);
