@@ -40,7 +40,9 @@ public class MessageStoreTests : IntegrationTestBase
             SentAt: DateTimeOffset.UtcNow,
             EditedAt: isEdit ? DateTimeOffset.UtcNow : null,
             MigrateToChatId: migrateTo,
-            RawJson: "{\"ok\":true}");
+            RawJson: "{\"ok\":true}",
+            ReplyToMessageId: null,
+            ReplyToUserId: null);
 
     private async Task EnsureBotAsync()
     {

@@ -120,7 +120,7 @@ public class UpdateHandler
 
         try
         {
-            await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, cancellationToken);
+            await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, replyToMessageId: null, cancellationToken);
         }
         catch (Exception ex)
         {

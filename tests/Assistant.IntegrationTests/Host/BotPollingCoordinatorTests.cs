@@ -81,7 +81,7 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
         factory.TelegramClient.EnqueueUpdate(new IncomingUpdate(1, new IncomingMessage(
             ChatId: 111, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: 1, UserId: 111, Username: "test_user",
             Text: "hello", Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
-            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}")));
+            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null)));
 
         await WaitForConditionAsync(() =>
         {

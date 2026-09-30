@@ -8,6 +8,8 @@ public class FakeTelegramClient : ITelegramClient
 
     public List<(long ChatId, int MessageId, IReadOnlyList<InlineButton> Buttons)> ButtonEdits { get; } = new();
 
+    public List<(long ChatId, int? TopicId, string Action)> ChatActionsSent { get; } = new();
+
     public List<(string CallbackQueryId, string? Text)> AnsweredCallbacks { get; } = new();
 
     public bool ThrowOnSend { get; set; }
@@ -21,7 +23,7 @@ public class FakeTelegramClient : ITelegramClient
         long offset, int timeoutSeconds, IReadOnlyList<UpdateKind> allowedUpdates, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<IncomingUpdate>>(Array.Empty<IncomingUpdate>());
 
-    public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken)
+    public Task<int> SendTextAsync(long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
     {
         if (ThrowOnSend)
         {
@@ -29,6 +31,12 @@ public class FakeTelegramClient : ITelegramClient
         }
 
         Sent.Add((chatId, topicId, text));
+        return Task.FromResult(_nextSentMessageId++);
+    }
+
+    public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
+    {
+        ChatActionsSent.Add((chatId, topicId, action));
         return Task.CompletedTask;
     }
 

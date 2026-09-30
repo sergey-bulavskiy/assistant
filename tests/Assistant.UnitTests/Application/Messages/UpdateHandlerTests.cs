@@ -96,7 +96,7 @@ public class UpdateHandlerTests
             SentAt: DateTimeOffset.UtcNow,
             EditedAt: null,
             MigrateToChatId: null,
-            RawJson: "{}");
+            RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     [Fact]
     public async Task Manager_bot_updates_are_delegated_to_the_manager_handler_and_never_stored_as_a_message()

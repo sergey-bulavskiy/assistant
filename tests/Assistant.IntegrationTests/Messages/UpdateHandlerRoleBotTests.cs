@@ -63,17 +63,17 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
     private static IncomingMessage GroupText(int messageId, long chatId, long userId, string text, string? chatTitle = "test group") =>
         new(ChatId: chatId, ChatType: "group", ChatTitle: chatTitle, TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
             Text: text, Kind: MessageKind.Text, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
-            MigrateToChatId: null, RawJson: "{}");
+            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     private static IncomingMessage GroupService(int messageId, long chatId, long userId) =>
         new(ChatId: chatId, ChatType: "group", ChatTitle: "test group", TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
             Text: null, Kind: MessageKind.Service, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
-            MigrateToChatId: null, RawJson: "{}");
+            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     private static IncomingMessage PrivateText(int messageId, long userId, string text) =>
         new(ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: messageId, UserId: userId, Username: "test_user",
             Text: text, Kind: MessageKind.Text, IsEdit: false, SentAt: DateTimeOffset.UtcNow, EditedAt: null,
-            MigrateToChatId: null, RawJson: "{}");
+            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     [Fact]
     public async Task First_message_from_an_unknown_chat_is_ignored_and_requests_a_place_approval()

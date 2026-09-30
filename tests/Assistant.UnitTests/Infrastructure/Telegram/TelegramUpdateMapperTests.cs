@@ -243,6 +243,57 @@ public class TelegramUpdateMapperTests
     }
 
     [Fact]
+    public void Maps_reply_to_message_id_and_sender()
+    {
+        var update = Parse("""
+        {
+          "update_id": 100011,
+          "message": {
+            "message_id": 510,
+            "from": { "id": 111, "is_bot": false, "first_name": "Test" },
+            "chat": { "id": 111, "type": "private" },
+            "date": 1735000900,
+            "reply_to_message": {
+              "message_id": 555,
+              "from": { "id": 777, "is_bot": false, "first_name": "Other" },
+              "chat": { "id": 111, "type": "private" },
+              "date": 1735000800,
+              "text": "original message"
+            },
+            "text": "a reply"
+          }
+        }
+        """);
+
+        var mapped = TelegramUpdateMapper.Map(update);
+
+        mapped.Message!.ReplyToMessageId.ShouldBe(555);
+        mapped.Message.ReplyToUserId.ShouldBe(777);
+    }
+
+    [Fact]
+    public void A_message_with_no_reply_maps_null_reply_fields()
+    {
+        var update = Parse("""
+        {
+          "update_id": 100012,
+          "message": {
+            "message_id": 511,
+            "from": { "id": 111, "is_bot": false, "first_name": "Test" },
+            "chat": { "id": 111, "type": "private" },
+            "date": 1735001000,
+            "text": "no reply here"
+          }
+        }
+        """);
+
+        var mapped = TelegramUpdateMapper.Map(update);
+
+        mapped.Message!.ReplyToMessageId.ShouldBeNull();
+        mapped.Message.ReplyToUserId.ShouldBeNull();
+    }
+
+    [Fact]
     public void Returns_null_message_for_updates_with_no_message_payload()
     {
         var update = Parse("""{ "update_id": 100010 }""");

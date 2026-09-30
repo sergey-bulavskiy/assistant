@@ -1,5 +1,6 @@
 using Assistant.Application.Telegram;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramUpdateType = Telegram.Bot.Types.Enums.UpdateType;
@@ -34,8 +35,26 @@ public class TelegramClientAdapter : ITelegramClient
         return updates.Select(TelegramUpdateMapper.Map).ToArray();
     }
 
-    public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken) =>
-        _client.SendMessage(chatId: chatId, text: text, messageThreadId: topicId, cancellationToken: cancellationToken);
+    public async Task<int> SendTextAsync(long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
+    {
+        var sent = await _client.SendMessage(
+            chatId: chatId,
+            text: text,
+            messageThreadId: topicId,
+            replyParameters: replyToMessageId is { } id ? new ReplyParameters { MessageId = id } : null,
+            cancellationToken: cancellationToken);
+        return sent.Id;
+    }
+
+    public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
+    {
+        var chatAction = action switch
+        {
+            "typing" => ChatAction.Typing,
+            _ => throw new ArgumentOutOfRangeException(nameof(action), action, "Unsupported chat action.")
+        };
+        return _client.SendChatAction(chatId: chatId, action: chatAction, messageThreadId: topicId, cancellationToken: cancellationToken);
+    }
 
     public async Task<int> SendTextWithButtonsAsync(
         long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)

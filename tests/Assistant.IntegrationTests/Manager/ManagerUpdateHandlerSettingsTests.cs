@@ -108,7 +108,7 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         new(updateId, new IncomingMessage(
             ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: "test_owner",
             Text: text, Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
-            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}"));
+            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null));
 
     private static IncomingUpdate CallbackUpdate(long updateId, long fromUserId, string data) =>
         new(updateId, null, CallbackQuery: new CallbackQueryInfo(CallbackQueryId: $"cbq-{updateId}", FromUserId: fromUserId, Data: data, MessageChatId: fromUserId, MessageId: 1));
