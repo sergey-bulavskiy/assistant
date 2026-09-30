@@ -15,8 +15,8 @@ namespace Assistant.Infrastructure.Bots;
 
 /// <summary>Starts one BotPollingWorker per active `bots` row at boot (manager first, ensuring its
 /// row exists), and can start/stop a worker for one bot at runtime — used by /newbot so a freshly
-/// created role bot starts polling without a process restart, and by /settings' Remove action to
-/// stop polling a removed bot (both wired in later tasks).</summary>
+/// created role bot starts polling without a process restart, and by /settings' Disable/Enable and
+/// Remove actions.</summary>
 public class BotPollingCoordinator : IHostedService
 {
     private sealed record WorkerHandle(Task RunTask, CancellationTokenSource Cts);

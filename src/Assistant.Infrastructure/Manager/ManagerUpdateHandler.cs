@@ -154,13 +154,30 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         var members = await _db.FamilyMembers.IgnoreQueryFilters().Where(m => m.FamilyId == familyId).ToListAsync(cancellationToken);
         foreach (var member in members)
         {
-            var statusLabel = member.Status == FamilyMemberStatus.Denied ? "отключен" : "активен";
-            var toggleButton = member.Status == FamilyMemberStatus.Denied
-                ? new InlineButton("Включить", $"member_enable:{member.Id}")
-                : new InlineButton("Отключить", $"member_disable:{member.Id}");
-            var buttons = member.IsOwner
-                ? new[] { toggleButton }
-                : new[] { toggleButton, new InlineButton("Сделать владельцем", $"member_makeowner:{member.Id}") };
+            var statusLabel = member.Status switch
+            {
+                FamilyMemberStatus.Approved => "активен",
+                FamilyMemberStatus.Denied => "отключен",
+                _ => "ожидает"
+            };
+            // A pending member gets the same Allow/Deny as the approval DM, resolved through the
+            // same path, so the DM's buttons are closed too. Ownership is offered only once
+            // approved, since it grants nothing before that.
+            var buttons = member.Status switch
+            {
+                FamilyMemberStatus.Pending => new[]
+                {
+                    new InlineButton("Разрешить", $"member_allow:{member.Id}"),
+                    new InlineButton("Отклонить", $"member_deny:{member.Id}")
+                },
+                FamilyMemberStatus.Denied => new[] { new InlineButton("Включить", $"member_enable:{member.Id}") },
+                _ when member.IsOwner => new[] { new InlineButton("Отключить", $"member_disable:{member.Id}") },
+                _ => new[]
+                {
+                    new InlineButton("Отключить", $"member_disable:{member.Id}"),
+                    new InlineButton("Сделать владельцем", $"member_makeowner:{member.Id}")
+                }
+            };
             await telegramClient.SendTextWithButtonsAsync(
                 chatId, topicId, $"{member.DisplayName}{(member.IsOwner ? " (владелец)" : string.Empty)}: {statusLabel}",
                 buttons, cancellationToken);
@@ -252,6 +269,13 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             return;
         }
 
+        if (role.Length > IPendingBotCreations.MaxRoleLength)
+        {
+            await telegramClient.SendTextAsync(
+                chatId, topicId, $"Роль слишком длинная: не больше {IPendingBotCreations.MaxRoleLength} символов.", cancellationToken);
+            return;
+        }
+
         var isOwner = await _db.FamilyMembers.IgnoreQueryFilters()
             .AnyAsync(m => m.TelegramUserId == userId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
         if (!isOwner)
@@ -260,7 +284,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             return;
         }
 
-        _pendingBotCreations.SetPendingRole(userId, role);
+        await _pendingBotCreations.SetPendingRoleAsync(userId, role, cancellationToken);
 
         var suggestedUsername = GenerateSuggestedUsername(role);
         var link = $"https://t.me/newbot/{managerUsername}/{suggestedUsername}?name={Uri.EscapeDataString(role)}";
@@ -466,7 +490,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             return;
         }
 
-        var role = _pendingBotCreations.TakeRole(creatorUserId) ?? "unspecified";
+        var role = await _pendingBotCreations.GetRoleAsync(creatorUserId, cancellationToken) ?? "unspecified";
 
         var token = await telegramClient.GetManagedBotTokenAsync(newBotUserId, cancellationToken);
         var newBotClient = _clientFactory.Create(token);
@@ -483,8 +507,15 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             LastUpdateId = 0,
             CreatedAt = _clock.UtcNow
         };
-        _db.Bots.Add(bot);
-        await _db.SaveChangesAsync(cancellationToken);
+        // The pending role is removed only together with saving the bot: if anything above fails,
+        // the update is redelivered and the retry still finds the role.
+        await using (var transaction = await _db.Database.BeginTransactionAsync(cancellationToken))
+        {
+            _db.Bots.Add(bot);
+            await _db.SaveChangesAsync(cancellationToken);
+            await _pendingBotCreations.RemoveAsync(creatorUserId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         await _coordinator.StartBotAsync(bot.Id, cancellationToken);
 

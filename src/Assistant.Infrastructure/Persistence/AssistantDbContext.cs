@@ -38,6 +38,8 @@ public class AssistantDbContext : DbContext
 
     public DbSet<Place> Places => Set<Place>();
 
+    public DbSet<PendingBotCreation> PendingBotCreations => Set<PendingBotCreation>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AssistantDbContext).Assembly);
