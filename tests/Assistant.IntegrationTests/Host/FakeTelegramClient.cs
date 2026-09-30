@@ -6,7 +6,7 @@ public class FakeTelegramClient : ITelegramClient
 {
     private readonly object _lock = new();
     private readonly List<IncomingUpdate> _updates = new();
-    private readonly List<(long ChatId, int? TopicId, string Text)> _sentMessages = new();
+    private readonly List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> _sentMessages = new();
     private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
     private readonly List<(long ChatId, int? TopicId, string Action)> _chatActionsSent = new();
@@ -24,7 +24,7 @@ public class FakeTelegramClient : ITelegramClient
     /// </summary>
     public bool IgnoreOffset { get; set; }
 
-    public IReadOnlyList<(long ChatId, int? TopicId, string Text)> SentMessages
+    public IReadOnlyList<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> SentMessages
     {
         get
         {
@@ -133,7 +133,7 @@ public class FakeTelegramClient : ITelegramClient
     {
         lock (_lock)
         {
-            _sentMessages.Add((chatId, topicId, text));
+            _sentMessages.Add((chatId, topicId, text, replyToMessageId));
             return Task.FromResult(_nextSentMessageId++);
         }
     }
@@ -153,7 +153,7 @@ public class FakeTelegramClient : ITelegramClient
     {
         lock (_lock)
         {
-            _sentMessages.Add((chatId, topicId, text));
+            _sentMessages.Add((chatId, topicId, text, null));
             _sentButtons.Add((text, buttons));
             return Task.FromResult(_nextSentMessageId++);
         }

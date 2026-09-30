@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Assistant.Application.Common;
+using Assistant.Infrastructure.Llm;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -218,7 +219,7 @@ public class ClaudeCliChatClient : IChatClient
 
         if (parsed.TotalCostUsd is { } cost)
         {
-            response.AdditionalProperties = new AdditionalPropertiesDictionary { ["reported_cost_usd"] = (decimal)cost };
+            response.AdditionalProperties = new AdditionalPropertiesDictionary { [LlmResponseKeys.ReportedCostUsd] = (decimal)cost };
         }
 
         return response;

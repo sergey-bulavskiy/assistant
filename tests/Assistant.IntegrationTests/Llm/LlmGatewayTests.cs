@@ -2,6 +2,8 @@ using Assistant.Application.Common;
 using Assistant.Application.Llm;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Llm;
+using Assistant.Infrastructure.Persistence;
+using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -19,7 +21,10 @@ public class LlmGatewayTests : IntegrationTestBase
     private static LlmConfig MakeConfig(
         int callsPerMinute = 100,
         int callsPerDay = 1000,
-        IReadOnlyList<ModelCatalogEntry>? models = null) => new()
+        IReadOnlyList<ModelCatalogEntry>? models = null,
+        int callTimeoutSeconds = 30,
+        int maxConcurrentCalls = 4,
+        int modelCooldownMinutes = 15) => new()
     {
         Models = models ?? new[] { new ModelCatalogEntry(Provider, ModelA), new ModelCatalogEntry(Provider, ModelB) },
         CallsPerMinute = callsPerMinute,
@@ -27,21 +32,55 @@ public class LlmGatewayTests : IntegrationTestBase
         MaxContextMessages = 30,
         MaxInputChars = 8000,
         MaxOutputTokens = 1024,
-        CallTimeoutSeconds = 30,
-        MaxConcurrentCalls = 4,
-        ModelCooldownMinutes = 15
+        CallTimeoutSeconds = callTimeoutSeconds,
+        MaxConcurrentCalls = maxConcurrentCalls,
+        ModelCooldownMinutes = modelCooldownMinutes
     };
 
-    private LlmGateway CreateGateway(LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null) =>
+    private LlmGateway CreateGateway(
+        LlmConfig config,
+        ScriptedChatClient client,
+        ModelAvailability? availability = null,
+        Assistant.Application.Common.IClock? clock = null,
+        AssistantDbContext? db = null,
+        ConcurrentCallGate? concurrencyGate = null) =>
         new(
             config,
             new ModelCatalog(config),
-            availability ?? new ModelAvailability(new SystemClock()),
+            availability ?? new ModelAvailability(clock ?? new SystemClock()),
             new ChatClientProvider(new Dictionary<string, IChatClient> { [Provider] = client }),
+            db ?? Db,
+            clock ?? new SystemClock(),
+            concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
+            NullLogger<LlmGateway>.Instance);
+
+    private LlmGateway CreateGatewayWithProviders(
+        LlmConfig config,
+        IReadOnlyDictionary<string, IChatClient> clientsByProvider,
+        ModelAvailability? availability = null,
+        Assistant.Application.Common.IClock? clock = null) =>
+        new(
+            config,
+            new ModelCatalog(config),
+            availability ?? new ModelAvailability(clock ?? new SystemClock()),
+            new ChatClientProvider(clientsByProvider),
             Db,
-            new SystemClock(),
+            clock ?? new SystemClock(),
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             NullLogger<LlmGateway>.Instance);
+
+    /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to
+    /// exercise the gateway's "recording failed, answer must still be returned" path without a real
+    /// transient-DB-failure scenario.</summary>
+    private sealed class FailingSaveDbContext : AssistantDbContext
+    {
+        public FailingSaveDbContext(Microsoft.EntityFrameworkCore.DbContextOptions<AssistantDbContext> options) : base(options)
+        {
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("simulated DB failure recording the LLM call attempt.");
+    }
 
     private static LlmRequest MakeRequest(long familyId = 1, string? preferredModel = null) => new(
         FamilyId: familyId,
@@ -220,5 +259,239 @@ public class LlmGatewayTests : IntegrationTestBase
 
         result.IsAnswer.ShouldBeTrue();
         result.Text.ShouldBe("answer for family 19");
+    }
+
+    [Fact]
+    public async Task Provider_scope_limit_marks_every_entry_of_that_provider()
+    {
+        const string providerP1 = "p1";
+        const string providerP2 = "p2";
+        const string modelA = "model-a";
+        const string modelB = "model-b";
+        const string modelC = "model-c";
+
+        var config = MakeConfig(models: new[]
+        {
+            new ModelCatalogEntry(providerP1, modelA),
+            new ModelCatalogEntry(providerP1, modelB),
+            new ModelCatalogEntry(providerP2, modelC)
+        });
+
+        var clientP1 = new ScriptedChatClient();
+        clientP1.EnqueueException(new ModelLimitReachedException("account limit", LlmLimitScope.Provider));
+        var clientP2 = new ScriptedChatClient();
+        clientP2.EnqueueResponse("answer from C");
+
+        var availability = new ModelAvailability(new SystemClock());
+        var gateway = CreateGatewayWithProviders(
+            config,
+            new Dictionary<string, IChatClient> { [providerP1] = clientP1, [providerP2] = clientP2 },
+            availability);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 20), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.Text.ShouldBe("answer from C");
+        result.ModelName.ShouldBe(modelC);
+
+        // Only A was ever called on the p1 client -- B must have been skipped once the provider-wide
+        // mark took effect, never reaching the client at all.
+        clientP1.RequestedModelIds.ShouldBe(new[] { modelA });
+        clientP2.RequestedModelIds.ShouldBe(new[] { modelC });
+
+        availability.IsAvailable(modelA).ShouldBeFalse();
+        availability.IsAvailable(modelB).ShouldBeFalse();
+        availability.IsAvailable(modelC).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Unparsable_retry_time_falls_back_to_now_plus_cooldown()
+    {
+        var clock = new TestClock();
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new ModelLimitReachedException("limit, no retry time given", LlmLimitScope.Model, retryAt: null));
+        var gateway = CreateGateway(config, client, clock: clock);
+
+        var before = clock.UtcNow;
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 21), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        result.RefusalReason.ShouldBe(LlmRefusalReason.AllModelsUnavailable);
+        result.RetryAt.ShouldNotBeNull();
+        result.RetryAt!.Value.ShouldBe(before.AddMinutes(config.ModelCooldownMinutes), TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task Mark_expires_after_the_clock_advances_past_it()
+    {
+        var clock = new TestClock();
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var availability = new ModelAvailability(clock);
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new ModelLimitReachedException("limit", LlmLimitScope.Model, retryAt: clock.UtcNow.AddMinutes(1)));
+        var gateway = CreateGateway(config, client, availability, clock);
+
+        var first = await gateway.CompleteAsync(MakeRequest(familyId: 22), CancellationToken.None);
+        first.IsAnswer.ShouldBeFalse();
+        availability.IsAvailable(ModelA).ShouldBeFalse();
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        availability.IsAvailable(ModelA).ShouldBeTrue();
+
+        client.EnqueueResponse("back online");
+        var second = await gateway.CompleteAsync(MakeRequest(familyId: 22), CancellationToken.None);
+
+        second.IsAnswer.ShouldBeTrue();
+        second.Text.ShouldBe("back online");
+    }
+
+    [Fact]
+    public async Task Semaphore_is_released_after_an_exception_so_the_next_call_can_proceed()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) }, maxConcurrentCalls: 1);
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new InvalidOperationException("boom"));
+        client.EnqueueResponse("second call answer");
+        var gate = new ConcurrentCallGate(config.MaxConcurrentCalls);
+        var gateway = CreateGateway(config, client, concurrencyGate: gate);
+
+        var failing = await gateway.CompleteAsync(MakeRequest(familyId: 23), CancellationToken.None);
+        failing.IsAnswer.ShouldBeFalse();
+
+        var succeeding = await gateway.CompleteAsync(MakeRequest(familyId: 23), CancellationToken.None);
+        succeeding.IsAnswer.ShouldBeTrue();
+        succeeding.Text.ShouldBe("second call answer");
+    }
+
+    [Fact]
+    public async Task Waiting_for_the_concurrency_slot_beyond_the_call_timeout_is_rate_limited()
+    {
+        var gate = new ConcurrentCallGate(maxConcurrentCalls: 1);
+
+        // The holding call gets a long call timeout of its own (it is ended explicitly, by
+        // cancelling its own token, once the assertions below are done) so it cannot race the
+        // assertion by releasing the slot on its own timeout first.
+        var holdingConfig = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) }, maxConcurrentCalls: 1, callTimeoutSeconds: 30);
+        var holdingClient = new ScriptedChatClient();
+        holdingClient.EnqueueHang();
+        var holdingGateway = CreateGateway(holdingConfig, holdingClient, concurrencyGate: gate);
+        using var holdingCts = new CancellationTokenSource();
+        var holdingCall = holdingGateway.CompleteAsync(MakeRequest(familyId: 24), holdingCts.Token);
+
+        // Give the holding call a moment to actually take the one slot before the second call tries.
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        var waitingConfig = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) }, maxConcurrentCalls: 1, callTimeoutSeconds: 1);
+        var waitingClient = new ScriptedChatClient();
+        waitingClient.EnqueueResponse("never reached");
+        var waitingGateway = CreateGateway(waitingConfig, waitingClient, concurrencyGate: gate);
+
+        var waitingResult = await waitingGateway.CompleteAsync(MakeRequest(familyId: 24), CancellationToken.None);
+
+        waitingResult.IsAnswer.ShouldBeFalse();
+        waitingResult.RefusalReason.ShouldBe(LlmRefusalReason.RateLimited);
+        waitingClient.RequestedModelIds.ShouldBeEmpty();
+
+        // Release the held slot deterministically (rather than racing its own 30s call timeout) so
+        // the test doesn't leave a dangling task.
+        holdingCts.Cancel();
+        await Should.ThrowAsync<OperationCanceledException>(async () => await holdingCall);
+    }
+
+    [Fact]
+    public async Task Own_call_timeout_records_a_timeout_row_and_returns_failed()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) }, callTimeoutSeconds: 1);
+        var client = new ScriptedChatClient();
+        client.EnqueueDelayedResponse(TimeSpan.FromSeconds(5), "too slow");
+        var gateway = CreateGateway(config, client);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 25), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        result.RefusalReason.ShouldBe(LlmRefusalReason.Failed);
+
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 25).ToListAsync();
+        rows.Count.ShouldBe(1);
+        rows[0].Outcome.ShouldBe(LlmCallOutcome.Timeout);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_propagates_and_writes_no_row()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueHang();
+        var gateway = CreateGateway(config, client);
+
+        using var cts = new CancellationTokenSource();
+        var callTask = gateway.CompleteAsync(MakeRequest(familyId: 26), cts.Token);
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        cts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);
+
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 26).ToListAsync();
+        rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Unavailable_candidate_is_skipped_without_calling_its_client()
+    {
+        var config = MakeConfig();
+        var availability = new ModelAvailability(new SystemClock());
+        availability.MarkUnavailable(ModelA, DateTimeOffset.UtcNow.AddMinutes(30));
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("from B only");
+        var gateway = CreateGateway(config, client, availability);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 27), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.ModelName.ShouldBe(ModelB);
+        client.RequestedModelIds.ShouldBe(new[] { ModelB });
+    }
+
+    [Fact]
+    public async Task Empty_or_whitespace_answer_is_treated_as_failed()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("   ");
+        var gateway = CreateGateway(config, client);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 28), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        result.RefusalReason.ShouldBe(LlmRefusalReason.Failed);
+
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 28).ToListAsync();
+        rows.Count.ShouldBe(1);
+        rows[0].Outcome.ShouldBe(LlmCallOutcome.Failed);
+    }
+
+    [Fact]
+    public async Task Db_failure_recording_a_successful_answer_still_returns_answered()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer despite db failure");
+
+        var options = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(options, ConnectionString);
+        await using var failingDb = new FailingSaveDbContext(options.Options);
+
+        var gateway = CreateGateway(config, client, db: failingDb);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 29), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.Text.ShouldBe("answer despite db failure");
+
+        // The real Db (this test's own context) confirms nothing actually got persisted -- the save
+        // failed, as scripted -- while the gateway still returned the answer to the caller.
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 29).ToListAsync();
+        rows.ShouldBeEmpty();
     }
 }

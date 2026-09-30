@@ -4,7 +4,7 @@ namespace Assistant.UnitTests.Fakes;
 
 public class FakeTelegramClient : ITelegramClient
 {
-    public List<(long ChatId, int? TopicId, string Text)> Sent { get; } = new();
+    public List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> Sent { get; } = new();
 
     public List<(long ChatId, int MessageId, IReadOnlyList<InlineButton> Buttons)> ButtonEdits { get; } = new();
 
@@ -30,7 +30,7 @@ public class FakeTelegramClient : ITelegramClient
             throw new InvalidOperationException("simulated send failure");
         }
 
-        Sent.Add((chatId, topicId, text));
+        Sent.Add((chatId, topicId, text, replyToMessageId));
         return Task.FromResult(_nextSentMessageId++);
     }
 
@@ -43,7 +43,7 @@ public class FakeTelegramClient : ITelegramClient
     public Task<int> SendTextWithButtonsAsync(
         long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
     {
-        Sent.Add((chatId, topicId, text));
+        Sent.Add((chatId, topicId, text, null));
         return Task.FromResult(_nextSentMessageId++);
     }
 

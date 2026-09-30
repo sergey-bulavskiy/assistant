@@ -41,7 +41,13 @@ public class TelegramClientAdapter : ITelegramClient
             chatId: chatId,
             text: text,
             messageThreadId: topicId,
-            replyParameters: replyToMessageId is { } id ? new ReplyParameters { MessageId = id } : null,
+            // AllowSendingWithoutReply: true -- if the triggering message was deleted (or otherwise
+            // no longer reply-able) before we answer, Telegram would otherwise reject the whole send
+            // with an error instead of just dropping the reply link. We'd rather still deliver the
+            // answer, without the visual "reply to" thread, than lose it.
+            replyParameters: replyToMessageId is { } id
+                ? new ReplyParameters { MessageId = id, AllowSendingWithoutReply = true }
+                : null,
             cancellationToken: cancellationToken);
         return sent.Id;
     }

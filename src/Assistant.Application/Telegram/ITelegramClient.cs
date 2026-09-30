@@ -28,7 +28,9 @@ public interface ITelegramClient
 
     /// <summary>Sends a chat action (e.g. "typing"). Best-effort: Telegram clears it automatically
     /// after a few seconds, so callers waiting on a slow model repeat this on a timer rather than
-    /// calling it once (spec 2.2: "repeated every 4 s").</summary>
+    /// calling it once (spec 2.2: "repeated every 4 s"). This call itself is also best-effort: it is
+    /// cosmetic, never load-bearing, so callers must catch and ignore its exceptions (a failed
+    /// "typing" indicator must never fail or delay the actual reply).</summary>
     Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken);
 
     /// <summary>Sends a message with one inline button per row and returns the sent message's id
