@@ -6,7 +6,15 @@ namespace Assistant.UnitTests.Fakes;
 
 public class FakeMessageStore : IMessageStore
 {
-    private long _nextMessageDbId = 1;
+    private long _nextMessageId;
+
+    private sealed record StoredRow(long Id, long BotId, long ChatId, int? TopicId, MessageDirection Direction, string Text);
+
+    // Both StoreAsync and StoreOutgoingAsync append here, sharing one id sequence, so
+    // GetRecentContextAsync below reads a single ordered timeline -- the same shape the real
+    // (messages.id-ordered) store has -- and tests of /new cutoffs and beforeMessageId behave
+    // the same against the fake as against the real store.
+    private readonly List<StoredRow> _rows = new();
 
     public List<(long BotId, long UpdateId, IncomingMessage? Message)> Calls { get; } = new();
 
@@ -23,6 +31,12 @@ public class FakeMessageStore : IMessageStore
     public Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
         Calls.Add((botId, updateId, message));
+
+        if (message is { Kind: MessageKind.Text, Text: { } text })
+        {
+            _rows.Add(new StoredRow(++_nextMessageId, botId, message.ChatId, message.TopicId, MessageDirection.In, text));
+        }
+
         return Task.FromResult(_nextResult);
     }
 
@@ -30,34 +44,36 @@ public class FakeMessageStore : IMessageStore
         long botId, long chatId, int? topicId, string chatType, int telegramMessageId, string text, CancellationToken cancellationToken)
     {
         OutgoingMessages.Add((botId, chatId, topicId, chatType, telegramMessageId, text));
-        _nextMessageDbId++;
+        _rows.Add(new StoredRow(++_nextMessageId, botId, chatId, topicId, MessageDirection.Out, text));
         return Task.CompletedTask;
     }
 
     public Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
-        long botId, long chatId, int? topicId, long? afterMessageId, int maxMessages, CancellationToken cancellationToken)
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken)
     {
-        // Mirrors the real store closely enough for unit tests: outgoing messages stored via
-        // StoreOutgoingAsync above are the only source here (this fake never sees StoreAsync's
-        // inbound text, which unit tests exercising context building don't need), in insertion
-        // order (a stand-in for messages.id), filtered to this (bot, chat, topic), optionally
-        // cut off after afterMessageId (an index into insertion order), capped at maxMessages most
-        // recent, oldest first.
-        var all = OutgoingMessages
-            .Select((m, index) => (Row: m, Id: (long)(index + 1)))
-            .Where(x => x.Row.BotId == botId && x.Row.ChatId == chatId && x.Row.TopicId == topicId)
-            .ToList();
-
-        if (afterMessageId is { } cutoffId)
+        if (maxMessages <= 0)
         {
-            all = all.Where(x => x.Id > cutoffId).ToList();
+            return Task.FromResult<IReadOnlyList<ContextMessage>>(Array.Empty<ContextMessage>());
         }
 
-        IReadOnlyList<ContextMessage> result = all
-            .OrderByDescending(x => x.Id)
+        var query = _rows
+            .Where(r => r.BotId == botId && r.ChatId == chatId && r.TopicId == topicId && !r.Text.StartsWith('/'));
+
+        if (afterMessageId is { } afterId)
+        {
+            query = query.Where(r => r.Id > afterId);
+        }
+
+        if (beforeMessageId is { } beforeId)
+        {
+            query = query.Where(r => r.Id < beforeId);
+        }
+
+        IReadOnlyList<ContextMessage> result = query
+            .OrderByDescending(r => r.Id)
             .Take(maxMessages)
-            .OrderBy(x => x.Id)
-            .Select(x => new ContextMessage(MessageDirection.Out, null, x.Row.Text, DateTimeOffset.UtcNow))
+            .OrderBy(r => r.Id)
+            .Select(r => new ContextMessage(r.Direction, null, r.Text, DateTimeOffset.UtcNow))
             .ToList();
 
         return Task.FromResult(result);

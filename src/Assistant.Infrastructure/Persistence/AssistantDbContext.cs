@@ -1,6 +1,7 @@
 using Assistant.Application.Families;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
+using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
 using Microsoft.EntityFrameworkCore;
@@ -40,9 +41,9 @@ public class AssistantDbContext : DbContext
 
     public DbSet<PendingBotCreation> PendingBotCreations => Set<PendingBotCreation>();
 
-    public DbSet<Assistant.Domain.Llm.ChatSetting> ChatSettings => Set<Assistant.Domain.Llm.ChatSetting>();
+    public DbSet<ChatSetting> ChatSettings => Set<ChatSetting>();
 
-    public DbSet<Assistant.Domain.Llm.LlmCall> LlmCalls => Set<Assistant.Domain.Llm.LlmCall>();
+    public DbSet<LlmCall> LlmCalls => Set<LlmCall>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -60,8 +61,8 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<Place>().HasQueryFilter(p => _currentFamily.FamilyId == null || Bots.Any(b => b.Id == p.BotId && (b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId)));
         modelBuilder.Entity<StoredMessage>().HasQueryFilter(m => _currentFamily.FamilyId == null || m.FamilyId == null || m.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<Bot>().HasQueryFilter(b => _currentFamily.FamilyId == null || b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId);
-        modelBuilder.Entity<Assistant.Domain.Llm.ChatSetting>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
-        modelBuilder.Entity<Assistant.Domain.Llm.LlmCall>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<ChatSetting>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<LlmCall>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
     }
 
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)

@@ -40,6 +40,6 @@ public sealed class FlakyMessageStore : IMessageStore
         _inner.StoreOutgoingAsync(botId, chatId, topicId, chatType, telegramMessageId, text, cancellationToken);
 
     public Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
-        long botId, long chatId, int? topicId, long? afterMessageId, int maxMessages, CancellationToken cancellationToken) =>
-        _inner.GetRecentContextAsync(botId, chatId, topicId, afterMessageId, maxMessages, cancellationToken);
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken) =>
+        _inner.GetRecentContextAsync(botId, chatId, topicId, afterMessageId, beforeMessageId, maxMessages, cancellationToken);
 }

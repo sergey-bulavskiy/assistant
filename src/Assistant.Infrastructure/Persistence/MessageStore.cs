@@ -159,14 +159,31 @@ public class MessageStore : IMessageStore
     }
 
     public async Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
-        long botId, long chatId, int? topicId, long? afterMessageId, int maxMessages, CancellationToken cancellationToken)
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken)
     {
-        var query = _db.Messages.IgnoreQueryFilters().AsNoTracking()
-            .Where(m => m.BotId == botId && m.ChatId == chatId && m.TopicId == topicId && m.Kind == MessageKind.Text);
-
-        if (afterMessageId is { } cutoffId)
+        if (maxMessages <= 0)
         {
-            query = query.Where(m => m.Id > cutoffId);
+            return Array.Empty<ContextMessage>();
+        }
+
+        // No IgnoreQueryFilters(): UpdateHandler always calls ICurrentFamily.Set(bot.FamilyId) before
+        // this runs (spec §2.4), and every row this bot writes (StoreAsync/StoreOutgoingAsync) carries
+        // that same FamilyId, so StoredMessage's query filter (FamilyId == null || == current family)
+        // already admits every row that matches BotId/ChatId/TopicId below -- it filters out nothing
+        // this method should return.
+        var query = _db.Messages.AsNoTracking()
+            .Where(m => m.BotId == botId && m.ChatId == chatId && m.TopicId == topicId
+                && m.Kind == MessageKind.Text
+                && !m.Text!.StartsWith("/")); // commands (e.g. /new, /model) are never LLM context (spec §2.4)
+
+        if (afterMessageId is { } afterId)
+        {
+            query = query.Where(m => m.Id > afterId);
+        }
+
+        if (beforeMessageId is { } beforeId)
+        {
+            query = query.Where(m => m.Id < beforeId);
         }
 
         var rows = await query

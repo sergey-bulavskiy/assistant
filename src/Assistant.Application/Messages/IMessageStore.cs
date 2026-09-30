@@ -36,8 +36,11 @@ public interface IMessageStore
 
     /// <summary>Up to <paramref name="maxMessages"/> most recent text messages (both directions) for
     /// this (bot, chat, topic), with <c>messages.id &gt; afterMessageId</c> if given (spec §8.3:
-    /// `/new` is `chat_settings.context_start_message_id`, a `messages.id`, not a timestamp), oldest
-    /// first.</summary>
+    /// `/new` is `chat_settings.context_start_message_id`, a `messages.id`, not a timestamp) and
+    /// <c>messages.id &lt; beforeMessageId</c> if given -- the caller passes the incoming message's
+    /// own `messages.id` here so it is never duplicated into its own context, since it is stored
+    /// before context is built. Commands (text starting with `/`) are excluded regardless of
+    /// direction (spec §2.4). Oldest first.</summary>
     Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
-        long botId, long chatId, int? topicId, long? afterMessageId, int maxMessages, CancellationToken cancellationToken);
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken);
 }
