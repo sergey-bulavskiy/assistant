@@ -10,6 +10,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<UpdateHandler>();
+        services.AddScoped<IGeneralAssistant, GeneralAssistant>();
         return services;
     }
 }

@@ -14,6 +14,14 @@ public class FakeTelegramClient : ITelegramClient
 
     public bool ThrowOnSend { get; set; }
 
+    public bool ThrowOnChatAction { get; set; }
+
+    /// <summary>When set, SendTextAsync throws for this 1-based call number only (earlier and later
+    /// sends succeed).</summary>
+    public int? ThrowOnSendNumber { get; set; }
+
+    private int _sendCalls;
+
     private int _nextSentMessageId = 1;
 
     public Task<BotIdentity> GetMeAsync(CancellationToken cancellationToken) =>
@@ -25,7 +33,8 @@ public class FakeTelegramClient : ITelegramClient
 
     public Task<int> SendTextAsync(long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
     {
-        if (ThrowOnSend)
+        _sendCalls++;
+        if (ThrowOnSend || _sendCalls == ThrowOnSendNumber)
         {
             throw new InvalidOperationException("simulated send failure");
         }
@@ -37,6 +46,11 @@ public class FakeTelegramClient : ITelegramClient
     public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
     {
         ChatActionsSent.Add((chatId, topicId, action));
+        if (ThrowOnChatAction)
+        {
+            throw new InvalidOperationException("simulated chat action failure");
+        }
+
         return Task.CompletedTask;
     }
 

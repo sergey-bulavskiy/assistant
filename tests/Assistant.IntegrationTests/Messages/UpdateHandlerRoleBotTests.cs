@@ -7,6 +7,7 @@ using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
@@ -40,7 +41,7 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
 
         Db.FamilyMembers.Add(new FamilyMember { FamilyId = family.Id, TelegramUserId = 900, DisplayName = "owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
 
-        var bot = new Bot { FamilyId = family.Id, TelegramBotId = 1001, Username = "test_role_bot", Role = "general", Status = BotStatus.Active, LastUpdateId = 0, CreatedAt = DateTimeOffset.UtcNow };
+        var bot = new Bot { FamilyId = family.Id, TelegramBotId = 1001, Username = "test_role_bot", Role = "test", Status = BotStatus.Active, LastUpdateId = 0, CreatedAt = DateTimeOffset.UtcNow };
         Db.Bots.Add(bot);
         await Db.SaveChangesAsync();
 
@@ -53,7 +54,10 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         var approvals = new ApprovalService(Db, clients, options, clock);
         var messageStore = new MessageStore(Db, clock, NullLogger<MessageStore>.Instance);
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
-        var handler = new UpdateHandler(messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        var generalAssistant = new GeneralAssistant(
+            messageStore, new NullLlmGateway(), new ChatSettingsStore(Db, clock), config: null, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
+        var handler = new UpdateHandler(
+            messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
 
         await messageStore.EnsureBotStateAsync(new BotIdentity(bot.TelegramBotId, bot.Username), CancellationToken.None);
 

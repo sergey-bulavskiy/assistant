@@ -1,11 +1,13 @@
 using Assistant.Application.Common;
 using Assistant.Application.Families;
+using Assistant.Application.Llm;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Common;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
@@ -35,6 +37,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
         services.AddScoped<IPendingBotCreations, PendingBotCreations>();
+        services.AddScoped<IChatSettingsStore, ChatSettingsStore>();
+
+        // Placeholder until the LLM pipeline is composed from config: LLM is off (null config,
+        // NullLlmGateway), so the General assistant answers "not configured".
+        services.AddSingleton<LlmConfig>(_ => null!);
+        services.AddSingleton<ILlmGateway, NullLlmGateway>();
 
         services.AddSingleton<ITokenEncryptor>(sp =>
             new TokenEncryptor(sp.GetRequiredService<IOptions<BotOptions>>().Value.TokenEncryptionKey));

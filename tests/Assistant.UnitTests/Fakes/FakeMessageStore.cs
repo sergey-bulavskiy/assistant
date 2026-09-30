@@ -20,7 +20,13 @@ public class FakeMessageStore : IMessageStore
 
     public List<(long BotId, long ChatId, int? TopicId, string ChatType, int TelegramMessageId, string Text)> OutgoingMessages { get; } = new();
 
-    private StoreResult _nextResult = new(StoreOutcome.Stored, 1);
+    // Null: StoreAsync returns Stored with the new row's own id (null for a message it kept no
+    // row for), so callers passing MessageDbId on (as a /new cutoff or context bound) see real ids.
+    private StoreResult? _nextResult;
+
+    public bool ThrowOnStoreOutgoing { get; set; }
+
+    public List<CancellationToken> OutgoingTokens { get; } = new();
 
     public void SetNextResult(StoreResult result) => _nextResult = result;
 
@@ -32,17 +38,25 @@ public class FakeMessageStore : IMessageStore
     {
         Calls.Add((botId, updateId, message));
 
+        long? rowId = null;
         if (message is { Kind: MessageKind.Text, Text: { } text })
         {
-            _rows.Add(new StoredRow(++_nextMessageId, botId, message.ChatId, message.TopicId, MessageDirection.In, text));
+            rowId = ++_nextMessageId;
+            _rows.Add(new StoredRow(rowId.Value, botId, message.ChatId, message.TopicId, MessageDirection.In, text));
         }
 
-        return Task.FromResult(_nextResult);
+        return Task.FromResult(_nextResult ?? new StoreResult(StoreOutcome.Stored, rowId));
     }
 
     public Task StoreOutgoingAsync(
         long botId, long chatId, int? topicId, string chatType, int telegramMessageId, string text, CancellationToken cancellationToken)
     {
+        OutgoingTokens.Add(cancellationToken);
+        if (ThrowOnStoreOutgoing)
+        {
+            throw new InvalidOperationException("simulated store failure");
+        }
+
         OutgoingMessages.Add((botId, chatId, topicId, chatType, telegramMessageId, text));
         _rows.Add(new StoredRow(++_nextMessageId, botId, chatId, topicId, MessageDirection.Out, text));
         return Task.CompletedTask;
