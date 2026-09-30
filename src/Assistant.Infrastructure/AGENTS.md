@@ -49,3 +49,43 @@
 - Groups: bots see ordinary group messages only with privacy mode off or admin rights. Bots
   created through Managed Bots start with privacy mode on (README step 5). Chats can
   migrate (group → supergroup changes the chat id); migrations are recorded in `chat_migrations`.
+
+## LLM gateway and the Claude Code CLI provider (`Llm/`)
+
+- `ClaudeCliChatClient` runs `claude -p` as a child process, once per call, through `IProcessRunner`
+  (never the real CLI in tests — `FakeProcessRunner` stands in). Its exact argument list is spec
+  §8.5's, not a guess — if you change it, re-read that section and this plan's "Decisions made by the
+  plan" #8 in the specs repo (`2026-10-01-m3a-general-assistant.md`) first: it flags an open tension
+  between dropping `--setting-sources` (not in §8.5's list) and the top-level "no user/project/local
+  settings loaded" security requirement. **Never add `--bare` back** — it ignores
+  `CLAUDE_CODE_OAUTH_TOKEN` and keeps tools available, which is unsafe for this specific use, not
+  merely redundant.
+- **Never** add a log line that could print the prompt, the model's answer, or raw stdout/stderr from
+  the CLI process — only exit code, duration and exception *type* are safe to log (same rule as
+  `src/Assistant.Host/AGENTS.md`'s message-text rule, extended to the CLI's own output). An
+  authentication failure is the one exception with its own fixed marker line
+  (`"claude-cli authentication failed"`) — never append the CLI's own text to it.
+- The child process gets a from-scratch environment (`ProcessStartInfo.Environment.Clear()` then only
+  `PATH`/`HOME`/`CLAUDE_CODE_OAUTH_TOKEN`/`DISABLE_AUTOUPDATER`/
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`TZ`/`CLAUDE_CODE_MAX_OUTPUT_TOKENS`) — it must never see
+  `TELEGRAM_MANAGER_BOT_TOKEN`, `TOKEN_ENCRYPTION_KEY`, the connection string, or `ANTHROPIC_API_KEY`
+  (which would outrank the OAuth token and bill the API outside all budgets). If `ClaudeCliOptions` or
+  the environment dictionary ever grows a new entry, ask whether it belongs in that child process at
+  all before adding it.
+- The CLI itself is **never baked into this image** (licence requirement, spec §8.10) —
+  `ClaudeCliInstallerHostedService` installs the pinned version (`CLAUDE_CLI_VERSION`) into
+  `$CLAUDE_HOME` (a dedicated Docker volume) at startup, in the background, and never throws out of
+  the app on failure. Don't "simplify" by adding an install step back to the Dockerfile.
+- `IModelAvailability` is in-memory and process-lifetime only (lost on restart, by design — spec
+  3.1), with one exception the CLI-install service relies on: every `claude-cli` entry starts marked
+  unavailable at DI composition time (before the app finishes starting) and only becomes available
+  once the install/version-check succeeds. Don't "fix" the general lost-on-restart behaviour by
+  persisting it; the first call after a restart re-discovering availability is the intended behaviour
+  for limit-based unavailability.
+- A model entry's `Name` (after the colon in `LLM_MODELS`) must be unique across the whole catalog —
+  `/model <name>` and `chat_settings.preferred_model` both key off it, with no provider prefix
+  attached, so a collision between two providers' names would let `/model` silently switch provider.
+- A `ModelLimitReachedException`'s `Scope` matters: `Provider` marks every `claude-cli` catalog entry
+  unavailable (an account-wide session/weekly/spend/usage limit), `Model` marks only the one that was
+  called (a model-named limit like "Opus limit"). Getting this backwards either over-disables working
+  models or under-disables ones that are actually rate-limited.
