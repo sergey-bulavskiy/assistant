@@ -13,7 +13,11 @@ This repo is public; workflows run on code from anyone who opens a PR.
 - `cd.yml` has three jobs: `build-and-push` pushes only the `sha-<7>` image, `smoke`
   (real Telegram, `tests/Assistant.SmokeTests`) runs against that tag, `promote` retags it as
   `latest` only when smoke passed. Watchtower follows `latest`, so a failing smoke run never
-  reaches the home PC. Re-running a failed `smoke` job of the newest run is fine (the `sha-` image is reused);
+  reaches the home PC. The gate is opt-in per repository: `smoke` runs only when the repository
+  variable `SMOKE_ENABLED` is `true` (Settings → Secrets and variables → Actions → Variables); while
+  it is unset, `smoke` is skipped and `promote` still runs with a warning, i.e. ungated. Set it
+  only after the smoke test has passed live and the `smoke` environment secrets exist, otherwise
+  every CD run fails at `smoke` and `latest` stops moving. Re-running a failed `smoke` job of the newest run is fine (the `sha-` image is reused);
   `promote` retags only when the run's commit is still the head of `main`, so re-running an
   older run never moves `latest` back. A third queued run supersedes a queued second one
   (concurrency group `smoke` does not cancel a running job).

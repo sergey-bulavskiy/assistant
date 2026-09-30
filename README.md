@@ -80,8 +80,9 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 
 ## 5. Smoke test
 
-The smoke test is automated: CD runs it against real Telegram on every merge to `main` and moves
-`latest` (what Watchtower pulls) only if it passes. One-time setup and running it locally:
+The smoke test is automated: once the repository variable `SMOKE_ENABLED` is `true`, CD runs it
+against real Telegram on every merge to `main` and moves `latest` (what Watchtower pulls) only if it
+passes; until then CD promotes without it. One-time setup, running it locally and enabling the gate:
 `tests/Assistant.SmokeTests/README.md`.
 
 To check a running deployment by hand, the essentials are: the log prints a one-time claim code
@@ -91,8 +92,9 @@ a restart neither duplicates rows nor replies.
 
 ## Rollback
 
-`latest` only moves after the smoke test passes, so pinning is only needed to go back to an older
-release. A `sha-` tag of a build that failed smoke exists in GHCR but was never promoted; don't pin it.
+With the smoke gate enabled, `latest` only moves after the smoke test passes, so pinning is only
+needed to go back to an older release. A `sha-` tag of a build that failed smoke exists in GHCR but
+was never promoted; don't pin it.
 
 Pin a previous image by setting `IMAGE_TAG` in `deploy/.env` to a known-good short SHA (from a past
 successful build, e.g. `sha-abc1234`), then:

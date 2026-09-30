@@ -7,8 +7,24 @@ the app image). It covers the M2 checklist: claim, private chat, group, forum to
 promotion need a second real user; the integration tests cover them (`ApprovalServiceTests`,
 `ManagerUpdateHandlerCallbackTests`).
 
-It is **opt-in**: a plain `dotnet test` skips it. CD runs it against the just-built `sha-` image
-and promotes `latest` only if it passes.
+It is **opt-in**: a plain `dotnet test` skips it. Once the gate is enabled (below), CD runs it
+against the just-built `sha-` image and promotes `latest` only if it passes.
+
+## Enabling the CD gate
+
+The gate is off by default: while the repository variable `SMOKE_ENABLED` is unset, CD skips the
+smoke job and promotes `latest` as before (with a warning in the run). Enable it only when both are true:
+
+1. The scenario has passed locally against real Telegram (`SMOKE=1 dotnet test ...`, below).
+2. The GitHub Environment `smoke` (restricted to `main`) holds the secrets from the settings table
+   (`SMOKE_TG_API_ID`, `SMOKE_TG_API_HASH`, `SMOKE_OWNER_SESSION`, `SMOKE_MANAGER_BOT_TOKEN`,
+   `SMOKE_MANAGER_BOT_USERNAME`, `SMOKE_ROLE_BOT_TOKEN`, `SMOKE_ROLE_BOT_USERNAME`,
+   `SMOKE_GROUP_TITLE`, `SMOKE_FORUM_TITLE`), using bots, groups and a session string of their own
+   (not the ones used locally).
+
+Then set the repository variable: Settings → Secrets and variables → Actions → Variables →
+`SMOKE_ENABLED` = `true`. Setting it before that makes every CD run fail at `smoke`, and `latest`
+stops moving. To switch the gate off again, delete the variable.
 
 ## One-time setup (a human, once)
 

@@ -132,7 +132,8 @@ one per stage. Keep command output small: read logs only when something failed.
 8. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
    `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`. CD builds the `sha-<7>`
-   image, runs the real-Telegram smoke test against it, and only then promotes `latest`.
+   image, runs the real-Telegram smoke test against it (only when the repository variable
+   `SMOKE_ENABLED` is `true`; otherwise `smoke` is skipped and the run warns), and then promotes `latest`.
    Report the deployed image tag (`sha-<first 7 of the merge commit>`) once `promote` succeeded.
    If `smoke` fails, `latest` is unchanged (the home PC keeps the previous release): say so and
    investigate; the change is merged but not delivered. Re-run failed jobs for transient failures (only the newest run promotes).

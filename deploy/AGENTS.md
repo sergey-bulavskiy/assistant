@@ -10,5 +10,6 @@
   the pinned tag alone.
 - `POSTGRES_PASSWORD` is interpolated into a connection string: letters and digits only.
 - Deploying or restarting anything on the owner's machine is an outward action — ask first.
-- `latest` is moved only by CD's `promote` job after the real-Telegram smoke test passes. A `sha-`
-  tag whose smoke run failed exists in GHCR but was never promoted; never pin it for rollback.
+- `latest` is moved only by CD's `promote` job, after the real-Telegram smoke test passes when the
+  gate is enabled (repository variable `SMOKE_ENABLED`, see `.github/AGENTS.md`). A `sha-` tag whose
+  smoke run failed exists in GHCR but was never promoted; never pin it for rollback.
