@@ -129,4 +129,53 @@ public class MessageStore : IMessageStore
         await transaction.CommitAsync(cancellationToken);
         return new StoreResult(outcome, messageDbId);
     }
+
+    public async Task StoreOutgoingAsync(
+        long botId, long chatId, int? topicId, string chatType, int telegramMessageId, string text, CancellationToken cancellationToken)
+    {
+        var bot = await _db.Bots.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(b => b.TelegramBotId == botId, cancellationToken)
+            ?? throw new InvalidOperationException($"bots row for telegram bot id {botId} not found.");
+
+        _db.Messages.Add(new StoredMessage
+        {
+            BotId = botId,
+            FamilyId = bot.FamilyId,
+            Direction = MessageDirection.Out,
+            ChatId = chatId,
+            TopicId = topicId,
+            TelegramMessageId = telegramMessageId,
+            UserId = null,
+            Username = null,
+            ChatType = chatType,
+            Kind = MessageKind.Text,
+            Text = text,
+            SentAt = _clock.UtcNow,
+            Raw = "{}", // spec §8.2: outgoing rows get raw = '{}', not null/empty -- there is no Telegram update to store.
+            CreatedAt = _clock.UtcNow
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+        // Deliberately does NOT touch bot state / LastUpdateId: outgoing replies never advance the
+        // bot's Telegram offset (spec §8.2) -- only StoreAsync, for inbound updates, does that.
+    }
+
+    public async Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
+        long botId, long chatId, int? topicId, long? afterMessageId, int maxMessages, CancellationToken cancellationToken)
+    {
+        var query = _db.Messages.IgnoreQueryFilters().AsNoTracking()
+            .Where(m => m.BotId == botId && m.ChatId == chatId && m.TopicId == topicId && m.Kind == MessageKind.Text);
+
+        if (afterMessageId is { } cutoffId)
+        {
+            query = query.Where(m => m.Id > cutoffId);
+        }
+
+        var rows = await query
+            .OrderByDescending(m => m.Id)
+            .Take(maxMessages)
+            .Select(m => new ContextMessage(m.Direction, m.Username, m.Text!, m.SentAt))
+            .ToListAsync(cancellationToken);
+
+        rows.Reverse();
+        return rows;
+    }
 }

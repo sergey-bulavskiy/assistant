@@ -21,4 +21,15 @@ public class MigrationTests : IntegrationTestBase
             "SELECT count(*)::int AS \"Value\" FROM information_schema.tables WHERE table_name = 'bot_state'")
             .SingleAsync()).ShouldBe(0);
     }
+
+    [Fact]
+    public async Task New_M3a_tables_and_column_exist()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.tables WHERE table_name IN ('chat_settings', 'llm_calls')")
+            .SingleAsync()).ShouldBe(2);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'messages' AND column_name = 'direction'")
+            .SingleAsync()).ShouldBe(1);
+    }
 }
