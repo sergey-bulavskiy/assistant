@@ -440,6 +440,28 @@ public class LlmGatewayTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Provider_reported_timeout_records_a_timeout_row_and_returns_failed()
+    {
+        // ClaudeCliChatClient throws a plain TimeoutException when the CLI's own process timer
+        // (ProcessRunner's Timeout, not the gateway's own callCts) fires -- this must be recorded
+        // the same way as the gateway's own timeout (N5), not fall through to the generic Failed
+        // path with no Timeout outcome.
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new TimeoutException("claude cli call timed out"));
+        var gateway = CreateGateway(config, client);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 30), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        result.RefusalReason.ShouldBe(LlmRefusalReason.Failed);
+
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 30).ToListAsync();
+        rows.Count.ShouldBe(1);
+        rows[0].Outcome.ShouldBe(LlmCallOutcome.Timeout);
+    }
+
+    [Fact]
     public async Task Caller_cancellation_propagates_and_writes_no_row()
     {
         var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });

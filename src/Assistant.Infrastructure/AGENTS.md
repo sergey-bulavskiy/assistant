@@ -27,6 +27,12 @@
   a process restart, when a role bot finishes creation or is disabled/enabled/removed in
   `/settings`. Each worker keeps its own per-update failure count and skips poison updates after
   `PoisonUpdateFailureCap` attempts.
+  - N4: a single worker processes its bot's updates sequentially, one at a time. For a General
+    assistant bot this means a slow/hung LLM call (up to `LLM_CALL_TIMEOUT_SECONDS`, or ~2x that
+    while also waiting for a concurrency slot — see `LlmGateway.CompleteAsync`) delays every other
+    update waiting behind it in that same chat's worker, including unrelated chats of the same bot.
+    This is by design in M3a, not a bug to "fix" by making the worker concurrent — that would need
+    its own design pass (ordering guarantees, per-chat isolation) out of scope here.
 - Allowed updates differ per bot: the manager gets messages, callback queries and `managed_bot`
   events; role bots get messages and `my_chat_member` (added to / removed from a chat).
 
@@ -82,6 +88,17 @@
   once the install/version-check succeeds. Don't "fix" the general lost-on-restart behaviour by
   persisting it; the first call after a restart re-discovering availability is the intended behaviour
   for limit-based unavailability.
+  - **Why `DateTimeOffset.MaxValue` and not a separate "install pending" flag** (S3): reusing the
+    same mark-unavailable-until mechanism every other refusal already uses means `ModelStatus`/
+    `/model` need no new state to display, and `ClaudeCliInstallerHostedService.MarkAvailable`
+    clearing it is exactly the same call every other "the model works again" path already makes —
+    no parallel bookkeeping to keep in sync.
+  - **The consequence this has for `GeneralAssistant`**: its own "model unavailable, retry at X"
+    message only shows a retry time when it is within 7 days (spec — showing "retry in 4881 days"
+    for a `MaxValue` mark would be nonsensical and would also leak that the CLI is still installing
+    as a real ETA). That 7-day cutoff is the only thing hiding `MaxValue` from the user; it is not a
+    general "don't show far-future retries" policy, so don't repurpose it for anything else without
+    re-checking this still holds.
 - A model entry's `Name` (after the colon in `LLM_MODELS`) must be unique across the whole catalog —
   `/model <name>` and `chat_settings.preferred_model` both key off it, with no provider prefix
   attached, so a collision between two providers' names would let `/model` silently switch provider.

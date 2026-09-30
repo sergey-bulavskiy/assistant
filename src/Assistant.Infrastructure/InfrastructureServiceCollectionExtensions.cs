@@ -115,8 +115,11 @@ public static class InfrastructureServiceCollectionExtensions
             }));
             services.AddSingleton(new ModelCatalog(llmConfig));
 
+            // Nit N1: model names are only ever needed by the closures below (this factory and the
+            // hosted-service one) -- never registered as a bare IReadOnlyList<string> in DI, which
+            // would be an untyped, easy-to-collide-with singleton for anything else that also needs
+            // to register a list of strings.
             var claudeCliModelNames = llmConfig.Models.Where(m => m.ProviderPrefix == LlmProviderValidation.ClaudeCliPrefix).Select(m => m.Name).ToArray();
-            services.AddSingleton<IReadOnlyList<string>>(claudeCliModelNames);
 
             // Every claude-cli catalog entry starts unavailable at composition time -- before
             // ClaudeCliInstallerHostedService's StartAsync has had a chance to run -- so a request
@@ -139,7 +142,7 @@ public static class InfrastructureServiceCollectionExtensions
                 sp.GetRequiredService<IProcessRunner>(),
                 sp.GetRequiredService<ClaudeCliOptions>(),
                 sp.GetRequiredService<IModelAvailability>(),
-                sp.GetRequiredService<IReadOnlyList<string>>(),
+                claudeCliModelNames,
                 sp.GetRequiredService<ILogger<ClaudeCliInstallerHostedService>>()));
             services.AddSingleton(new ConcurrentCallGate(llmConfig.MaxConcurrentCalls));
             services.AddScoped<ILlmGateway, LlmGateway>();

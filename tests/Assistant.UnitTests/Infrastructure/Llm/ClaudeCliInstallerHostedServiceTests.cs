@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Llm.ClaudeCli;
 using Assistant.UnitTests.Fakes;
@@ -7,17 +8,48 @@ using Shouldly;
 
 namespace Assistant.UnitTests.Infrastructure.Llm;
 
-public class ClaudeCliInstallerHostedServiceTests
+public class ClaudeCliInstallerHostedServiceTests : IDisposable
 {
-    private static ClaudeCliOptions Options(string pinnedVersion = "2.1.285") => new()
+    // B1: a real, on-disk home directory is required for these tests now that the service checks
+    // File.Exists(ExecutablePath) before ever touching the process runner (a fresh $CLAUDE_HOME
+    // volume has no such file, and must never reach Process.Start at all). Created fresh per test
+    // instance and removed in Dispose.
+    private readonly string _homeDirectory = Path.Combine(Path.GetTempPath(), "assistant-cli-installer-tests-" + Guid.NewGuid());
+
+    private ClaudeCliOptions Options(string pinnedVersion = "2.1.285", bool executableExists = true)
     {
-        ExecutablePath = "/home/app/.claude-home/.local/bin/claude",
-        HomeDirectory = "/home/app/.claude-home",
-        PinnedVersion = pinnedVersion,
-        OAuthToken = "test-oauth-token",
-        MaxOutputTokens = 4000,
-        CallTimeoutSeconds = 120
-    };
+        var executablePath = Path.Combine(_homeDirectory, ".local", "bin", "claude");
+        if (executableExists)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(executablePath)!);
+            File.WriteAllText(executablePath, string.Empty);
+        }
+
+        return new ClaudeCliOptions
+        {
+            ExecutablePath = executablePath,
+            HomeDirectory = _homeDirectory,
+            PinnedVersion = pinnedVersion,
+            OAuthToken = "test-oauth-token",
+            MaxOutputTokens = 4000,
+            CallTimeoutSeconds = 120
+        };
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_homeDirectory))
+            {
+                Directory.Delete(_homeDirectory, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup only.
+        }
+    }
 
     private sealed class CapturingLogger<T> : ILogger<T>
     {
@@ -56,6 +88,7 @@ public class ClaudeCliInstallerHostedServiceTests
     public async Task Missing_or_different_version_runs_the_installer_then_marks_every_entry_available()
     {
         var calls = new List<string>();
+        var versionChecks = 0;
         var runner = new FakeProcessRunner
         {
             Handler = req =>
@@ -63,7 +96,12 @@ public class ClaudeCliInstallerHostedServiceTests
                 calls.Add(string.Join(' ', req.Arguments));
                 if (req.Arguments.Contains("--version"))
                 {
-                    return new ProcessRunResult(1, "", "no such file", false); // not installed yet
+                    versionChecks++;
+                    // Not installed yet on the first check; installed at the pinned version once
+                    // the installer has "run" (B2: the service re-checks after a successful install).
+                    return versionChecks == 1
+                        ? new ProcessRunResult(1, "", "no such file", false)
+                        : new ProcessRunResult(0, "2.1.285 (Claude Code)", "", false);
                 }
 
                 return new ProcessRunResult(0, "", "", false); // the installer itself
@@ -76,7 +114,7 @@ public class ClaudeCliInstallerHostedServiceTests
         await service.StartAsync(CancellationToken.None);
         await (service.ExecuteTask ?? Task.CompletedTask);
 
-        calls.Count.ShouldBe(2); // version check, then install
+        calls.Count.ShouldBe(3); // version check, install, re-check (B2)
         availability.IsAvailable("sonnet").ShouldBeTrue();
     }
 
@@ -102,6 +140,104 @@ public class ClaudeCliInstallerHostedServiceTests
     }
 
     [Fact]
+    public async Task B1_fresh_volume_with_no_executable_file_never_calls_the_process_runner_for_the_version_check()
+    {
+        // B1: on a genuinely fresh $CLAUDE_HOME volume the executable file itself does not exist
+        // yet. The real ProcessRunner would throw a Win32Exception trying to Process.Start it --
+        // the fix is to short-circuit on File.Exists before ever reaching the runner, so this fake
+        // throws if the version check is even attempted.
+        var installRan = false;
+        var runner = new FakeProcessRunner
+        {
+            Handler = req =>
+            {
+                if (req.Arguments.Contains("--version"))
+                {
+                    throw new InvalidOperationException("must not run the version check when the executable file does not exist");
+                }
+
+                installRan = true;
+                return new ProcessRunResult(0, "", "", false); // the installer
+            }
+        };
+        var availability = new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow));
+        availability.MarkUnavailable("sonnet", DateTimeOffset.MaxValue);
+
+        var service = new ClaudeCliInstallerHostedService(
+            runner, Options(executableExists: false), availability, new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        await (service.ExecuteTask ?? Task.CompletedTask);
+
+        installRan.ShouldBeTrue();
+        // B2's re-check after a successful install finds no file either (the fake installer above
+        // does not actually create one) -- so the entry correctly stays unavailable rather than
+        // being marked available on a completely untested "install".
+        availability.IsAvailable("sonnet").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task B1_a_Win32Exception_from_the_process_runner_on_the_version_check_is_treated_as_not_installed_and_the_installer_still_runs()
+    {
+        // B1: even with the executable file present, Process.Start can still fail (e.g. it isn't
+        // actually executable, or a race removed it) -- a Win32Exception from the runner must be
+        // treated exactly like "not installed", never as an unhandled install failure.
+        var versionChecks = 0;
+        var installRan = false;
+        var runner = new FakeProcessRunner
+        {
+            Handler = req =>
+            {
+                if (req.Arguments.Contains("--version"))
+                {
+                    versionChecks++;
+                    if (versionChecks == 1)
+                    {
+                        throw new Win32Exception("simulated Process.Start failure");
+                    }
+
+                    return new ProcessRunResult(0, "2.1.285 (Claude Code)", "", false); // re-check after install
+                }
+
+                installRan = true;
+                return new ProcessRunResult(0, "", "", false); // the installer
+            }
+        };
+        var availability = new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow));
+        availability.MarkUnavailable("sonnet", DateTimeOffset.MaxValue);
+
+        var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        await (service.ExecuteTask ?? Task.CompletedTask);
+
+        installRan.ShouldBeTrue();
+        availability.IsAvailable("sonnet").ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task B2_installer_exits_zero_but_the_version_check_still_fails_afterwards_is_not_marked_available_and_logs_one_error()
+    {
+        var logger = new CapturingLogger<ClaudeCliInstallerHostedService>();
+        var runner = new FakeProcessRunner
+        {
+            // The installer reports success (exit 0), e.g. because `curl | bash` silently downloaded
+            // nothing but bash still exited 0 -- the re-check after install must catch this instead
+            // of trusting the installer's own exit code alone.
+            Handler = req => req.Arguments.Contains("--version")
+                ? new ProcessRunResult(1, "", "no such file", false)
+                : new ProcessRunResult(0, "", "", false)
+        };
+        var availability = new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow));
+        availability.MarkUnavailable("sonnet", DateTimeOffset.MaxValue);
+
+        var service = new ClaudeCliInstallerHostedService(runner, Options(), availability, new[] { "sonnet" }, logger);
+        await service.StartAsync(CancellationToken.None);
+        await (service.ExecuteTask ?? Task.CompletedTask);
+
+        availability.IsAvailable("sonnet").ShouldBeFalse();
+        logger.Entries.Count(e => e.Level == LogLevel.Error).ShouldBe(1);
+    }
+
+    [Fact]
     public async Task StopAsync_completes_immediately_there_is_nothing_to_stop()
     {
         var service = new ClaudeCliInstallerHostedService(new FakeProcessRunner(), Options(), new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow)), new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
@@ -118,13 +254,17 @@ public class ClaudeCliInstallerHostedServiceTests
         // cannot block ASP.NET Core's own startup, /health or bot polling.
         var installStarted = new TaskCompletionSource();
         var releaseInstall = new TaskCompletionSource<ProcessRunResult>();
+        var versionChecks = 0;
         var runner = new FakeProcessRunner
         {
             AsyncHandler = async req =>
             {
                 if (req.Arguments.Contains("--version"))
                 {
-                    return new ProcessRunResult(1, "", "no such file", false); // not installed yet
+                    versionChecks++;
+                    return versionChecks == 1
+                        ? new ProcessRunResult(1, "", "no such file", false) // not installed yet
+                        : new ProcessRunResult(0, "2.1.285 (Claude Code)", "", false); // re-check after install (B2)
                 }
 
                 installStarted.SetResult();

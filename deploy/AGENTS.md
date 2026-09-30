@@ -13,3 +13,6 @@
 - `latest` is moved only by CD's `promote` job, after the real-Telegram smoke test passes when the
   gate is enabled (repository variable `SMOKE_ENABLED`, see `.github/AGENTS.md`). A `sha-` tag whose
   smoke run failed exists in GHCR but was never promoted; never pin it for rollback.
+- A new named volume (e.g. `claude-home`) or new env var in `docker-compose.yml` only takes effect
+  after `git pull` + `docker compose -f deploy/docker-compose.yml up -d` on the host: Watchtower only
+  replaces the `app` image on the *existing* container, it never re-reads the compose file itself.

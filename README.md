@@ -2,8 +2,9 @@
 
 A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
 **role bots** for it; role bots quietly record the messages of approved people in approved chats
-into PostgreSQL. There is no LLM yet: role bots only store messages and confirm them in private
-chats. Later milestones add the assistant features on top of this pipeline.
+into PostgreSQL, and one role bot -- the **General assistant** -- can also answer with a real LLM
+(the Claude Code CLI on a Claude subscription) once configured. Later milestones add more assistant
+features on top of this pipeline.
 
 ## What it does
 
@@ -91,6 +92,11 @@ POSTGRES_DB=assistant
 IMAGE_TAG=latest
 ```
 
+To also enable the General assistant now (optional, can be done later — step 6): set
+`CLAUDE_CODE_OAUTH_TOKEN` and `LLM_MODELS`. Every other `LLM_*` limit already has a working default
+from `deploy/docker-compose.yml` — leave them unset unless you have a reason to override one in
+`.env` (see `deploy/.env.example`).
+
 `POSTGRES_PASSWORD` must contain **only letters and digits** — it's interpolated directly into a
 Postgres connection string in `deploy/docker-compose.yml`, and punctuation there (`:`, `@`, `/`,
 etc.) can break parsing.
@@ -145,9 +151,9 @@ the rest of the bots work with none of them set. Steps in this exact order (spec
    ```
 
    The first `LLM_MODELS` entry is tried first; later ones are the fallback chain when one runs out
-   of usage limits. See `deploy/.env.example` for every other `LLM_*` variable (rate/day caps, context
-   size, timeouts) and `CLAUDE_CLI_VERSION` (the pinned CLI version) — all have sensible defaults
-   there, copy them as-is unless you have a reason to change them.
+   of usage limits. Every other `LLM_*` variable (rate/day caps, context size, timeouts) already has
+   a working default from `deploy/docker-compose.yml`, and `CLAUDE_CLI_VERSION` (the pinned CLI
+   version) defaults inside the app itself — see `deploy/.env.example` to override any of them.
 4. Pull the updated `deploy/docker-compose.yml` (it now mounts a `claude-home` volume and reads the
    new variables) and run:
 

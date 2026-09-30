@@ -198,6 +198,18 @@ public class LlmGateway : ILlmGateway
             await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, stopwatch.ElapsedMilliseconds);
             return (LlmResult.Refused(LlmRefusalReason.Failed), null);
         }
+        catch (TimeoutException)
+        {
+            // Finding N5: ClaudeCliChatClient throws a plain TimeoutException when ProcessRunner's
+            // own process timer fires (ProcessRunResult.TimedOut), which is a distinct code path
+            // from this method's own callCts timeout above but means the same thing to a caller --
+            // record it the same way (Timeout outcome), not as a generic Failed with no useful
+            // outcome.
+            stopwatch.Stop();
+            _logger.LogWarning("LLM call to {Model} timed out after {ElapsedMs}ms", candidate.Name, stopwatch.ElapsedMilliseconds);
+            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, stopwatch.ElapsedMilliseconds);
+            return (LlmResult.Refused(LlmRefusalReason.Failed), null);
+        }
         catch (Exception ex)
         {
             stopwatch.Stop();

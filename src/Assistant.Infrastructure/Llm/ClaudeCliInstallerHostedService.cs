@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Assistant.Infrastructure.Llm.ClaudeCli;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -53,6 +54,18 @@ public class ClaudeCliInstallerHostedService : BackgroundService
                     _logger.LogError("claude-cli install failed: exit code {ExitCode}", installResult.ExitCode);
                     return;
                 }
+
+                // Finding B2: `curl -fsSL ... | bash -s V` now runs with `set -o pipefail` (a failed
+                // download alone would otherwise still exit 0, the pipeline's last command), but this
+                // re-check is belt-and-braces against any other way the installer could report
+                // success without actually leaving the pinned version behind. Only a confirmed pinned
+                // version marks the catalog available; anything else is one Error, same shape as an
+                // outright install failure above.
+                if (!await IsAlreadyAtPinnedVersionAsync(stoppingToken))
+                {
+                    _logger.LogError("claude-cli install reported success but the pinned version check still failed");
+                    return;
+                }
             }
 
             foreach (var modelName in _claudeCliModelNames)
@@ -74,17 +87,39 @@ public class ClaudeCliInstallerHostedService : BackgroundService
 
     private async Task<bool> IsAlreadyAtPinnedVersionAsync(CancellationToken cancellationToken)
     {
-        var result = await _runner.RunAsync(
-            new ProcessRunRequest(
-                _options.ExecutablePath ?? Path.Combine(_options.HomeDirectory, ".local", "bin", "claude"),
-                new[] { "--version" },
-                BuildEnvironment(),
-                _options.HomeDirectory,
-                StandardInput: string.Empty,
-                Timeout: TimeSpan.FromSeconds(30)),
-            cancellationToken);
+        var executablePath = _options.ExecutablePath ?? Path.Combine(_options.HomeDirectory, ".local", "bin", "claude");
 
-        return result.ExitCode == 0 && result.StandardOutput.Contains(_options.PinnedVersion, StringComparison.Ordinal);
+        // Finding B1: on a genuinely fresh $CLAUDE_HOME volume this file does not exist yet -- the
+        // real ProcessRunner would throw a Win32Exception from Process.Start trying to run it, which
+        // the outer catch-all in ExecuteAsync would otherwise report as "install failed" without
+        // ever running the installer. Treat a missing file as simply "not installed", no process
+        // launch attempted at all.
+        if (!File.Exists(executablePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await _runner.RunAsync(
+                new ProcessRunRequest(
+                    executablePath,
+                    new[] { "--version" },
+                    BuildEnvironment(),
+                    _options.HomeDirectory,
+                    StandardInput: string.Empty,
+                    Timeout: TimeSpan.FromSeconds(30)),
+                cancellationToken);
+
+            return result.ExitCode == 0 && result.StandardOutput.Contains(_options.PinnedVersion, StringComparison.Ordinal);
+        }
+        catch (Win32Exception)
+        {
+            // Finding B1: Process.Start itself failed (e.g. the file exists but isn't actually
+            // executable, or a race removed it between the check above and Process.Start) -- same
+            // treatment as a missing file, never an install failure.
+            return false;
+        }
     }
 
     private async Task<ProcessRunResult> RunInstallerAsync(CancellationToken cancellationToken)
@@ -92,14 +127,24 @@ public class ClaudeCliInstallerHostedService : BackgroundService
         // Anthropic's official native installer (Verified facts #6): pipes the install script through
         // bash with the pinned version as its one argument. HOME=$CLAUDE_HOME for this process only,
         // so the CLI lands under the dedicated volume, never the app's own HOME.
+        //
+        // Finding B2: `set -o pipefail` first -- without it, `curl ... | bash -s V` reports the exit
+        // code of `bash` (the pipeline's last command) alone, so a failed/interrupted download that
+        // still lets `bash` exit 0 on empty input would be reported as a successful install. With
+        // pipefail, the whole pipeline fails (non-zero) if curl fails. This alone is not the full fix
+        // (see the re-check in ExecuteAsync above) but removes the most common silent-success case.
+        //
+        // Finding S4: 10 minutes, not 2 -- a real first-time download over a slow/constrained
+        // connection can legitimately take longer than 2 minutes; this only bounds the install, it
+        // never blocks the app's own startup (BackgroundService, see the class doc comment).
         return await _runner.RunAsync(
             new ProcessRunRequest(
                 "bash",
-                new[] { "-c", $"curl -fsSL https://claude.ai/install.sh | bash -s {_options.PinnedVersion}" },
+                new[] { "-c", $"set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s {_options.PinnedVersion}" },
                 BuildEnvironment(),
                 _options.HomeDirectory,
                 StandardInput: string.Empty,
-                Timeout: TimeSpan.FromMinutes(2)),
+                Timeout: TimeSpan.FromMinutes(10)),
             cancellationToken);
     }
 

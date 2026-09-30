@@ -142,6 +142,33 @@ public class LlmWiringTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LLM_MODELS_set_but_no_oauth_token_host_still_starts_and_gateway_is_the_null_gateway()
+    {
+        // N3: a claude-cli entry with no CLAUDE_CODE_OAUTH_TOKEN fails LlmProviderValidation and is
+        // dropped (spec 8.9) -- with no other entry left, LlmConfigParser reports zero valid models
+        // and the whole config is off, same as if LLM_MODELS had never been set, not a startup crash.
+        using var factory = await StartWithEnvAsync(new Dictionary<string, string?>
+        {
+            ["LLM_MODELS"] = "claude-cli:sonnet",
+            ["LLM_CALLS_PER_MINUTE"] = "10",
+            ["LLM_CALLS_PER_DAY"] = "200",
+            ["LLM_MAX_CONTEXT_MESSAGES"] = "30",
+            ["LLM_MAX_INPUT_CHARS"] = "40000",
+            ["LLM_MAX_OUTPUT_TOKENS"] = "4000",
+            ["LLM_CALL_TIMEOUT_SECONDS"] = "120",
+            ["LLM_MAX_CONCURRENT_CALLS"] = "2",
+            ["LLM_MODEL_COOLDOWN_MINUTES"] = "30"
+            // CLAUDE_CODE_OAUTH_TOKEN deliberately missing.
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+
+        gateway.ShouldBeOfType<NullLlmGateway>();
+        gateway.IsEnabled.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Unknown_provider_host_still_starts_and_gateway_is_the_null_gateway()
     {
         using var factory = await StartWithEnvAsync(new Dictionary<string, string?>
