@@ -114,14 +114,33 @@ public static class InfrastructureServiceCollectionExtensions
                 [LlmProviderValidation.ClaudeCliPrefix] = sp.GetRequiredService<IChatClient>()
             }));
             services.AddSingleton(new ModelCatalog(llmConfig));
-            // Task 10 (not implemented here) adds ClaudeCliInstallerHostedService, which checks/
-            // installs the pinned CLI into CLAUDE_HOME at startup and only then marks claude-cli
-            // catalog entries available; that task will change this single IModelAvailability
-            // registration to start every claude-cli entry unavailable until the install completes.
-            // This is the named seam Task 10 hooks into -- IModelAvailability/ClaudeCliOptions are
-            // already registered here so it only has to add its own AddHostedService<> call and
-            // swap this factory for the "start unavailable" one described in the plan.
-            services.AddSingleton<IModelAvailability, ModelAvailability>();
+
+            var claudeCliModelNames = llmConfig.Models.Where(m => m.ProviderPrefix == LlmProviderValidation.ClaudeCliPrefix).Select(m => m.Name).ToArray();
+            services.AddSingleton<IReadOnlyList<string>>(claudeCliModelNames);
+
+            // Every claude-cli catalog entry starts unavailable at composition time -- before
+            // ClaudeCliInstallerHostedService's StartAsync has had a chance to run -- so a request
+            // arriving during that window gets AllModelsUnavailable instead of a raw process-launch
+            // failure. The hosted service marks each entry available once the pinned CLI version is
+            // confirmed installed (or installed successfully). Only one IModelAvailability
+            // registration may exist in this branch (Task 9's plain
+            // AddSingleton<IModelAvailability, ModelAvailability>() is replaced by this factory).
+            services.AddSingleton<IModelAvailability>(sp =>
+            {
+                var availability = new ModelAvailability(sp.GetRequiredService<IClock>());
+                foreach (var modelName in claudeCliModelNames)
+                {
+                    availability.MarkUnavailable(modelName, DateTimeOffset.MaxValue);
+                }
+
+                return availability;
+            });
+            services.AddHostedService(sp => new ClaudeCliInstallerHostedService(
+                sp.GetRequiredService<IProcessRunner>(),
+                sp.GetRequiredService<ClaudeCliOptions>(),
+                sp.GetRequiredService<IModelAvailability>(),
+                sp.GetRequiredService<IReadOnlyList<string>>(),
+                sp.GetRequiredService<ILogger<ClaudeCliInstallerHostedService>>()));
             services.AddSingleton(new ConcurrentCallGate(llmConfig.MaxConcurrentCalls));
             services.AddScoped<ILlmGateway, LlmGateway>();
         }

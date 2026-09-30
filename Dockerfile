@@ -22,8 +22,24 @@ ARG BUILD_TIME=""
 ENV GIT_SHA=${GIT_SHA}
 ENV BUILD_TIME=${BUILD_TIME}
 ENV ASPNETCORE_URLS=http://+:8080
+ENV HOME=/home/app
+ENV CLAUDE_HOME=/home/app/.claude-home
+
+# curl/ca-certificates ONLY (spec §8.10, licence decision C9): the Claude Code CLI is proprietary
+# and this image is public, so it is never installed here -- ClaudeCliInstallerHostedService installs
+# it at container startup into $CLAUDE_HOME (aspnet:10.0 does not ship either package by default).
+# Both HOME and CLAUDE_HOME are created and chowned to $APP_UID here, while still root --
+# $CLAUDE_HOME is later replaced by a named volume mount (docker-compose.yml), and Docker copies an
+# existing image directory's ownership into a freshly created empty volume on first mount, so no
+# separate init container/chown step is needed in compose.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p ${HOME} ${CLAUDE_HOME} && chown -R $APP_UID:$APP_UID ${HOME} ${CLAUDE_HOME}
+
 COPY --from=build /app/publish .
+
 USER $APP_UID
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["dotnet", "Assistant.Host.dll", "--healthcheck"]
 ENTRYPOINT ["dotnet", "Assistant.Host.dll"]
