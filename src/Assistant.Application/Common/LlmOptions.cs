@@ -122,6 +122,15 @@ public static class LlmConfigParser
             var provider = part[..colonIndex].ToLowerInvariant();
             var name = part[(colonIndex + 1)..];
 
+            // Security review nit: a model name starting with '-' would be passed to the CLI as
+            // `--model <name>` and could be misread as another flag (e.g. an injected option)
+            // rather than a model argument. Reject it the same way as any other malformed entry.
+            if (name.StartsWith('-'))
+            {
+                errors.Add($"LLM_MODELS entry '{part}' has a model name starting with '-'; dropped.");
+                continue;
+            }
+
             // Provider validity is checked before reserving the name for duplicate detection, so a
             // dropped entry never blocks a later, valid entry from reusing its name.
             var providerError = validateProvider(provider);

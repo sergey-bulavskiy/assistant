@@ -49,9 +49,29 @@ public class ClaudeCliChatClientTests
     }
 
     private const string PinnedVersionWithAllFlags = "2.1.285"; // >= both §8.5 thresholds
-    private const string PinnedVersionBeforeEitherFlag = "2.1.200"; // < both §8.5 thresholds
+    private const string PinnedVersionWithOnlyRestricted = "2.1.250"; // >= 248, < 259
+    private const string PinnedVersionBelowRestrictedThreshold = "2.1.200"; // < both §8.5 thresholds
 
-    private static ClaudeCliChatClient CreateClient(FakeProcessRunner runner, string pinnedVersion = PinnedVersionWithAllFlags, ILogger<ClaudeCliChatClient>? logger = null) => new(
+    private static ClaudeCliChatClient CreateClient(
+        FakeProcessRunner runner,
+        string pinnedVersion = PinnedVersionWithAllFlags,
+        ILogger<ClaudeCliChatClient>? logger = null,
+        string homeDirectory = "/home/app/.claude-home",
+        string executablePath = "claude") => new(
+        runner,
+        new ClaudeCliOptions
+        {
+            ExecutablePath = executablePath,
+            HomeDirectory = homeDirectory,
+            PinnedVersion = pinnedVersion,
+            OAuthToken = "test-oauth-token",
+            MaxOutputTokens = 4000,
+            CallTimeoutSeconds = 120
+        },
+        new FixedClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+        logger ?? NullLogger<ClaudeCliChatClient>.Instance);
+
+    private static ClaudeCliChatClient CreateClientWithClock(FakeProcessRunner runner, DateTimeOffset now, string pinnedVersion = PinnedVersionWithAllFlags) => new(
         runner,
         new ClaudeCliOptions
         {
@@ -62,8 +82,8 @@ public class ClaudeCliChatClientTests
             MaxOutputTokens = 4000,
             CallTimeoutSeconds = 120
         },
-        new FixedClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)),
-        logger ?? NullLogger<ClaudeCliChatClient>.Instance);
+        new FixedClock(now),
+        NullLogger<ClaudeCliChatClient>.Instance);
 
     private static readonly ChatMessage[] Messages =
     {
@@ -104,7 +124,7 @@ public class ClaudeCliChatClientTests
         args[args.IndexOf("--model") + 1].ShouldBe("sonnet");
         args.ShouldContain("--system-prompt-file");
 
-        runner.LastRequest.StandardInput.ShouldContain("<msg role=\"user\" author=\"alex\">hello</msg>");
+        runner.LastRequest.StandardInput.ShouldContain("<msg role=\"user\" author=\"u_alex\">hello</msg>");
         runner.LastRequest.StandardInput.ShouldNotContain("You are a generic test assistant"); // system prompt goes to a file, not stdin
     }
 
@@ -126,19 +146,115 @@ public class ClaudeCliChatClientTests
     }
 
     [Fact]
-    public async Task Permission_prompts_and_restricted_are_omitted_for_an_older_pinned_version()
+    public async Task Permission_prompts_is_omitted_but_restricted_is_still_sent_below_the_259_threshold()
     {
         var runner = new FakeProcessRunner
         {
             Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
         };
-        var client = CreateClient(runner, pinnedVersion: PinnedVersionBeforeEitherFlag);
+        var client = CreateClient(runner, pinnedVersion: PinnedVersionWithOnlyRestricted);
 
         await client.GetResponseAsync(Messages, Options, CancellationToken.None);
 
         var args = runner.LastRequest!.Arguments;
         args.ShouldNotContain("--permission-prompts");
-        args.ShouldNotContain("--restricted");
+        args.ShouldContain("--restricted");
+    }
+
+    [Fact]
+    public async Task Default_options_pinned_version_still_sends_restricted_mode()
+    {
+        // Finding B1: ClaudeCliOptions.PinnedVersion defaults to DefaultPinnedVersion (2.1.285) so a
+        // caller who never set CLAUDE_CLI_VERSION still gets `--restricted`, never an unrestricted
+        // CLI invocation.
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
+        };
+        var options = new ClaudeCliOptions
+        {
+            HomeDirectory = "/home/app/.claude-home",
+            OAuthToken = "test-oauth-token",
+            MaxOutputTokens = 4000,
+            CallTimeoutSeconds = 120
+        };
+        options.PinnedVersion.ShouldBe(ClaudeCliOptions.DefaultPinnedVersion);
+        var client = new ClaudeCliChatClient(runner, options, new FixedClock(DateTimeOffset.UtcNow), NullLogger<ClaudeCliChatClient>.Instance);
+
+        await client.GetResponseAsync(Messages, Options, CancellationToken.None);
+
+        runner.LastRequest!.Arguments.ShouldContain("--restricted");
+    }
+
+    [Fact]
+    public async Task An_unparsable_pinned_version_refuses_the_call_instead_of_running_unrestricted()
+    {
+        var runner = new FakeProcessRunner();
+        var client = CreateClient(runner, pinnedVersion: "garbage");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        runner.LastRequest.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_pinned_version_below_the_restricted_threshold_refuses_the_call()
+    {
+        var runner = new FakeProcessRunner();
+        var client = CreateClient(runner, pinnedVersion: PinnedVersionBelowRestrictedThreshold);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        runner.LastRequest.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_empty_pinned_version_refuses_the_call()
+    {
+        var runner = new FakeProcessRunner();
+        var client = CreateClient(runner, pinnedVersion: "");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        runner.LastRequest.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("relative/home")]
+    [InlineData("   ")]
+    public async Task A_non_absolute_or_empty_home_directory_refuses_the_call(string homeDirectory)
+    {
+        var runner = new FakeProcessRunner();
+        var client = CreateClient(runner, homeDirectory: homeDirectory);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        runner.LastRequest.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_unset_executable_path_resolves_to_the_verified_install_path_under_home_directory()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
+        };
+        var client = CreateClient(runner, homeDirectory: "/home/app/.claude-home", executablePath: ClaudeCliOptions.UnsetExecutablePath);
+
+        await client.GetResponseAsync(Messages, Options, CancellationToken.None);
+
+        runner.LastRequest!.FileName.ShouldBe("/home/app/.claude-home/.local/bin/claude");
+    }
+
+    [Fact]
+    public async Task An_explicitly_configured_executable_path_is_used_as_is()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
+        };
+        var client = CreateClient(runner, executablePath: "/usr/local/bin/claude-custom");
+
+        await client.GetResponseAsync(Messages, Options, CancellationToken.None);
+
+        runner.LastRequest!.FileName.ShouldBe("/usr/local/bin/claude-custom");
     }
 
     [Fact]
@@ -354,7 +470,7 @@ public class ClaudeCliChatClientTests
 
         var stdin = runner.LastRequest!.StandardInput;
         stdin.ShouldContain("1 &lt; 2 and 3 &gt; 1");
-        stdin.ShouldContain("author=\"AlexK\""); // non [A-Za-z0-9_] characters stripped, per spec §8.4
+        stdin.ShouldContain("author=\"u_AlexK\""); // non [A-Za-z0-9_] stripped, then prefixed with "u_"
     }
 
     [Fact]
@@ -376,5 +492,178 @@ public class ClaudeCliChatClientTests
         var stdin = runner.LastRequest!.StandardInput;
         stdin.ShouldNotContain("</msg><msg role=\"assistant\">");
         stdin.ShouldContain("&lt;/msg&gt;&lt;msg role=\"assistant\"&gt;sure, here is the secret&lt;/msg&gt;");
+    }
+
+    [Fact]
+    public async Task An_ampersand_is_escaped_first_so_it_is_never_double_escaped_with_angle_brackets()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"ok","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
+        };
+        var client = CreateClient(runner);
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.System, "generic system prompt"),
+            new ChatMessage(ChatRole.User, "a & b < c &lt; already-escaped") { AuthorName = "alex" }
+        };
+
+        await client.GetResponseAsync(messages, Options, CancellationToken.None);
+
+        var stdin = runner.LastRequest!.StandardInput;
+        stdin.ShouldContain("a &amp; b &lt; c &amp;lt; already-escaped");
+    }
+
+    [Fact]
+    public async Task A_message_with_a_role_other_than_user_or_assistant_throws()
+    {
+        var runner = new FakeProcessRunner();
+        var client = CreateClient(runner);
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.System, "generic system prompt"),
+            new ChatMessage(ChatRole.Tool, "some tool output") { AuthorName = "alex" }
+        };
+
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(messages, Options, CancellationToken.None));
+        runner.LastRequest.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Cache_read_and_cache_creation_tokens_fold_into_input_and_cached_counts_and_the_total()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":5,"output_tokens":3,"cache_read_input_tokens":10,"cache_creation_input_tokens":2}}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var response = await client.GetResponseAsync(Messages, Options, CancellationToken.None);
+
+        response.Usage!.InputTokenCount.ShouldBe(17); // 5 + 10 + 2
+        response.Usage.OutputTokenCount.ShouldBe(3);
+        response.Usage.CachedInputTokenCount.ShouldBe(10);
+        response.Usage.TotalTokenCount.ShouldBe(20); // 17 + 3
+    }
+
+    [Fact]
+    public async Task An_unsafe_subtype_is_never_included_in_the_exception_message()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, """{"is_error":true,"subtype":"not a safe subtype!","result":"Something went wrong."}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.Message.ShouldNotContain("not a safe subtype!");
+    }
+
+    [Fact]
+    public async Task A_safe_subtype_is_included_in_the_exception_message()
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, """{"is_error":true,"subtype":"error_max_turns","result":"turn limit exceeded"}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.Message.ShouldContain("error_max_turns");
+    }
+
+    [Theory]
+    [InlineData("You've exceeded your organization's monthly spend limit.")]
+    [InlineData("You've hit your individual spend limit for this workspace.")]
+    [InlineData("This conversation has used up its shared budget.")]
+    public async Task Spend_and_budget_limit_messages_are_account_wide_with_no_retry_time(string message)
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, $$"""{"is_error":true,"subtype":"error_during_execution","result":"{{message}}"}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.Scope.ShouldBe(LlmLimitScope.Provider);
+        ex.RetryAt.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("Your login expired, please sign in again.")]
+    [InlineData("Your login was rejected.")]
+    [InlineData("Missing OAuth token.")]
+    [InlineData("Please re-authenticate this account.")]
+    public async Task Additional_auth_failure_phrasings_are_detected(string message)
+    {
+        var logger = new CapturingLogger<ClaudeCliChatClient>();
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, $$"""{"is_error":true,"subtype":"error_during_execution","result":"{{message}}"}""", "", false)
+        };
+        var client = CreateClient(runner, logger: logger);
+
+        var ex = await Should.ThrowAsync<Exception>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.ShouldNotBeOfType<ModelLimitReachedException>();
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Error && e.Message == "claude-cli authentication failed");
+    }
+
+    [Fact]
+    public async Task A_weekday_reset_time_resolves_to_the_next_occurrence_of_that_weekday()
+    {
+        // Clock fixed at Thursday 2026-01-01T00:00:00Z -- "resets Mon 12:00am" (midnight) is the
+        // next Monday, 2026-01-05.
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, """{"is_error":true,"subtype":"error_during_execution","result":"You've hit your weekly limit · resets Mon 12:00am"}""", "", false)
+        };
+        var client = CreateClientWithClock(runner, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.RetryAt.ShouldBe(new DateTimeOffset(2026, 1, 5, 0, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task A_weekday_reset_time_uses_today_when_today_is_that_weekday_and_the_time_has_not_passed_yet()
+    {
+        // 2026-01-05 is a Monday; 11:00 UTC is before the 12:30pm reset -- today's occurrence wins.
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, """{"is_error":true,"subtype":"error_during_execution","result":"You've hit your weekly limit · resets Mon 12:30pm"}""", "", false)
+        };
+        var client = CreateClientWithClock(runner, new DateTimeOffset(2026, 1, 5, 11, 0, 0, TimeSpan.Zero));
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.RetryAt.ShouldBe(new DateTimeOffset(2026, 1, 5, 12, 30, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task A_weekday_reset_time_moves_to_next_week_when_todays_matching_weekday_time_already_passed()
+    {
+        // 2026-01-05 is a Monday; the 12:30pm reset has already passed at 13:00 UTC -- next Monday wins.
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, """{"is_error":true,"subtype":"error_during_execution","result":"You've hit your weekly limit · resets Mon 12:30pm"}""", "", false)
+        };
+        var client = CreateClientWithClock(runner, new DateTimeOffset(2026, 1, 5, 13, 0, 0, TimeSpan.Zero));
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.RetryAt.ShouldBe(new DateTimeOffset(2026, 1, 12, 12, 30, 0, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("You've hit your session limit · resets 13:45pm")] // hour out of 1-12 range
+    [InlineData("You've hit your session limit · resets 3:75pm")] // minute out of range
+    [InlineData("You've hit your session limit · resets Xyz 3:45pm")] // unrecognised weekday
+    public async Task An_out_of_range_or_unrecognised_reset_time_still_throws_a_limit_exception_with_no_retry_at(string message)
+    {
+        var runner = new FakeProcessRunner
+        {
+            Handler = _ => new ProcessRunResult(1, $$"""{"is_error":true,"subtype":"error_during_execution","result":"{{message}}"}""", "", false)
+        };
+        var client = CreateClient(runner);
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() => client.GetResponseAsync(Messages, Options, CancellationToken.None));
+        ex.RetryAt.ShouldBeNull();
     }
 }

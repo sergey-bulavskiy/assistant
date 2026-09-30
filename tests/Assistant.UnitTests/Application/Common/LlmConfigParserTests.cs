@@ -182,6 +182,21 @@ public class LlmConfigParserTests
     }
 
     [Fact]
+    public void A_model_name_starting_with_a_dash_is_dropped_per_entry_not_fatal_to_the_whole_config()
+    {
+        // Security review nit: a name starting with '-' would be passed to the CLI as
+        // `--model <name>` and could be misread as another flag rather than a model argument.
+        var options = Valid();
+        options.ModelsRaw = "claude-cli:-sneaky-flag,claude-cli:haiku";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "haiku" });
+        result.Errors.ShouldContain(e => e.Contains("LLM_MODELS") && e.Contains("-sneaky-flag"));
+    }
+
+    [Fact]
     public void Dropping_every_entry_turns_llm_off_with_the_accumulated_errors()
     {
         // Decision (spec §8.9 doesn't cover this edge case explicitly): if every LLM_MODELS entry is
