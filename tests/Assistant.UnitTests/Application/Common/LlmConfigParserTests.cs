@@ -4,6 +4,10 @@ namespace Assistant.UnitTests.Application.Common;
 
 public class LlmConfigParserTests
 {
+    // Application never knows what a provider prefix means (spec §3.1); tests supply a fake
+    // validator in place of the real Infrastructure one.
+    private static Func<string, string?> AlwaysValid() => _ => null;
+
     private static LlmOptions Valid() => new()
     {
         ModelsRaw = "claude-cli:sonnet,claude-cli:haiku",
@@ -14,8 +18,7 @@ public class LlmConfigParserTests
         MaxOutputTokensRaw = "4000",
         CallTimeoutSecondsRaw = "120",
         MaxConcurrentCallsRaw = "2",
-        ModelCooldownMinutesRaw = "30",
-        ClaudeCodeOAuthToken = "test-oauth-token"
+        ModelCooldownMinutesRaw = "30"
     };
 
     [Fact]
@@ -24,7 +27,7 @@ public class LlmConfigParserTests
         var options = Valid();
         options.ModelsRaw = "";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeFalse();
         result.Errors.ShouldBeEmpty();
@@ -36,7 +39,7 @@ public class LlmConfigParserTests
         var options = Valid();
         options.ModelsRaw = "   ";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeFalse();
         result.Errors.ShouldBeEmpty();
@@ -45,7 +48,7 @@ public class LlmConfigParserTests
     [Fact]
     public void Valid_config_is_enabled_with_models_in_order()
     {
-        var result = LlmConfigParser.Parse(Valid());
+        var result = LlmConfigParser.Parse(Valid(), AlwaysValid());
 
         result.IsEnabled.ShouldBeTrue();
         result.Config.ShouldNotBeNull();
@@ -61,20 +64,52 @@ public class LlmConfigParserTests
         result.Config.ModelCooldownMinutes.ShouldBe(30);
     }
 
-    [Theory]
-    [InlineData("0")]
-    [InlineData("-1")]
-    [InlineData("not-a-number")]
-    [InlineData("")]
-    public void Any_invalid_limit_turns_llm_off_and_names_the_bad_variable(string badValue)
+    [Fact]
+    public void Provider_prefixes_are_normalized_to_lower_case()
     {
         var options = Valid();
-        options.CallsPerMinuteRaw = badValue;
+        options.ModelsRaw = "CLAUDE-CLI:sonnet";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Single().ProviderPrefix.ShouldBe("claude-cli");
+    }
+
+    public static IEnumerable<object[]> LimitVariables()
+    {
+        yield return new object[] { "LLM_CALLS_PER_MINUTE", (Action<LlmOptions, string>)((o, v) => o.CallsPerMinuteRaw = v) };
+        yield return new object[] { "LLM_CALLS_PER_DAY", (Action<LlmOptions, string>)((o, v) => o.CallsPerDayRaw = v) };
+        yield return new object[] { "LLM_MAX_CONTEXT_MESSAGES", (Action<LlmOptions, string>)((o, v) => o.MaxContextMessagesRaw = v) };
+        yield return new object[] { "LLM_MAX_INPUT_CHARS", (Action<LlmOptions, string>)((o, v) => o.MaxInputCharsRaw = v) };
+        yield return new object[] { "LLM_MAX_OUTPUT_TOKENS", (Action<LlmOptions, string>)((o, v) => o.MaxOutputTokensRaw = v) };
+        yield return new object[] { "LLM_CALL_TIMEOUT_SECONDS", (Action<LlmOptions, string>)((o, v) => o.CallTimeoutSecondsRaw = v) };
+        yield return new object[] { "LLM_MAX_CONCURRENT_CALLS", (Action<LlmOptions, string>)((o, v) => o.MaxConcurrentCallsRaw = v) };
+        yield return new object[] { "LLM_MODEL_COOLDOWN_MINUTES", (Action<LlmOptions, string>)((o, v) => o.ModelCooldownMinutesRaw = v) };
+    }
+
+    public static IEnumerable<object[]> LimitVariablesTimesBadValues()
+    {
+        foreach (var variable in LimitVariables())
+        {
+            foreach (var badValue in new[] { "0", "-1", "not-a-number", "" })
+            {
+                yield return new object[] { variable[0], variable[1], badValue };
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(LimitVariablesTimesBadValues))]
+    public void Any_invalid_limit_turns_llm_off_and_names_the_bad_variable(string variableName, Action<LlmOptions, string> setRaw, string badValue)
+    {
+        var options = Valid();
+        setRaw(options, badValue);
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeFalse();
-        result.Errors.ShouldContain(e => e.Contains("LLM_CALLS_PER_MINUTE"));
+        result.Errors.ShouldContain(e => e.Contains(variableName));
     }
 
     [Fact]
@@ -85,7 +120,7 @@ public class LlmConfigParserTests
         var options = Valid();
         options.ModelsRaw = "claude-cli:sonnet,claude-cli:sonnet,claude-cli:haiku";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeTrue();
         result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet", "haiku" });
@@ -98,7 +133,7 @@ public class LlmConfigParserTests
         var options = Valid();
         options.ModelsRaw = "sonnet,claude-cli:haiku";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeTrue();
         result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "haiku" });
@@ -106,18 +141,44 @@ public class LlmConfigParserTests
     }
 
     [Fact]
-    public void A_claude_cli_entry_without_an_oauth_token_is_dropped_per_entry()
+    public void An_entry_whose_provider_fails_validation_is_dropped_per_entry_not_fatal_to_the_whole_config()
     {
-        // Spec §8.9's last sentence: "A claude-cli: entry additionally requires a non-empty
-        // CLAUDE_CODE_OAUTH_TOKEN." This is a per-entry validation concern, not a whole-config on/off
-        // switch -- only entries needing the token are dropped.
+        // The provider-validation callback stands in for Infrastructure's real check (e.g. claude-cli
+        // needing a token) without Application learning any provider name or credential.
         var options = Valid();
-        options.ClaudeCodeOAuthToken = "";
+        options.ModelsRaw = "claude-cli:sonnet,other:haiku";
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, provider => provider == "other" ? "is not usable" : null);
 
-        result.IsEnabled.ShouldBeFalse(); // both configured entries are claude-cli: -- dropping both leaves zero models
-        result.Errors.ShouldContain(e => e.Contains("LLM_MODELS") && e.Contains("CLAUDE_CODE_OAUTH_TOKEN"));
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Errors.ShouldContain(e => e.Contains("LLM_MODELS") && e.Contains("is not usable"));
+    }
+
+    [Fact]
+    public void Dropping_every_entry_because_the_provider_fails_validation_turns_llm_off_with_the_error()
+    {
+        var options = Valid(); // both configured entries use "claude-cli"
+
+        var result = LlmConfigParser.Parse(options, _ => "is not usable");
+
+        result.IsEnabled.ShouldBeFalse();
+        result.Errors.ShouldContain(e => e.Contains("LLM_MODELS") && e.Contains("is not usable"));
+    }
+
+    [Fact]
+    public void A_name_from_an_entry_dropped_for_an_invalid_provider_is_not_reserved_for_a_later_entry()
+    {
+        // Provider validity is checked before the name-uniqueness check, so a name used by a
+        // dropped (invalid-provider) entry stays free for a later, valid entry with the same name.
+        var options = Valid();
+        options.ModelsRaw = "bad:sonnet,claude-cli:sonnet";
+
+        var result = LlmConfigParser.Parse(options, provider => provider == "bad" ? "is not usable" : null);
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Config.Models.Single().ProviderPrefix.ShouldBe("claude-cli");
     }
 
     [Fact]
@@ -130,23 +191,10 @@ public class LlmConfigParserTests
         var options = Valid();
         options.ModelsRaw = "sonnet,haiku"; // both missing the required colon
 
-        var result = LlmConfigParser.Parse(options);
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
 
         result.IsEnabled.ShouldBeFalse();
         result.Config.ShouldBeNull();
         result.Errors.Count.ShouldBe(2);
-    }
-
-    [Fact]
-    public void A_non_claude_cli_entry_does_not_require_the_oauth_token()
-    {
-        var options = Valid();
-        options.ModelsRaw = "some-other-provider:model-x";
-        options.ClaudeCodeOAuthToken = "";
-
-        var result = LlmConfigParser.Parse(options);
-
-        result.IsEnabled.ShouldBeTrue();
-        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "model-x" });
     }
 }

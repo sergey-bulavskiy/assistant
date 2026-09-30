@@ -10,7 +10,7 @@ public interface IModelAvailability
 
     void MarkUnavailable(string modelName, DateTimeOffset until);
 
-    /// <summary>Clears any unavailability mark (spec §8.10: the CLI-install hosted service, Task 10,
-    /// uses this once the pinned CLI version is confirmed installed). A no-op otherwise.</summary>
+    /// <summary>Clears any unavailability mark. A no-op if the model was never marked
+    /// unavailable.</summary>
     void MarkAvailable(string modelName);
 }

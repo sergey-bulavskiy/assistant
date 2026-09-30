@@ -19,8 +19,7 @@ public class ModelCatalogTests
         MaxOutputTokens = 4000,
         CallTimeoutSeconds = 120,
         MaxConcurrentCalls = 2,
-        ModelCooldownMinutes = 30,
-        ClaudeCodeOAuthToken = "test-token"
+        ModelCooldownMinutes = 30
     });
 
     [Fact]
@@ -32,11 +31,29 @@ public class ModelCatalogTests
     }
 
     [Fact]
-    public void A_known_preference_is_tried_first_then_the_rest_of_the_chain()
+    public void A_known_preference_is_tried_first_then_the_rest_of_the_chain_in_its_original_order()
     {
-        var order = Catalog().GetCandidateOrder(LlmConfig.SmartTier, preferredModel: "haiku");
+        var catalog = new ModelCatalog(new LlmConfig
+        {
+            Models = new[]
+            {
+                new ModelCatalogEntry("claude-cli", "a"),
+                new ModelCatalogEntry("claude-cli", "b"),
+                new ModelCatalogEntry("claude-cli", "c")
+            },
+            CallsPerMinute = 10,
+            CallsPerDay = 200,
+            MaxContextMessages = 30,
+            MaxInputChars = 40000,
+            MaxOutputTokens = 4000,
+            CallTimeoutSeconds = 120,
+            MaxConcurrentCalls = 2,
+            ModelCooldownMinutes = 30
+        });
 
-        order.Select(m => m.Name).ShouldBe(new[] { "haiku", "sonnet" });
+        var order = catalog.GetCandidateOrder(LlmConfig.SmartTier, preferredModel: "b");
+
+        order.Select(m => m.Name).ShouldBe(new[] { "b", "a", "c" });
     }
 
     [Fact]

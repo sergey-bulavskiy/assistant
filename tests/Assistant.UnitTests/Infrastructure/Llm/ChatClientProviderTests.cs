@@ -33,10 +33,11 @@ public class ChatClientProviderTests
     }
 
     [Fact]
-    public void RegisteredPrefixes_lists_every_configured_provider()
+    public void GetClient_matches_the_registered_prefix_regardless_of_case()
     {
-        var provider = new ChatClientProvider(new Dictionary<string, IChatClient> { ["claude-cli"] = new StubChatClient() });
+        var client = new StubChatClient();
+        var provider = new ChatClientProvider(new Dictionary<string, IChatClient> { ["claude-cli"] = client });
 
-        provider.RegisteredPrefixes.ShouldBe(new[] { "claude-cli" });
+        provider.GetClient("CLAUDE-CLI").ShouldBeSameAs(client);
     }
 }

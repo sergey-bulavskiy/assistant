@@ -8,7 +8,7 @@ public class ChatClientProvider : IChatClientProvider
 
     public ChatClientProvider(IReadOnlyDictionary<string, IChatClient> clientsByPrefix)
     {
-        _clientsByPrefix = clientsByPrefix;
+        _clientsByPrefix = new Dictionary<string, IChatClient>(clientsByPrefix, StringComparer.OrdinalIgnoreCase);
     }
 
     public IReadOnlyCollection<string> RegisteredPrefixes => _clientsByPrefix.Keys.ToArray();

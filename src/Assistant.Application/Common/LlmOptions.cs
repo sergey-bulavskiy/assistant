@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Assistant.Application.Common;
 
 // Raw config, one property per LLM_* env var, read as strings so an empty/missing value is
@@ -13,13 +15,12 @@ public class LlmOptions
     public string CallTimeoutSecondsRaw { get; set; } = string.Empty;
     public string MaxConcurrentCallsRaw { get; set; } = string.Empty;
     public string ModelCooldownMinutesRaw { get; set; } = string.Empty;
-    public string ClaudeCodeOAuthToken { get; set; } = string.Empty;
 }
 
 // One "provider:name" entry from LLM_MODELS. Name (the part after the colon) is what /model and
 // the catalog use to identify this entry; it must be unique across the whole catalog.
-// ProviderPrefix (the part before the colon) is looked up by IChatClientProvider -- Application
-// never learns what the prefix means.
+// ProviderPrefix (the part before the colon, lower-cased) is looked up by IChatClientProvider --
+// Application never learns what the prefix means or which provider it names.
 public record ModelCatalogEntry(string ProviderPrefix, string Name);
 
 public class LlmConfig
@@ -33,7 +34,6 @@ public class LlmConfig
     public required int CallTimeoutSeconds { get; init; }
     public required int MaxConcurrentCalls { get; init; }
     public required int ModelCooldownMinutes { get; init; }
-    public required string ClaudeCodeOAuthToken { get; init; }
 
     // M3a defines exactly one tier; its chain is LLM_MODELS' own order (spec section 3.1).
     public const string SmartTier = "smart";
@@ -43,9 +43,11 @@ public record LlmConfigParseResult(bool IsEnabled, LlmConfig? Config, IReadOnlyL
 
 public static class LlmConfigParser
 {
-    private const string ClaudeCliProviderPrefix = "claude-cli";
-
-    public static LlmConfigParseResult Parse(LlmOptions options)
+    // validateProvider: given a lower-cased provider prefix, returns null when the provider is
+    // usable, or an error clause (naming the missing/invalid piece of config, never its value)
+    // when it is not. Keeps Application free of any provider name or credential (spec §3.1); the
+    // caller (Infrastructure, at DI composition time) supplies the actual check.
+    public static LlmConfigParseResult Parse(LlmOptions options, Func<string, string?> validateProvider)
     {
         if (string.IsNullOrWhiteSpace(options.ModelsRaw))
         {
@@ -60,7 +62,7 @@ public static class LlmConfigParser
         var entryErrors = new List<string>();
         var limitErrors = new List<string>();
 
-        var models = ParseModels(options.ModelsRaw, options.ClaudeCodeOAuthToken, entryErrors);
+        var models = ParseModels(options.ModelsRaw, validateProvider, entryErrors);
 
         var callsPerMinute = ParsePositiveInt(options.CallsPerMinuteRaw, "LLM_CALLS_PER_MINUTE", limitErrors);
         var callsPerDay = ParsePositiveInt(options.CallsPerDayRaw, "LLM_CALLS_PER_DAY", limitErrors);
@@ -96,15 +98,14 @@ public static class LlmConfigParser
             MaxOutputTokens = maxOutputTokens,
             CallTimeoutSeconds = callTimeoutSeconds,
             MaxConcurrentCalls = maxConcurrentCalls,
-            ModelCooldownMinutes = modelCooldownMinutes,
-            ClaudeCodeOAuthToken = options.ClaudeCodeOAuthToken
+            ModelCooldownMinutes = modelCooldownMinutes
         };
         // entryErrors may be non-empty even on success (e.g. a dropped duplicate) -- still reported
         // so the owner sees what happened, but not fatal since at least one model remains.
         return new LlmConfigParseResult(true, config, entryErrors);
     }
 
-    private static IReadOnlyList<ModelCatalogEntry> ParseModels(string raw, string oauthToken, List<string> errors)
+    private static IReadOnlyList<ModelCatalogEntry> ParseModels(string raw, Func<string, string?> validateProvider, List<string> errors)
     {
         var entries = new List<ModelCatalogEntry>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -118,20 +119,21 @@ public static class LlmConfigParser
                 continue;
             }
 
-            var provider = part[..colonIndex];
+            var provider = part[..colonIndex].ToLowerInvariant();
             var name = part[(colonIndex + 1)..];
+
+            // Provider validity is checked before reserving the name for duplicate detection, so a
+            // dropped entry never blocks a later, valid entry from reusing its name.
+            var providerError = validateProvider(provider);
+            if (providerError is not null)
+            {
+                errors.Add($"LLM_MODELS entry '{part}' {providerError}; dropped.");
+                continue;
+            }
 
             if (!seenNames.Add(name))
             {
                 errors.Add($"LLM_MODELS entry '{part}' has a duplicate model name '{name}'; dropped (names must be unique).");
-                continue;
-            }
-
-            if (string.Equals(provider, ClaudeCliProviderPrefix, StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(oauthToken))
-            {
-                // Spec §8.9's last sentence: a claude-cli: entry needs a non-empty
-                // CLAUDE_CODE_OAUTH_TOKEN -- a per-entry validation concern, not a call-time failure.
-                errors.Add($"LLM_MODELS entry '{part}' needs a non-empty CLAUDE_CODE_OAUTH_TOKEN; dropped.");
                 continue;
             }
 
@@ -143,9 +145,9 @@ public static class LlmConfigParser
 
     private static int ParsePositiveInt(string raw, string variableName, List<string> errors)
     {
-        if (!int.TryParse(raw, out var value) || value <= 0)
+        if (!int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value <= 0)
         {
-            errors.Add($"{variableName} must be a positive integer (was '{raw}').");
+            errors.Add($"{variableName} must be a positive integer.");
             return 0;
         }
 

@@ -19,8 +19,11 @@ public class ModelAvailability : IModelAvailability
     public DateTimeOffset? RetryAt(string modelName) =>
         _unavailableUntil.TryGetValue(modelName, out var until) && until > _clock.UtcNow ? until : null;
 
+    // Never shortens an existing mark: a later, shorter cooldown for the same model (e.g. a second
+    // failure racing a first with a longer backoff) must not make it available sooner than an
+    // already-recorded mark promised.
     public void MarkUnavailable(string modelName, DateTimeOffset until) =>
-        _unavailableUntil[modelName] = until;
+        _unavailableUntil.AddOrUpdate(modelName, until, (_, old) => old > until ? old : until);
 
     public void MarkAvailable(string modelName) =>
         _unavailableUntil.TryRemove(modelName, out _);

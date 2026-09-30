@@ -65,12 +65,26 @@ public class ModelAvailabilityTests
     }
 
     [Fact]
-    public void MarkAvailable_on_a_model_that_was_never_marked_unavailable_is_a_no_op()
+    public void MarkUnavailable_never_shortens_an_existing_mark()
     {
-        var availability = new ModelAvailability(new MutableClock(DateTimeOffset.UtcNow));
+        var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var availability = new ModelAvailability(new MutableClock(now));
+        availability.MarkUnavailable("sonnet", now.AddMinutes(30));
 
-        availability.MarkAvailable("sonnet"); // must not throw
+        availability.MarkUnavailable("sonnet", now.AddMinutes(5)); // a shorter mark racing in later
 
-        availability.IsAvailable("sonnet").ShouldBeTrue();
+        availability.RetryAt("sonnet").ShouldBe(now.AddMinutes(30));
+    }
+
+    [Fact]
+    public void MarkUnavailable_extends_an_existing_mark_when_the_new_one_is_longer()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var availability = new ModelAvailability(new MutableClock(now));
+        availability.MarkUnavailable("sonnet", now.AddMinutes(5));
+
+        availability.MarkUnavailable("sonnet", now.AddMinutes(30));
+
+        availability.RetryAt("sonnet").ShouldBe(now.AddMinutes(30));
     }
 }
