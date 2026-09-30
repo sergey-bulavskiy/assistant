@@ -106,10 +106,17 @@ commands and replies, not ordinary messages. Before adding a role bot to a group
 `/mybots` → the role bot → Bot Settings → **Group Privacy** → **Turn off**. (Making the bot a group
 admin also works.)
 
-## 6. Smoke checklist
+## 6. Smoke test
 
-Run after setup and after any release that changes bot behaviour. It creates real bots and a real
-family.
+An automated smoke test drives real Telegram through one throwaway account: once the repository
+variable `SMOKE_ENABLED` is `true`, CD runs it on every merge to `main` and moves `latest` (what
+Watchtower pulls) only if it passes; until then CD promotes without it. One-time setup, running it
+locally and enabling the gate: `tests/Assistant.SmokeTests/README.md`. It does not cover creating a
+bot through `/newbot`, an unknown user's approval or promoting a second owner; the manual
+checklist below does.
+
+Manual checklist, for after setup and after any release that changes bot behaviour. It creates
+real bots and a real family.
 
 - On startup with no family yet, the log prints a claim code (new on every start) — send
   `/claim <code>` to the manager bot in a DM. It replies confirming you're the platform owner.
@@ -130,6 +137,10 @@ family.
   any bot → no duplicate row, no duplicate reply, for every bot independently.
 
 ## Rollback
+
+With the smoke gate enabled, `latest` only moves after the smoke test passes, so pinning is only
+needed to go back to an older release. A `sha-` tag of a build that failed smoke exists in GHCR but
+was never promoted; don't pin it.
 
 Pin a previous image by setting `IMAGE_TAG` in `deploy/.env` to a known-good short SHA (from a past
 successful build, e.g. `sha-abc1234`), then:

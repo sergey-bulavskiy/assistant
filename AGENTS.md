@@ -46,7 +46,7 @@ command only as an example next to a generic fallback.
 | `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing; ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, …) | — |
 | `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption | `src/Assistant.Infrastructure/AGENTS.md` |
 | `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
-| `tests/` | Unit + integration (IntegreSQL) tests | `tests/AGENTS.md` |
+| `tests/` | Unit + integration (IntegreSQL) tests; opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |
 | `deploy/` | Production compose, `.env.example` | `deploy/AGENTS.md` |
 | `.github/` | CI/CD workflows, Dependabot | `.github/AGENTS.md` |
 
@@ -78,6 +78,8 @@ This project handles personal and health data at runtime. None of it may enter t
 dotnet build -c Release -warnaserror   # same flags as CI; warnings are errors
 dotnet test -c Release                 # integration tests need Docker running
 ```
+
+A plain `dotnet test` skips the smoke test; it is opt-in (`tests/AGENTS.md`).
 
 Faster local loop and test infrastructure details: `tests/AGENTS.md`.
 
@@ -134,9 +136,12 @@ one per stage. Keep command output small: read logs only when something failed.
    below) only when CI is green and the owner has approved merging in the current session.
 9. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
    on `main` finishes — retry until a run for the merge commit appears), then
-   `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`.
-   Report the deployed image tag (`sha-<first 7 of the merge commit>`). If CD fails, say so and
-   investigate; the change is merged but not delivered.
+   `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`. CD builds the `sha-<7>`
+   image, runs the real-Telegram smoke test against it (only when the repository variable
+   `SMOKE_ENABLED` is `true`; otherwise `smoke` is skipped and the run warns), and then promotes `latest`.
+   Report the deployed image tag (`sha-<first 7 of the merge commit>`) once `promote` succeeded.
+   If `smoke` fails, `latest` is unchanged (the home PC keeps the previous release): say so and
+   investigate; the change is merged but not delivered. Re-run failed jobs for transient failures (only the newest run promotes).
 
 Outward actions beyond this flow (force pushes, deleting remote branches other than the merged
 one, changing repo settings, publishing packages) need the owner's explicit approval.

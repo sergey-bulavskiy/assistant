@@ -8,7 +8,9 @@ on:
 
 permissions:
   contents: read
-  packages: write
+
+env:
+  IMAGE: ghcr.io/sergey-bulavskiy/assistant
 
 jobs:
   build-and-push:
@@ -18,6 +20,11 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,15 +47,106 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Only the sha- tag here: `latest` (what Watchtower follows) moves in the promote job,
+      # after the smoke job passes.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/sergey-bulavskiy/assistant:latest
-            ghcr.io/sergey-bulavskiy/assistant:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ env.IMAGE }}:sha-${{ steps.meta.outputs.short_sha }}
           build-args: |
             GIT_SHA=${{ steps.meta.outputs.git_sha }}
             BUILD_TIME=${{ steps.meta.outputs.build_time }}
           labels: |
             org.opencontainers.image.source=https://github.com/sergey-bulavskiy/assistant
+
+  # Off until the repository variable SMOKE_ENABLED is 'true' (set it once the smoke test has
+  # passed against real Telegram and the `smoke` environment secrets exist). While it is off,
+  # this job is skipped and promote still runs, as CD did before the gate existed.
+  smoke:
+    if: ${{ vars.SMOKE_ENABLED == 'true' }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: smoke
+    timeout-minutes: 30
+    concurrency:
+      group: smoke
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test against the sha- image
+        env:
+          SMOKE: "1"
+          SMOKE_IMAGE: ${{ env.IMAGE }}:sha-${{ needs.build-and-push.outputs.short_sha }}
+          SMOKE_TG_API_ID: ${{ secrets.SMOKE_TG_API_ID }}
+          SMOKE_TG_API_HASH: ${{ secrets.SMOKE_TG_API_HASH }}
+          SMOKE_OWNER_SESSION: ${{ secrets.SMOKE_OWNER_SESSION }}
+          SMOKE_MANAGER_BOT_TOKEN: ${{ secrets.SMOKE_MANAGER_BOT_TOKEN }}
+          SMOKE_MANAGER_BOT_USERNAME: ${{ secrets.SMOKE_MANAGER_BOT_USERNAME }}
+          SMOKE_ROLE_BOT_TOKEN: ${{ secrets.SMOKE_ROLE_BOT_TOKEN }}
+          SMOKE_ROLE_BOT_USERNAME: ${{ secrets.SMOKE_ROLE_BOT_USERNAME }}
+          SMOKE_GROUP_TITLE: ${{ secrets.SMOKE_GROUP_TITLE }}
+          SMOKE_FORUM_TITLE: ${{ secrets.SMOKE_FORUM_TITLE }}
+        run: dotnet test tests/Assistant.SmokeTests --configuration Release
+
+  promote:
+    needs: [build-and-push, smoke]
+    # Runs when smoke passed, or was skipped because the gate is off; never after a smoke failure.
+    if: >-
+      ${{ !cancelled() &&
+      needs.build-and-push.result == 'success' &&
+      (needs.smoke.result == 'success' || needs.smoke.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Warn when promoting without the smoke gate
+        if: needs.smoke.result == 'skipped'
+        run: echo "::warning::Smoke gate is off (repository variable SMOKE_ENABLED is not 'true'); promoting without a smoke test."
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check that this commit is still the head of main
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          main_sha=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$main_sha" = "$HEAD_SHA" ]; then
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main has moved past $HEAD_SHA; not promoting it (a newer run promotes its own image)."
+          fi
+
+      - name: Retag sha- image as latest (no rebuild)
+        if: steps.fresh.outputs.promote == 'true'
+        run: >-
+          docker buildx imagetools create
+          --tag ${{ env.IMAGE }}:latest
+          ${{ env.IMAGE }}:sha-${{ needs.build-and-push.outputs.short_sha }}

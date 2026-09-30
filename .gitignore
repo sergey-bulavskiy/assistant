@@ -26,3 +26,6 @@ TestResults/
 .superpowers/
 
 MANUAL-SMOKE-TEST-M2.md
+
+# Smoke test secrets (session strings, bot tokens)
+**/smoke.env
