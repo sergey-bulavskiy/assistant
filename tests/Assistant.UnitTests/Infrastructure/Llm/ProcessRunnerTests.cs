@@ -24,7 +24,7 @@ public class ProcessRunnerTests
         var runner = new ProcessRunner();
         var environment = new Dictionary<string, string> { ["ASSISTANT_TEST_VAR"] = "visible-value" };
 
-        var result = await runner.RunAsync(Request("/bin/sh", new[] { "-c", "env" }, environment), CancellationToken.None);
+        var result = await runner.RunAsync(Request("/usr/bin/env", Array.Empty<string>(), environment), CancellationToken.None);
 
         result.TimedOut.ShouldBeFalse();
         result.StandardOutput.ShouldContain("ASSISTANT_TEST_VAR=visible-value");
