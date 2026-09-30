@@ -3,6 +3,7 @@ using Assistant.Application.Common;
 using Assistant.Application.Manager;
 using Assistant.Host;
 using Assistant.Infrastructure;
+using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -64,6 +65,29 @@ using (var scope = app.Services.CreateScope())
     {
         var claimCode = scope.ServiceProvider.GetRequiredService<IClaimCodeProvider>();
         app.Logger.LogInformation("Platform not claimed yet. Send /claim {ClaimCode} to the manager bot.", claimCode.Code);
+    }
+}
+
+using (var scope = app.Services.CreateScope())
+{
+    // One line either way (spec 3.2/8.9): never the token or any other config value, model names
+    // only -- an invalid/absent LLM_MODELS must never crash startup (LlmStartupResult/LlmConfig?
+    // are always registered, see AddInfrastructure).
+    var llmStartup = scope.ServiceProvider.GetRequiredService<LlmStartupResult>();
+    foreach (var error in llmStartup.Errors)
+    {
+        app.Logger.LogError("LLM configuration error: {Error}", error);
+    }
+
+    if (llmStartup.IsEnabled)
+    {
+        var llmConfig = scope.ServiceProvider.GetService<Assistant.Application.Common.LlmConfig>();
+        var modelNames = llmConfig?.Models.Select(m => m.Name).ToArray() ?? Array.Empty<string>();
+        app.Logger.LogInformation("LLM enabled with {Count} model(s): {Models}", modelNames.Length, string.Join(", ", modelNames));
+    }
+    else
+    {
+        app.Logger.LogInformation("LLM disabled");
     }
 }
 
