@@ -56,7 +56,22 @@ public static class InfrastructureServiceCollectionExtensions
             MaxOutputTokensRaw = configuration["LLM_MAX_OUTPUT_TOKENS"] ?? string.Empty,
             CallTimeoutSecondsRaw = configuration["LLM_CALL_TIMEOUT_SECONDS"] ?? string.Empty,
             MaxConcurrentCallsRaw = configuration["LLM_MAX_CONCURRENT_CALLS"] ?? string.Empty,
-            ModelCooldownMinutesRaw = configuration["LLM_MODEL_COOLDOWN_MINUTES"] ?? string.Empty
+            ModelCooldownMinutesRaw = configuration["LLM_MODEL_COOLDOWN_MINUTES"] ?? string.Empty,
+            // M3b additions (Task 9): LlmConfigParser.ParseModels checks AnthropicApiKey/OpenAiApiKey
+            // itself (spec §10.2) -- these must reach LlmOptions here or every anthropic:/openai:
+            // entry is dropped as "missing key" regardless of what ANTHROPIC_API_KEY/OPENAI_API_KEY
+            // actually hold.
+            PricesRaw = configuration["LLM_PRICES"] ?? string.Empty,
+            AnthropicApiKey = configuration["ANTHROPIC_API_KEY"] ?? string.Empty,
+            AnthropicProxy = configuration["ANTHROPIC_PROXY"] ?? string.Empty,
+            OpenAiApiKey = configuration["OPENAI_API_KEY"] ?? string.Empty,
+            OpenAiBaseUrl = configuration["OPENAI_BASE_URL"] ?? string.Empty,
+            OpenAiProxy = configuration["OPENAI_PROXY"] ?? string.Empty,
+            BudgetDailyUsdRaw = configuration["LLM_BUDGET_DAILY_USD"] ?? string.Empty,
+            BudgetMonthlyUsdRaw = configuration["LLM_BUDGET_MONTHLY_USD"] ?? string.Empty,
+            BudgetWarnPercentRaw = configuration["LLM_BUDGET_WARN_PERCENT"] ?? string.Empty,
+            BudgetHardPercentRaw = configuration["LLM_BUDGET_HARD_PERCENT"] ?? string.Empty,
+            FastModelsRaw = configuration["LLM_FAST_MODELS"] ?? string.Empty
         };
 
         // CLAUDE_HOME (spec §8.10): a dedicated, writable directory -- a named Docker volume in
@@ -84,8 +99,67 @@ public static class InfrastructureServiceCollectionExtensions
         var llmParseResult = LlmConfigParser.Parse(llmOptions, LlmProviderValidation.Create(claudeCliOptionsForValidation));
         var llmEnabled = llmParseResult.IsEnabled;
         var llmConfig = llmParseResult.Config;
+        var llmStartupErrors = new List<string>(llmParseResult.Errors);
 
-        services.AddSingleton(new LlmStartupResult(llmEnabled, llmParseResult.Errors));
+        // Proxy validity is provider-wide and can only be checked here -- Application/
+        // LlmConfigParser never sees ANTHROPIC_PROXY/OPENAI_PROXY (spec §3.1). An invalid proxy
+        // drops every entry of that one provider (one Error each, naming only the variable --
+        // ProxyHandlerFactory never returns the URL itself); claude-cli entries and the other
+        // provider are unaffected. Done before anything below is registered so every DI consumer
+        // of LlmConfig/LlmStartupResult (including the branch just below) sees the final catalog.
+        if (llmEnabled && llmConfig is not null)
+        {
+            var anthropicProxy = ProxyHandlerFactory.Create("ANTHROPIC_PROXY", configuration["ANTHROPIC_PROXY"] ?? string.Empty);
+            var openAiProxy = ProxyHandlerFactory.Create("OPENAI_PROXY", configuration["OPENAI_PROXY"] ?? string.Empty);
+
+            var survivingModels = new List<ModelCatalogEntry>();
+            foreach (var entry in llmConfig.Models)
+            {
+                if (string.Equals(entry.ProviderPrefix, LlmProviderValidation.AnthropicPrefix, StringComparison.OrdinalIgnoreCase) && anthropicProxy.IsFailed)
+                {
+                    llmStartupErrors.Add($"LLM_MODELS entry 'anthropic:{entry.Name}' dropped: {anthropicProxy.Error}");
+                    continue;
+                }
+
+                if (string.Equals(entry.ProviderPrefix, LlmProviderValidation.OpenAiPrefix, StringComparison.OrdinalIgnoreCase) && openAiProxy.IsFailed)
+                {
+                    llmStartupErrors.Add($"LLM_MODELS entry 'openai:{entry.Name}' dropped: {openAiProxy.Error}");
+                    continue;
+                }
+
+                survivingModels.Add(entry);
+            }
+
+            if (survivingModels.Count != llmConfig.Models.Count)
+            {
+                var survivingFastModels = llmConfig.FastModels.Where(f => survivingModels.Contains(f)).ToArray();
+                llmConfig = new LlmConfig
+                {
+                    Models = survivingModels,
+                    CallsPerMinute = llmConfig.CallsPerMinute,
+                    CallsPerDay = llmConfig.CallsPerDay,
+                    MaxContextMessages = llmConfig.MaxContextMessages,
+                    MaxInputChars = llmConfig.MaxInputChars,
+                    MaxOutputTokens = llmConfig.MaxOutputTokens,
+                    CallTimeoutSeconds = llmConfig.CallTimeoutSeconds,
+                    MaxConcurrentCalls = llmConfig.MaxConcurrentCalls,
+                    ModelCooldownMinutes = llmConfig.ModelCooldownMinutes,
+                    Prices = llmConfig.Prices,
+                    Budget = llmConfig.Budget,
+                    FastModels = survivingFastModels
+                };
+            }
+
+            if (survivingModels.Count == 0)
+            {
+                // Every surviving entry was a paid one with an invalid proxy -- nothing usable is
+                // left (spec 8.9: no valid models means LLM is off, same as LLM_MODELS unset).
+                llmEnabled = false;
+                llmConfig = null;
+            }
+        }
+
+        services.AddSingleton(new LlmStartupResult(llmEnabled, llmStartupErrors));
         // Always registered, even when null -- GeneralAssistant/consumers take LlmConfig? and treat
         // null as "off" (Decision #6). The factory overload is required here: AddSingleton<T>(instance)
         // throws ArgumentNullException for a null instance, but AddSingleton<T>(factory) does not
@@ -110,10 +184,55 @@ public static class InfrastructureServiceCollectionExtensions
                 sp.GetRequiredService<ClaudeCliOptions>(),
                 sp.GetRequiredService<IClock>(),
                 sp.GetRequiredService<ILogger<ClaudeCliChatClient>>()));
-            services.AddSingleton<IChatClientProvider>(sp => new ChatClientProvider(new Dictionary<string, IChatClient>
+            services.AddSingleton<IChatClientProvider>(sp =>
             {
-                [LlmProviderValidation.ClaudeCliPrefix] = sp.GetRequiredService<IChatClient>()
-            }));
+                var clients = new Dictionary<string, IChatClient>
+                {
+                    [LlmProviderValidation.ClaudeCliPrefix] = sp.GetRequiredService<IChatClient>()
+                };
+
+                // One shared HttpClient per provider (not per entry): the M3b execution notes
+                // confirmed empirically that neither SDK's IChatClient.Dispose() disposes a
+                // passed-in HttpClient, so sharing it across every model entry of that provider is
+                // safe. HttpClient.Timeout is infinite -- both factories already set the SDK's own
+                // timeout to callTimeout + 5s, and LlmGateway's own CancelAfter(callTimeout) always
+                // wins that race; a shorter HttpClient.Timeout would let the HttpClient itself time
+                // out first with a bare, unhandled exception instead.
+                var anthropicEntries = llmConfig.Models
+                    .Where(m => string.Equals(m.ProviderPrefix, LlmProviderValidation.AnthropicPrefix, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                if (anthropicEntries.Length > 0)
+                {
+                    var proxyResult = ProxyHandlerFactory.Create("ANTHROPIC_PROXY", configuration["ANTHROPIC_PROXY"] ?? string.Empty);
+                    var anthropicHttpClient = proxyResult.Handler is null ? new HttpClient() : new HttpClient(proxyResult.Handler);
+                    anthropicHttpClient.Timeout = Timeout.InfiniteTimeSpan;
+                    var apiKey = configuration["ANTHROPIC_API_KEY"] ?? string.Empty;
+                    foreach (var entry in anthropicEntries)
+                    {
+                        clients[$"{LlmProviderValidation.AnthropicPrefix}:{entry.Name}"] = AnthropicChatClientFactory.Create(
+                            apiKey, anthropicHttpClient, entry.Name, TimeSpan.FromSeconds(llmConfig.CallTimeoutSeconds));
+                    }
+                }
+
+                var openAiEntries = llmConfig.Models
+                    .Where(m => string.Equals(m.ProviderPrefix, LlmProviderValidation.OpenAiPrefix, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                if (openAiEntries.Length > 0)
+                {
+                    var proxyResult = ProxyHandlerFactory.Create("OPENAI_PROXY", configuration["OPENAI_PROXY"] ?? string.Empty);
+                    var openAiHttpClient = proxyResult.Handler is null ? new HttpClient() : new HttpClient(proxyResult.Handler);
+                    openAiHttpClient.Timeout = Timeout.InfiniteTimeSpan;
+                    var apiKey = configuration["OPENAI_API_KEY"] ?? string.Empty;
+                    var baseUrl = configuration["OPENAI_BASE_URL"];
+                    foreach (var entry in openAiEntries)
+                    {
+                        clients[$"{LlmProviderValidation.OpenAiPrefix}:{entry.Name}"] = OpenAiChatClientFactory.Create(
+                            apiKey, openAiHttpClient, entry.Name, baseUrl, TimeSpan.FromSeconds(llmConfig.CallTimeoutSeconds));
+                    }
+                }
+
+                return new ChatClientProvider(clients);
+            });
             services.AddSingleton(new ModelCatalog(llmConfig));
 
             // Nit N1: model names are only ever needed by the closures below (this factory and the

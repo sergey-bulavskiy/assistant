@@ -10,12 +10,20 @@ namespace Assistant.Infrastructure.Llm;
 public static class LlmProviderValidation
 {
     public const string ClaudeCliPrefix = "claude-cli";
+    public const string AnthropicPrefix = "anthropic";
+    public const string OpenAiPrefix = "openai";
 
     public static Func<string, string?> Create(ClaudeCliOptions claudeCliOptions) => provider => provider switch
     {
         ClaudeCliPrefix => string.IsNullOrWhiteSpace(claudeCliOptions.OAuthToken)
             ? "needs a non-empty CLAUDE_CODE_OAUTH_TOKEN"
             : null,
+        // anthropic/openai are recognized here (the provider prefix itself is valid) -- the
+        // per-entry API-key/price/budget checks live inside LlmConfigParser itself (spec §10.2's
+        // M3b execution-notes amendment), not in this validator, since this validator's only job
+        // is "do we have a registered provider for this prefix at all".
+        AnthropicPrefix => null,
+        OpenAiPrefix => null,
         _ => $"references an unregistered provider '{provider}'"
     };
 }
