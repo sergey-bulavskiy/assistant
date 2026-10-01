@@ -79,6 +79,11 @@ using (var scope = app.Services.CreateScope())
         app.Logger.LogError("LLM configuration error: {Error}", error);
     }
 
+    foreach (var warning in llmStartup.Warnings)
+    {
+        app.Logger.LogWarning("LLM configuration warning: {Warning}", warning);
+    }
+
     if (llmStartup.IsEnabled)
     {
         var llmConfig = scope.ServiceProvider.GetService<Assistant.Application.Common.LlmConfig>();

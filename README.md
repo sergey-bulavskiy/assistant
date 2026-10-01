@@ -185,17 +185,16 @@ the rest of the bots work with none of them set. Steps in this exact order (spec
 Skip this if `claude-cli` (the previous section) is enough for now — every variable here is optional
 and empty by default.
 
-**Before putting a key in `.env`:** create a dedicated API key used only by this app (not a key
-shared with anything else), and set a monthly spend limit at the provider — a project budget in the
-OpenAI dashboard, or a monthly spend limit in the Anthropic Console. This app's own `LLM_BUDGET_*`
-variables are a second, independent guard on top of that provider-side cap, not a replacement for it:
-the app cannot verify the provider-side cap exists, so set it first.
-
-1. Get an API key from Anthropic (`ANTHROPIC_API_KEY`) and/or OpenAI (`OPENAI_API_KEY`). Optionally
+1. **Before putting a key in `.env`:** create a dedicated API key used only by this app (not a key
+   shared with anything else), and set a monthly spend limit at the provider — a project budget in
+   the OpenAI dashboard, or a monthly spend limit in the Anthropic Console. This app's own
+   `LLM_BUDGET_*` variables are a second, independent guard on top of that provider-side cap, not a
+   replacement for it: the app cannot verify the provider-side cap exists, so set it first.
+2. Get an API key from Anthropic (`ANTHROPIC_API_KEY`) and/or OpenAI (`OPENAI_API_KEY`). Optionally
    `OPENAI_BASE_URL` (an OpenAI-compatible endpoint other than `api.openai.com`) and
    `ANTHROPIC_PROXY`/`OPENAI_PROXY` (`http://`, `https://` or `socks5://[user:pass@]host:port`, if
    this provider needs to be reached through a proxy from this network).
-2. Add `anthropic:<model>`/`openai:<model>` entries to `LLM_MODELS` (alongside or instead of
+3. Add `anthropic:<model>`/`openai:<model>` entries to `LLM_MODELS` (alongside or instead of
    `claude-cli:` ones — every entry, regardless of provider, falls back to the next one in the order
    listed) and a matching price in `LLM_PRICES` for each one: comma-separated
    `name=input/output` entries, prices in USD per million tokens (e.g.
@@ -204,31 +203,32 @@ the app cannot verify the provider-side cap exists, so set it first.
    toward budgets and needs no price entry. An `anthropic:`/`openai:` entry missing its API key or its
    price is dropped individually (one logged error) without stopping any other entry, including other
    `claude-cli:` models.
-3. Set `LLM_BUDGET_DAILY_USD` and `LLM_BUDGET_MONTHLY_USD` (both required together — a paid entry
+4. Set `LLM_BUDGET_DAILY_USD` and `LLM_BUDGET_MONTHLY_USD` (both required together — a paid entry
    stays disabled until both are set). Optionally `LLM_BUDGET_WARN_PERCENT` (default 80) and
    `LLM_BUDGET_HARD_PERCENT` (default 120). **The real ceiling this app will ever spend in a
    day/month is that number × `LLM_BUDGET_HARD_PERCENT` / 100, plus possible overshoot of a few calls
    already in flight when the cap is crossed** (so a $2 daily budget with the default hard% can in
-   practice reach a bit over $2.40) — size the provider-side cap from step 0 with that real ceiling in
+   practice reach a bit over $2.40) — size the provider-side cap from step 1 with that real ceiling in
    mind, not the `LLM_BUDGET_*` number alone.
-4. Optional: `LLM_FAST_MODELS` — a cheaper, ordered `provider:model` fallback chain (every entry must
+5. Optional: `LLM_FAST_MODELS` — a cheaper, ordered `provider:model` fallback chain (every entry must
    already appear in `LLM_MODELS`) used automatically once spend crosses 100% of either period, before
    the hard cutoff.
-5. `docker compose -f deploy/docker-compose.yml up -d` (same note as the `claude-cli` section:
+6. `docker compose -f deploy/docker-compose.yml up -d` (same note as the `claude-cli` section:
    Watchtower alone does not pick up new environment variables).
 
 Budget state, checked after every call and before each new one:
 - **Below warn%:** normal — every configured paid and subscription model stays usable.
-- **Warn (≥ warn%, < 100%):** nothing is restricted yet; owners get a one-time DM through the manager
-  bot the first time spend crosses this line for the day or the month.
-- **Soft (≥ 100%, < hard%):** owners get another DM; new calls restrict to `LLM_FAST_MODELS` entries
-  and zero-price (`claude-cli`) entries only — other paid models are skipped as unavailable.
-- **Hard (≥ hard%):** owners get a third DM; only zero-price (`claude-cli`) entries still answer. If
-  none is configured, the assistant refuses with a message naming when the budget resets.
+- **Warn (≥ warn%, < 100%):** nothing is restricted yet; platform admins (owners of the first family)
+  get a one-time DM through the manager bot the first time spend crosses this line for the day or the
+  month.
+- **Soft (≥ 100%, < hard%):** platform admins get another DM; new calls restrict to `LLM_FAST_MODELS`
+  entries and zero-price (`claude-cli`) entries only — other paid models are skipped as unavailable.
+- **Hard (≥ hard%):** platform admins get a third DM; only zero-price (`claude-cli`) entries still
+  answer. If none is configured, the assistant refuses with a message naming when the budget resets.
 
 `/usage` (manager bot, owners only, private chat) shows current spend and state for today and this
 month (when budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own
-family, for the current calendar month.
+family, covering both today and this calendar month.
 
 ## 8. Smoke test
 

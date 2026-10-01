@@ -46,7 +46,7 @@ public class UsageCommandHandlerTests : IntegrationTestBase
             FastModels = Array.Empty<ModelCatalogEntry>()
         };
         IBudgetGuard guard = budget is null ? new NullBudgetGuard() : new BudgetGuard(config, Db, clock);
-        return new UsageCommandHandler(Db, guard, clock);
+        return new UsageCommandHandler(Db, guard, clock, config);
     }
 
     private async Task<long> SeedFamilyAsync()
@@ -230,6 +230,109 @@ public class UsageCommandHandlerTests : IntegrationTestBase
         // must end with one of those, never a sliced-off fragment of a model name.
         var beforeMarker = reply[..^"\n…".Length];
         (beforeMarker.EndsWith('.') || beforeMarker.EndsWith(':')).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_platform_wide_call_count_for_today_and_this_month_is_shown()
+    {
+        var familyAId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyAId);
+        var botAId = await SeedBotAsync(familyAId, "family_a_bot");
+        var familyBId = await SeedFamilyAsync();
+        var botBId = await SeedBotAsync(familyBId, "family_b_bot");
+        await SeedLlmCallAsync(familyAId, botAId, FreeProvider, "sonnet", cost: 0m, createdAt: Now);
+        await SeedLlmCallAsync(familyBId, botBId, FreeProvider, "sonnet", cost: 0m, createdAt: Now);
+        // Earlier this month but not today: counted in the month figure only.
+        await SeedLlmCallAsync(familyBId, botBId, FreeProvider, "sonnet", cost: 0m, createdAt: TodayStart.AddDays(-1));
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.ShouldContain("Вызовов на платформе: 2 сегодня, 3 в этом месяце.");
+    }
+
+    [Fact]
+    public async Task A_limit_reached_attempt_on_a_priced_model_is_not_shown_as_a_subscription()
+    {
+        // Review fix: LlmGateway records a LimitReached attempt at Cost 0 regardless of the model's
+        // real price -- labelling it "подписка" (a Cost == 0 check) would mislabel a failed attempt
+        // on an expensive paid model as free. The catalog's own price decides this, not the row.
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        await SeedLlmCallAsync(familyId, botId, Provider, "claude-haiku-4-5", cost: 0m);
+        var clock = new FixedClock(Now);
+        var config = new LlmConfig
+        {
+            Models = Array.Empty<ModelCatalogEntry>(),
+            CallsPerMinute = 100,
+            CallsPerDay = 1000,
+            MaxContextMessages = 30,
+            MaxInputChars = 8000,
+            MaxOutputTokens = 1024,
+            CallTimeoutSeconds = 30,
+            MaxConcurrentCalls = 4,
+            ModelCooldownMinutes = 15,
+            Prices = new Dictionary<string, ModelPrice> { ["claude-haiku-4-5"] = new ModelPrice(1m, 5m) },
+            Budget = null,
+            FastModels = Array.Empty<ModelCatalogEntry>()
+        };
+        var handler = new UsageCommandHandler(Db, new NullBudgetGuard(), clock, config);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.ShouldContain("claude-haiku-4-5: 1 вызовов, 150 токенов, $0.0000.");
+        reply.ShouldNotContain("подписка");
+    }
+
+    [Fact]
+    public async Task A_zero_priced_paid_provider_entry_is_still_shown_as_a_subscription()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        await SeedLlmCallAsync(familyId, botId, Provider, "free-tier-model", cost: 0m);
+        var clock = new FixedClock(Now);
+        var config = new LlmConfig
+        {
+            Models = Array.Empty<ModelCatalogEntry>(),
+            CallsPerMinute = 100,
+            CallsPerDay = 1000,
+            MaxContextMessages = 30,
+            MaxInputChars = 8000,
+            MaxOutputTokens = 1024,
+            CallTimeoutSeconds = 30,
+            MaxConcurrentCalls = 4,
+            ModelCooldownMinutes = 15,
+            Prices = new Dictionary<string, ModelPrice> { ["free-tier-model"] = new ModelPrice(0m, 0m) },
+            Budget = null,
+            FastModels = Array.Empty<ModelCatalogEntry>()
+        };
+        var handler = new UsageCommandHandler(Db, new NullBudgetGuard(), clock, config);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.ShouldContain("подписка");
+    }
+
+    [Fact]
+    public async Task A_deleted_bots_calls_are_still_counted_under_a_generic_deleted_bot_label()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "soon_to_be_deleted");
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "sonnet", cost: 0m);
+        Db.Bots.Remove(await Db.Bots.FirstAsync(b => b.Id == botId));
+        await Db.SaveChangesAsync();
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        // The old inner-join implementation dropped this row from the breakdown entirely while the
+        // total call count above still counted it -- both must now agree.
+        reply.ShouldContain("1 вызовов"); // total count still includes the deleted bot's call
+        reply.ShouldContain("Бот удалённый бот:");
+        reply.ShouldContain("claude-cli:sonnet");
     }
 
     [Fact]

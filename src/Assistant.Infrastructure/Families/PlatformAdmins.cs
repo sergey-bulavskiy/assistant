@@ -18,7 +18,7 @@ public static class PlatformAdmins
             return Array.Empty<FamilyMember>();
         }
 
-        return await db.FamilyMembers.IgnoreQueryFilters()
+        return await db.FamilyMembers.IgnoreQueryFilters().AsNoTracking()
             .Where(m => m.FamilyId == firstFamilyId && m.IsOwner && m.Status == FamilyMemberStatus.Approved)
             .ToListAsync(cancellationToken);
     }

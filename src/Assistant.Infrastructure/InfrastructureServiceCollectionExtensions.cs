@@ -112,12 +112,26 @@ public static class InfrastructureServiceCollectionExtensions
             var anthropicProxy = ProxyHandlerFactory.Create("ANTHROPIC_PROXY", configuration["ANTHROPIC_PROXY"] ?? string.Empty);
             var openAiProxy = ProxyHandlerFactory.Create("OPENAI_PROXY", configuration["OPENAI_PROXY"] ?? string.Empty);
 
+            // Same reasoning as the proxy validation above: `OpenAiChatClientFactory.Create` does
+            // `new Uri(baseUrl)` with no try/catch, inside the IChatClientProvider singleton factory
+            // lambda -- an invalid OPENAI_BASE_URL would throw there and break resolution of every
+            // entry (including claude-cli), not just openai: ones. Validated here, once, so a bad
+            // value just drops the openai: entries (one Error, naming only the variable) the same
+            // way an invalid OPENAI_PROXY already does.
+            var openAiBaseUrlError = ValidateOpenAiBaseUrl(configuration["OPENAI_BASE_URL"] ?? string.Empty);
+
             var survivingModels = new List<ModelCatalogEntry>();
             foreach (var entry in llmConfig.Models)
             {
                 if (string.Equals(entry.ProviderPrefix, LlmProviderValidation.AnthropicPrefix, StringComparison.OrdinalIgnoreCase) && anthropicProxy.IsFailed)
                 {
                     llmStartupErrors.Add($"LLM_MODELS entry 'anthropic:{entry.Name}' dropped: {anthropicProxy.Error}");
+                    continue;
+                }
+
+                if (string.Equals(entry.ProviderPrefix, LlmProviderValidation.OpenAiPrefix, StringComparison.OrdinalIgnoreCase) && openAiBaseUrlError is not null)
+                {
+                    llmStartupErrors.Add($"LLM_MODELS entry 'openai:{entry.Name}' dropped: {openAiBaseUrlError}");
                     continue;
                 }
 
@@ -159,7 +173,7 @@ public static class InfrastructureServiceCollectionExtensions
             }
         }
 
-        services.AddSingleton(new LlmStartupResult(llmEnabled, llmStartupErrors));
+        services.AddSingleton(new LlmStartupResult(llmEnabled, llmStartupErrors, llmParseResult.Warnings));
         // Always registered, even when null -- GeneralAssistant/consumers take LlmConfig? and treat
         // null as "off" (Decision #6). The factory overload is required here: AddSingleton<T>(instance)
         // throws ArgumentNullException for a null instance, but AddSingleton<T>(factory) does not
@@ -267,6 +281,11 @@ public static class InfrastructureServiceCollectionExtensions
             services.AddSingleton(new ConcurrentCallGate(llmConfig.MaxConcurrentCalls));
             services.AddScoped<IBudgetGuard, BudgetGuard>();
             services.AddScoped<IBudgetNoticeSender, BudgetNoticeSender>();
+            // Singleton: BudgetNoticeDispatcher holds only IServiceScopeFactory/ILogger (both already
+            // singletons) -- it creates its own scope per dispatch, so it needs no scoped state of its
+            // own. Review fix: the reply path must never await the notice check, and must never use
+            // the request's own scoped AssistantDbContext for it -- see LlmGateway.CompleteAsync.
+            services.AddSingleton<IBudgetNoticeDispatcher, BudgetNoticeDispatcher>();
             services.AddScoped<ILlmGateway, LlmGateway>();
         }
         else
@@ -299,5 +318,24 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<BotPollingCoordinator>());
 
         return services;
+    }
+
+    // Never include the raw value in the error: unlike a proxy URL this one carries no credentials,
+    // but keeping the same "name only" shape as ProxyHandlerFactory's errors is simpler to reason
+    // about than giving this one variable a special case.
+    private static string? ValidateOpenAiBaseUrl(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) ||
+            !(uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            return "OPENAI_BASE_URL must be an absolute http:// or https:// URL";
+        }
+
+        return null;
     }
 }

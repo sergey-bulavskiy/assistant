@@ -6,6 +6,7 @@ using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Shouldly;
@@ -17,6 +18,21 @@ namespace Assistant.IntegrationTests.Llm;
 /// threshold (warn/soft/hard) firing separately.</summary>
 public class BudgetNoticeSenderTests : IntegrationTestBase
 {
+    /// <summary>Captures every log entry at <c>Error</c> level or above -- used to prove the
+    /// check-before-insert path never even attempts (and so never logs an Error for) the ordinary,
+    /// expected "already sent" case.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<LogLevel> Levels { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Levels.Add(logLevel);
+    }
+
     private sealed class SingleClientFactory : ITelegramClientFactory
     {
         public FakeTelegramClient Client { get; } = new();
@@ -50,12 +66,12 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
 
     private SingleClientFactory _clients = null!;
 
-    private (BudgetNoticeSender Sender, SingleClientFactory Clients) CreateSender()
+    private (BudgetNoticeSender Sender, SingleClientFactory Clients) CreateSender(ILogger<BudgetNoticeSender>? logger = null)
     {
         _clients = new SingleClientFactory();
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var sender = new BudgetNoticeSender(
-            Db, ScopeFactoryFor(ConnectionString), _clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+            Db, ScopeFactoryFor(ConnectionString), _clients, options, new SystemClock(), logger ?? NullLogger<BudgetNoticeSender>.Instance);
         return (sender, _clients);
     }
 
@@ -111,6 +127,29 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
 
         Db.BudgetNotices.Count().ShouldBe(1);
         clients.Client.SentMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_second_call_after_a_crossing_never_attempts_an_insert_or_logs_an_error()
+    {
+        // Review fix: the check-before-insert read answers "already sent?" on the common, expected
+        // path, so the second call never even reaches the insert -- no DbUpdateException, no Error
+        // logged, count stays at 1. (The insert+unique-violation-catch is still what prevents a
+        // double-send under a real race -- see Two_concurrent_calls_at_the_same_threshold_only_send_once.)
+        var familyId = await SeedFamilyAsync();
+        await SeedOwnerAsync(familyId, 111);
+        var logger = new CapturingLogger<BudgetNoticeSender>();
+        var (sender, clients) = CreateSender(logger);
+        var status = StatusAt(dailySpend: 85m, monthlySpend: 5m);
+        await sender.NotifyAsync(status, CancellationToken.None);
+        clients.Client.ClearSent();
+        logger.Levels.Clear();
+
+        await sender.NotifyAsync(status, CancellationToken.None);
+
+        Db.BudgetNotices.Count().ShouldBe(1);
+        clients.Client.SentMessages.ShouldBeEmpty();
+        logger.Levels.ShouldNotContain(LogLevel.Error);
     }
 
     [Fact]
@@ -185,6 +224,22 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
 
         Db.BudgetNotices.Count().ShouldBe(1);
         clients.Client.SentMessages.Count(m => m.ChatId == 111).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task One_admins_send_failure_does_not_stop_the_others_from_getting_their_DM()
+    {
+        var familyId = await SeedFamilyAsync();
+        await SeedOwnerAsync(familyId, 111); // this one's send will fail
+        await SeedOwnerAsync(familyId, 222);
+        var (sender, clients) = CreateSender();
+        clients.Client.ThrowOnSendToChatId = 111;
+
+        await sender.NotifyAsync(StatusAt(dailySpend: 85m, monthlySpend: 5m), CancellationToken.None);
+
+        Db.BudgetNotices.Count().ShouldBe(1); // the notice itself was still recorded
+        clients.Client.SentMessages.ShouldContain(m => m.ChatId == 222);
+        clients.Client.SentMessages.ShouldNotContain(m => m.ChatId == 111);
     }
 
     [Fact]

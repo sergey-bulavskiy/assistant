@@ -95,6 +95,58 @@ public class OpenAiChatClientFactoryTests
         ex.RetryAt.ShouldBeNull();
     }
 
+    // --- Review nit: group authorship folded into the text for this provider (no per-message author
+    // field in the OpenAI Messages API, unlike claude-cli's own <msg author> framing) -------------
+
+    [Fact]
+    public async Task A_message_with_an_author_name_is_folded_into_the_text_as_a_bracketed_prefix()
+    {
+        string? capturedBody = null;
+        var client = ClientFor(req =>
+        {
+            capturedBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"id":"chatcmpl-1","object":"chat.completion","created":0,"model":"gpt-6-luna",
+                     "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+                     "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+                    """)
+            };
+        });
+
+        await client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") { AuthorName = "alice" } });
+
+        capturedBody.ShouldNotBeNull();
+        capturedBody!.ShouldContain("[alice]: hi");
+    }
+
+    [Fact]
+    public async Task A_message_with_no_author_name_is_sent_unchanged()
+    {
+        string? capturedBody = null;
+        var client = ClientFor(req =>
+        {
+            capturedBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"id":"chatcmpl-1","object":"chat.completion","created":0,"model":"gpt-6-luna",
+                     "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+                     "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+                    """)
+            };
+        });
+
+        await client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") });
+
+        capturedBody.ShouldNotBeNull();
+        capturedBody!.ShouldContain("\"hi\"");
+        capturedBody.ShouldNotContain("]: hi");
+    }
+
     [Fact]
     public async Task A_non_limit_error_passes_through_unchanged()
     {

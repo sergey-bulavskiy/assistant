@@ -278,6 +278,33 @@ public class LlmWiringTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_invalid_OPENAI_BASE_URL_drops_the_openai_entry_and_claude_cli_still_works()
+    {
+        var env = ValidBaseEnv("claude-cli:sonnet,openai:gpt-6-luna");
+        env["OPENAI_API_KEY"] = "test-openai-key";
+        env["OPENAI_BASE_URL"] = "not-a-valid-url";
+        env["LLM_PRICES"] = "claude-haiku-4-5=1/5,gpt-6-luna=1/5";
+
+        using var factory = await StartWithEnvAsync(env);
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<LlmGateway>();
+        gateway.IsEnabled.ShouldBeTrue();
+
+        var catalog = scope.ServiceProvider.GetRequiredService<ModelCatalog>();
+        catalog.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+
+        var startupResult = scope.ServiceProvider.GetRequiredService<LlmStartupResult>();
+        startupResult.Errors.ShouldContain(e => e.Contains("OPENAI_BASE_URL") && !e.Contains("not-a-valid-url"));
+
+        // Constructing every other provider's client must still work -- the whole
+        // IChatClientProvider singleton factory must not have thrown.
+        var chatClients = scope.ServiceProvider.GetRequiredService<IChatClientProvider>();
+        Should.NotThrow(() => chatClients.GetClient("claude-cli", "sonnet"));
+    }
+
+    [Fact]
     public async Task UsageCommandHandler_resolves_even_when_LLM_is_entirely_off()
     {
         using var factory = await StartWithEnvAsync(new Dictionary<string, string?>());

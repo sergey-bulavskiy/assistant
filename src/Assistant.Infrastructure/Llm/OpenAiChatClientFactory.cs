@@ -47,7 +47,7 @@ public static class OpenAiChatClientFactory
 
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), options);
         var chatClient = client.GetChatClient(modelName).AsIChatClient();
-        return new LimitTranslatingChatClient(chatClient, Translate);
+        return new AuthorFoldingChatClient(new LimitTranslatingChatClient(chatClient, Translate));
     }
 
     private static ModelLimitReachedException? Translate(Exception ex)

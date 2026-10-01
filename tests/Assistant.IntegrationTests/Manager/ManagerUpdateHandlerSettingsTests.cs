@@ -100,7 +100,7 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
             new PollingHealth(), clock, NullLoggerFactory.Instance);
         var handler = new ManagerUpdateHandler(
             Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock,
-            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock), NullLogger<ManagerUpdateHandler>.Instance);
+            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
 
         return (handler, clients.Client);
     }

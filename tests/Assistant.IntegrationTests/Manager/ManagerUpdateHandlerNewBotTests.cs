@@ -68,7 +68,7 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
 
         var handler = new ManagerUpdateHandler(
             db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, _clock,
-            new UsageCommandHandler(db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), _clock), NullLogger<ManagerUpdateHandler>.Instance);
+            new UsageCommandHandler(db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), _clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
         return (handler, clients, pending, coordinator);
     }
 

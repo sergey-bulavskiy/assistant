@@ -93,6 +93,26 @@ public class ContextBuilderTests
     }
 
     [Fact]
+    public void A_leading_assistant_turn_left_by_the_char_budget_trim_is_also_dropped()
+    {
+        // Review nit: Anthropic (and the other API providers) require the first message to be a
+        // User one. Budget 150 keeps b+c+d (150 chars) after dropping only 'a' -- but the oldest
+        // surviving message is then the bot's own reply ('b'), which must also be dropped so the
+        // request starts with a User message.
+        var history = new[]
+        {
+            History(MessageDirection.In, null, new string('a', 50)),   // User -- dropped by the char budget
+            History(MessageDirection.Out, null, new string('b', 50)),  // Assistant -- would be first otherwise
+            History(MessageDirection.In, null, new string('c', 50))    // User
+        };
+
+        var built = ContextBuilder.Build(history, new string('d', 50), currentUsername: null, isGroup: false, maxInputChars: 150);
+
+        built.Select(m => m.Text).ShouldBe(new[] { new string('c', 50), new string('d', 50) });
+        built.Select(m => m.Role).ShouldBe(new[] { LlmMessageRole.User, LlmMessageRole.User });
+    }
+
+    [Fact]
     public void One_char_over_the_limit_drops_the_oldest_message()
     {
         var history = new[] { History(MessageDirection.In, null, new string('a', 50)) };

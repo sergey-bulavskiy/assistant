@@ -72,6 +72,25 @@ public class BudgetNoticeSender : IBudgetNoticeSender
             return; // Normal: nothing to notify.
         }
 
+        // Check-before-insert (review finding): on the fast path -- every call after the first one
+        // for this (kind, start, threshold) -- this answers "already sent?" with a plain read, no
+        // write attempt at all, so no Error is ever logged for the (expected, frequent) common case.
+        // The insert+unique-violation-catch below still runs on EVERY check, concurrent or not: two
+        // callers can both pass this AnyAsync before either has inserted, so it remains the only
+        // thing that actually prevents a double-send under a real race -- see
+        // Two_concurrent_calls_at_the_same_threshold_only_send_once.
+        await using (var checkScope = _scopeFactory.CreateAsyncScope())
+        {
+            var checkDb = checkScope.ServiceProvider.GetRequiredService<AssistantDbContext>();
+            var alreadySent = await checkDb.BudgetNotices.AnyAsync(
+                n => n.PeriodKind == period.Kind && n.PeriodStart == period.PeriodStart && n.Threshold == threshold.Value,
+                cancellationToken);
+            if (alreadySent)
+            {
+                return;
+            }
+        }
+
         if (!await TryInsertNoticeAsync(period.Kind, period.PeriodStart, threshold.Value, cancellationToken))
         {
             return; // someone else already sent this (period, state) notice.
@@ -87,7 +106,17 @@ public class BudgetNoticeSender : IBudgetNoticeSender
         var managerClient = _clientFactory.Create(_options.Value.ManagerToken);
         foreach (var admin in admins)
         {
-            await managerClient.SendTextAsync(admin.TelegramUserId, null, text, replyToMessageId: null, cancellationToken);
+            try
+            {
+                await managerClient.SendTextAsync(admin.TelegramUserId, null, text, replyToMessageId: null, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Review nit: one admin's send failing (e.g. they blocked the manager bot) must never
+                // stop the others from getting their DM. Type only, same rule as NotifyAsync's own
+                // catch above.
+                _logger.LogError("Failed to send a budget notice DM: {ExceptionType}", ex.GetType().Name);
+            }
         }
     }
 

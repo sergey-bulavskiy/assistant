@@ -20,7 +20,7 @@ public class LlmGateway : ILlmGateway
     private readonly IClock _clock;
     private readonly ConcurrentCallGate _concurrencyGate;
     private readonly IBudgetGuard _budget;
-    private readonly IBudgetNoticeSender _budgetNotices;
+    private readonly IBudgetNoticeDispatcher _budgetNoticeDispatcher;
     private readonly ILogger<LlmGateway> _logger;
 
     public LlmGateway(
@@ -32,7 +32,7 @@ public class LlmGateway : ILlmGateway
         IClock clock,
         ConcurrentCallGate concurrencyGate,
         IBudgetGuard budget,
-        IBudgetNoticeSender budgetNotices,
+        IBudgetNoticeDispatcher budgetNoticeDispatcher,
         ILogger<LlmGateway> logger)
     {
         _config = config;
@@ -43,7 +43,7 @@ public class LlmGateway : ILlmGateway
         _clock = clock;
         _concurrencyGate = concurrencyGate;
         _budget = budget;
-        _budgetNotices = budgetNotices;
+        _budgetNoticeDispatcher = budgetNoticeDispatcher;
         _logger = logger;
     }
 
@@ -197,41 +197,28 @@ public class LlmGateway : ILlmGateway
             _concurrencyGate.Release();
         }
 
-        // Spec §10.3/review: notices are sent AFTER the call's cost is recorded (not from the
-        // pre-call status used for filtering above) and OUTSIDE the concurrency gate (already
-        // released by the finally above) -- a slow/unreachable Telegram API or DB must never hold up
-        // every other call waiting for a slot. Only when a budget was actually configured: with none
-        // configured there is nothing to ever cross. Any failure here (including the check itself
-        // timing out) must never turn an already-decided `result` into something else.
+        // Spec §10.3/review: notices are checked AFTER the call's cost is recorded (not from the
+        // pre-call status used for filtering above) and OFF the reply path entirely -- never
+        // awaited here, and never using this request's own scoped `_db` (the dispatcher creates its
+        // own DI scope, its own AssistantDbContext). Only when a budget was actually configured:
+        // with none configured there is nothing to ever cross. `Dispatch()` itself never throws
+        // synchronously (it only starts a Task that catches everything internally), but the
+        // discard-and-swallow shape below is kept anyway as the same defense-in-depth every other
+        // best-effort path here already has -- this must never turn an already-decided `result`
+        // into something else.
         if (budgetWasConfigured)
         {
-            await CheckBudgetNoticesAsync();
+            try
+            {
+                _ = _budgetNoticeDispatcher.Dispatch();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Failed to start the post-call budget notice check: {ExceptionType}", ex.GetType().Name);
+            }
         }
 
         return result;
-    }
-
-    // 5s: long enough for a real DB write + a couple of Telegram sends, short enough that it can
-    // never meaningfully delay the reply path it runs after (see CompleteAsync).
-    private static readonly TimeSpan BudgetNoticeCheckTimeout = TimeSpan.FromSeconds(5);
-
-    private async Task CheckBudgetNoticesAsync()
-    {
-        try
-        {
-            using var timeoutCts = new CancellationTokenSource(BudgetNoticeCheckTimeout);
-            var status = await _budget.EvaluateAsync(timeoutCts.Token);
-            if (status is not null)
-            {
-                await _budgetNotices.NotifyAsync(status, timeoutCts.Token);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Never rethrown: a notice is best-effort, never part of the call's own result. Log the
-            // exception TYPE only, same rule as RecordCallAsync below.
-            _logger.LogError("Post-call budget notice check failed: {ExceptionType}", ex.GetType().Name);
-        }
     }
 
     private ModelPrice GetPrice(ModelCatalogEntry entry) =>
@@ -266,9 +253,11 @@ public class LlmGateway : ILlmGateway
         return monthAlone.Count > 0 ? binding.PeriodEnd : status.Monthly.PeriodEnd;
     }
 
-    /// <summary>Normal/Warn: unchanged. Soft: only LLM_FAST_MODELS entries plus zero-price entries,
-    /// in chain order (so a chat's preferred model stays first only if it is allowed); if that
-    /// leaves nothing, behave as Hard. Hard: only zero-price entries.</summary>
+    /// <summary>Normal/Warn: unchanged. Soft: the chat's current preference first (if Soft allows it
+    /// at all -- fast tier or zero price), then every LLM_FAST_MODELS entry in that variable's own
+    /// declared order (not the main chain's -- the owner may rank them differently there), then
+    /// every zero-price entry in chain order; if that leaves nothing, behave as Hard. Hard: only
+    /// zero-price entries, in chain order.</summary>
     private IReadOnlyList<ModelCatalogEntry> ApplyBudgetFilter(IReadOnlyList<ModelCatalogEntry> candidates, BudgetState state)
     {
         if (state is BudgetState.Normal or BudgetState.Warn)
@@ -283,8 +272,36 @@ public class LlmGateway : ILlmGateway
         }
 
         var fastNames = _config.FastModels.Select(m => m.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var softAllowed = candidates.Where(c => fastNames.Contains(c.Name) || LlmCostCalculator.IsZero(GetPrice(c))).ToArray();
-        return softAllowed.Length > 0 ? softAllowed : zeroPrice;
+        var candidateNames = candidates.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool IsAllowed(ModelCatalogEntry c) => fastNames.Contains(c.Name) || LlmCostCalculator.IsZero(GetPrice(c));
+
+        var ordered = new List<ModelCatalogEntry>();
+        var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // candidates[0] is already whatever GetCandidateOrder put first (the chat's real preference,
+        // if one was set and known) -- keep it first here too, but only if Soft actually allows it.
+        if (candidates.Count > 0 && IsAllowed(candidates[0]) && placed.Add(candidates[0].Name))
+        {
+            ordered.Add(candidates[0]);
+        }
+
+        foreach (var fast in _config.FastModels)
+        {
+            if (candidateNames.Contains(fast.Name) && placed.Add(fast.Name))
+            {
+                ordered.Add(fast);
+            }
+        }
+
+        foreach (var zero in zeroPrice)
+        {
+            if (placed.Add(zero.Name))
+            {
+                ordered.Add(zero);
+            }
+        }
+
+        return ordered.Count > 0 ? ordered : zeroPrice;
     }
 
     private async Task<(LlmResult? Result, DateTimeOffset? Retry)> TryCandidateAsync(

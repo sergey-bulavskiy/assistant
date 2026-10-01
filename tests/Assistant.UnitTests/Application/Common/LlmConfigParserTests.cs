@@ -298,6 +298,34 @@ public class LlmConfigParserTests
         result.Errors.ShouldContain(e => e.Contains("claude-haiku-4-5") && e.Contains("BUDGET"));
     }
 
+    [Fact]
+    public void An_invalid_budget_with_no_paid_entries_at_all_is_a_warning_not_an_error()
+    {
+        // Review nit: with only claude-cli: entries configured (no anthropic:/openai: ones to ever
+        // drop and report their own Error), an invalid LLM_BUDGET_DAILY_USD would otherwise go
+        // completely unlogged -- it must surface as exactly one Warning naming the variable.
+        var options = Valid(); // claude-cli only
+        options.BudgetDailyUsdRaw = "not-a-number";
+        options.BudgetMonthlyUsdRaw = "30";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Budget.ShouldBeNull();
+        result.Errors.ShouldBeEmpty();
+        result.Warnings.ShouldHaveSingleItem().ShouldContain("LLM_BUDGET_DAILY_USD");
+    }
+
+    [Fact]
+    public void An_absent_budget_with_no_paid_entries_is_not_a_warning()
+    {
+        // Distinguishes "never configured" (silent, same as today) from "configured but invalid"
+        // (the one Warning case above) -- neither LLM_BUDGET_* var set at all is not a misconfiguration.
+        var result = LlmConfigParser.Parse(Valid(), AlwaysValid());
+
+        result.Warnings.ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData("100")]  // not < 100
     [InlineData("0")]

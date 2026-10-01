@@ -113,6 +113,22 @@ public class AnthropicChatClientFactoryTests
         ex.RetryAt.ShouldBeNull();
     }
 
+    // --- Review nit: a non-string "type"/"message"/"error_code" must not throw out of
+    // classification (JsonElement.GetString() throws InvalidOperationException for a non-string
+    // value) -- it should fall through to the conservative per-status default instead.
+
+    [Fact]
+    public async Task A_429_with_a_non_string_error_type_does_not_throw_and_is_treated_as_model_scoped()
+    {
+        var client = ClientFor(_ => JsonResponse((HttpStatusCode)429,
+            """{"type":"error","error":{"type":123,"message":"rate limited"}}"""));
+
+        var ex = await Should.ThrowAsync<ModelLimitReachedException>(() =>
+            client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") }));
+
+        ex.Scope.ShouldBe(LlmLimitScope.Model);
+    }
+
     [Fact]
     public async Task An_ordinary_400_without_a_limit_message_passes_through_unchanged()
     {
@@ -150,6 +166,32 @@ public class AnthropicChatClientFactoryTests
             Disposed = true;
             base.Dispose(disposing);
         }
+    }
+
+    // --- Review nit: group authorship folded into the text for this provider (no per-message author
+    // field in the Anthropic Messages API, unlike claude-cli's own <msg author> framing) ----------
+
+    [Fact]
+    public async Task A_message_with_an_author_name_is_folded_into_the_text_as_a_bracketed_prefix()
+    {
+        string? capturedBody = null;
+        var client = ClientFor(req =>
+        {
+            capturedBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],
+                     "model":"claude-haiku-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+                    """)
+            };
+        });
+
+        await client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") { AuthorName = "alice" } });
+
+        capturedBody.ShouldNotBeNull();
+        capturedBody!.ShouldContain("[alice]: hi");
     }
 
     [Fact]

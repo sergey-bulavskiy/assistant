@@ -40,13 +40,13 @@ public class LlmGatewayTests : IntegrationTestBase
         FastModels = Array.Empty<ModelCatalogEntry>()
     };
 
-    // Budget is always null in this file's configs, so LlmGateway never actually calls
-    // IBudgetNoticeSender.NotifyAsync (guarded by "budgetStatus is not null") -- a no-op fake keeps
-    // these tests decoupled from the sender's own DB/Telegram wiring, which BudgetNoticeSenderTests
+    // Budget is always null in this file's configs, so LlmGateway never actually dispatches a
+    // post-call notice check (guarded by "budgetWasConfigured") -- a no-op fake keeps these tests
+    // decoupled from the dispatcher/sender's own DB/Telegram wiring, which BudgetNoticeSenderTests
     // and LlmGatewayBudgetTests already cover.
-    private sealed class NoopBudgetNoticeSender : IBudgetNoticeSender
+    private sealed class NoopBudgetNoticeDispatcher : IBudgetNoticeDispatcher
     {
-        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task Dispatch() => Task.CompletedTask;
     }
 
     private LlmGateway CreateGateway(
@@ -65,7 +65,7 @@ public class LlmGatewayTests : IntegrationTestBase
             clock ?? new SystemClock(),
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
-            new NoopBudgetNoticeSender(),
+            new NoopBudgetNoticeDispatcher(),
             NullLogger<LlmGateway>.Instance);
 
     private LlmGateway CreateGatewayWithProviders(
@@ -82,7 +82,7 @@ public class LlmGatewayTests : IntegrationTestBase
             clock ?? new SystemClock(),
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, Db, clock ?? new SystemClock()),
-            new NoopBudgetNoticeSender(),
+            new NoopBudgetNoticeDispatcher(),
             NullLogger<LlmGateway>.Instance);
 
     /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to

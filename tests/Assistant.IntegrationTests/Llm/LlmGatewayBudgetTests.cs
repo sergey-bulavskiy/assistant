@@ -66,31 +66,62 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     // This file's own concern is candidate filtering/cost recording, not notices (those are
     // BudgetNoticeSenderTests' job) -- a no-op fake keeps these tests decoupled from the sender's
     // own DB/Telegram wiring even though Budget is non-null here, so LlmGateway's
-    // "budgetStatus is not null" guard would otherwise call the real sender on every test.
-    private sealed class NoopBudgetNoticeSender : IBudgetNoticeSender
+    // "budgetWasConfigured" guard would otherwise start a real dispatch on every test.
+    private sealed class NoopBudgetNoticeDispatcher : IBudgetNoticeDispatcher
     {
-        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task Dispatch() => Task.CompletedTask;
     }
 
-    /// <summary>Always throws -- proves the gateway's reply never depends on the notice sender
-    /// succeeding (review finding: notices must never break the reply path).</summary>
-    private sealed class ThrowingBudgetNoticeSender : IBudgetNoticeSender
+    /// <summary>Throws synchronously from Dispatch() itself -- proves the gateway's reply never
+    /// depends on the dispatcher succeeding (review finding: notices must never break the reply
+    /// path), exercising the gateway's own try/catch around the (discarded, unawaited) call.</summary>
+    private sealed class ThrowingBudgetNoticeDispatcher : IBudgetNoticeDispatcher
     {
-        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("synthetic notice-sender failure");
+        public Task Dispatch() => throw new InvalidOperationException("synthetic notice-dispatcher failure");
     }
 
-    /// <summary>Records every status it was asked to notify, so a test can assert not just THAT the
-    /// sender was called but WHICH state it saw -- in particular, the state computed from spend
-    /// including the call that just ran, not the state from before it.</summary>
-    private sealed class SpyBudgetNoticeSender : IBudgetNoticeSender
+    /// <summary>Stands in for the real <see cref="BudgetNoticeDispatcher"/> in these tests:
+    /// re-evaluates the budget through the SAME <see cref="IBudgetGuard"/> (and so the same Db) the
+    /// gateway itself used for its pre-call check -- in production a fresh DI scope's own
+    /// AssistantDbContext reads the same already-committed rows, so this is behaviourally equivalent
+    /// for assertion purposes -- optionally forwarding to a real <see cref="IBudgetNoticeSender"/>.
+    /// Exposes the started Task so a test can await it directly: bounded, since it is the real,
+    /// already-running work this test cares about, never a raw sleep.</summary>
+    private sealed class TestBudgetNoticeDispatcher : IBudgetNoticeDispatcher
     {
+        private readonly IBudgetGuard _guard;
+        private readonly IBudgetNoticeSender? _sender;
+
         public List<BudgetStatus> Calls { get; } = new();
 
-        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken)
+        public Task? LastDispatch { get; private set; }
+
+        public TestBudgetNoticeDispatcher(IBudgetGuard guard, IBudgetNoticeSender? sender = null)
         {
+            _guard = guard;
+            _sender = sender;
+        }
+
+        public Task Dispatch()
+        {
+            var task = RunAsync();
+            LastDispatch = task;
+            return task;
+        }
+
+        private async Task RunAsync()
+        {
+            var status = await _guard.EvaluateAsync(CancellationToken.None);
+            if (status is null)
+            {
+                return;
+            }
+
             Calls.Add(status);
-            return Task.CompletedTask;
+            if (_sender is not null)
+            {
+                await _sender.NotifyAsync(status, CancellationToken.None);
+            }
         }
     }
 
@@ -114,9 +145,11 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     }
 
     private LlmGateway CreateGateway(
-        LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null, IBudgetNoticeSender? noticeSender = null)
+        LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null,
+        Func<IBudgetGuard, IBudgetNoticeDispatcher>? makeDispatcher = null)
     {
         var clock = new FixedClock(Now);
+        var guard = new BudgetGuard(config, Db, clock);
         return new LlmGateway(
             config,
             new ModelCatalog(config),
@@ -125,8 +158,8 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
             Db,
             clock,
             new ConcurrentCallGate(config.MaxConcurrentCalls),
-            new BudgetGuard(config, Db, clock),
-            noticeSender ?? new NoopBudgetNoticeSender(),
+            guard,
+            makeDispatcher?.Invoke(guard) ?? new NoopBudgetNoticeDispatcher(),
             NullLogger<LlmGateway>.Instance);
     }
 
@@ -267,8 +300,11 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Soft_state_keeps_a_zero_price_entry_that_comes_first_in_the_chain()
+    public async Task Soft_state_tries_the_fast_tier_before_a_zero_price_entry_even_when_it_is_first_in_the_chain()
     {
+        // Review fix: Soft orders LLM_FAST_MODELS entries before zero-price ones, regardless of
+        // their relative position in the main LLM_MODELS chain -- Free comes before FastPaid in the
+        // chain here, but FastPaid (the fast tier) must still be tried first.
         await SeedCostAsync(OtherFamily, 100m, Now.AddHours(-1));
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer");
@@ -276,7 +312,28 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
 
         var result = await gateway.CompleteAsync(MakeRequest(36), CancellationToken.None);
 
-        result.ModelName.ShouldBe(Free);
+        result.ModelName.ShouldBe(FastPaid);
+        client.RequestedModelIds.ShouldBe(new[] { FastPaid });
+    }
+
+    [Fact]
+    public async Task Soft_state_orders_multiple_fast_tier_entries_by_LLM_FAST_MODELS_order_not_the_chains()
+    {
+        // LLM_FAST_MODELS lists FastB before FastA; the main chain lists them the other way around.
+        // Soft must try them in LLM_FAST_MODELS' own order.
+        const string fastA = "fast-a";
+        const string fastB = "fast-b";
+        await SeedCostAsync(OtherFamily, 100m, Now.AddHours(-1));
+        var prices = new Dictionary<string, ModelPrice> { [SmartPaid] = OneFive, [fastA] = OneFive, [fastB] = OneFive };
+        var config = MakeConfig(new[] { SmartPaid, fastA, fastB, Free }, Budget, prices, fast: new[] { fastB, fastA });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer");
+        var gateway = CreateGateway(config, client);
+
+        var result = await gateway.CompleteAsync(MakeRequest(59), CancellationToken.None);
+
+        result.ModelName.ShouldBe(fastB);
+        client.RequestedModelIds.ShouldBe(new[] { fastB });
     }
 
     [Fact]
@@ -290,10 +347,28 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         (await CreateGateway(config, allowedClient).CompleteAsync(MakeRequest(37, preferredModel: FastPaid), CancellationToken.None))
             .ModelName.ShouldBe(FastPaid);
 
+        // SmartPaid is disallowed in Soft -- the fast tier (FastPaid) is tried before the zero-price
+        // entry (Free), same ordering as every other Soft case above.
         var disallowedClient = new ScriptedChatClient();
         disallowedClient.EnqueueResponse("answer");
         (await CreateGateway(config, disallowedClient).CompleteAsync(MakeRequest(37, preferredModel: SmartPaid), CancellationToken.None))
-            .ModelName.ShouldBe(Free);
+            .ModelName.ShouldBe(FastPaid);
+    }
+
+    [Fact]
+    public async Task Soft_state_still_puts_a_zero_price_chat_preference_ahead_of_the_fast_tier()
+    {
+        // The parenthetical in the review fix ("chat preference first if allowed"): a zero-price
+        // preference is itself allowed in Soft, so it stays first even ahead of the fast tier.
+        await SeedCostAsync(OtherFamily, 100m, Now.AddHours(-1));
+        var config = MakeConfig(new[] { SmartPaid, Free, FastPaid }, Budget);
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer");
+
+        var result = await CreateGateway(config, client).CompleteAsync(MakeRequest(69, preferredModel: Free), CancellationToken.None);
+
+        result.ModelName.ShouldBe(Free);
+        client.RequestedModelIds.ShouldBe(new[] { Free });
     }
 
     [Fact]
@@ -693,11 +768,11 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     // ---- Post-call budget notices -----------------------------------------------------------
 
     [Fact]
-    public async Task A_throwing_notice_sender_never_turns_a_successful_call_into_a_refusal()
+    public async Task A_throwing_notice_dispatcher_never_turns_a_successful_call_into_a_refusal()
     {
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer");
-        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: new ThrowingBudgetNoticeSender());
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, makeDispatcher: _ => new ThrowingBudgetNoticeDispatcher());
 
         var result = await gateway.CompleteAsync(MakeRequest(63), CancellationToken.None);
 
@@ -706,7 +781,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task The_crossing_call_itself_triggers_the_notice_sender_with_the_post_call_state()
+    public async Task The_crossing_call_itself_triggers_the_dispatcher_with_the_post_call_state()
     {
         // 79.99 + this call's own cost (0.011, from 1000 input @ $1/M + 2000 output @ $5/M) = 80.001,
         // >= the 80% warn line -- the call that pushes spend over the line, not the next one, must
@@ -714,10 +789,11 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         await SeedCostAsync(OtherFamily, 79.99m, Now.AddHours(-1));
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer", inputTokens: 1000, outputTokens: 2000);
-        var spy = new SpyBudgetNoticeSender();
-        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: spy);
+        TestBudgetNoticeDispatcher? spy = null;
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, makeDispatcher: guard => spy = new TestBudgetNoticeDispatcher(guard));
 
         var result = await gateway.CompleteAsync(MakeRequest(64), CancellationToken.None);
+        await spy!.LastDispatch!; // the reply path only starts the check -- wait for it to finish before asserting.
 
         result.IsAnswer.ShouldBeTrue();
         var notified = spy.Calls.ShouldHaveSingleItem();
@@ -725,18 +801,19 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task A_call_that_does_not_cross_a_threshold_still_reaches_the_sender_which_decides_not_to_act()
+    public async Task A_call_that_does_not_cross_a_threshold_still_reaches_the_dispatcher_which_decides_not_to_act()
     {
-        // The gateway itself does not decide whether a threshold was crossed -- it calls the sender
-        // whenever a budget is configured, every time, and the sender (BudgetNoticeSenderTests'
+        // The gateway itself does not decide whether a threshold was crossed -- it dispatches the
+        // check whenever a budget is configured, every time, and the sender (BudgetNoticeSenderTests'
         // own "Nothing_is_sent_below_warn") is what decides nothing needs to happen below Warn.
         await SeedCostAsync(OtherFamily, 1m, Now.AddHours(-1)); // nowhere near the 80% warn line
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer");
-        var spy = new SpyBudgetNoticeSender();
-        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: spy);
+        TestBudgetNoticeDispatcher? spy = null;
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, makeDispatcher: guard => spy = new TestBudgetNoticeDispatcher(guard));
 
         await gateway.CompleteAsync(MakeRequest(65), CancellationToken.None);
+        await spy!.LastDispatch!;
 
         var notified = spy.Calls.ShouldHaveSingleItem();
         notified.Daily.State.ShouldBe(BudgetState.Normal);
@@ -755,9 +832,13 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         await SeedCostAsync(OtherFamily, 79.99m, Now.AddHours(-1));
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer", inputTokens: 1000, outputTokens: 2000); // crosses warn, see above
-        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: realSender);
+        TestBudgetNoticeDispatcher? dispatcher1 = null;
+        var gateway = CreateGateway(
+            MakeConfig(new[] { SmartPaid }, Budget), client,
+            makeDispatcher: guard => dispatcher1 = new TestBudgetNoticeDispatcher(guard, realSender));
 
         var result = await gateway.CompleteAsync(MakeRequest(66), CancellationToken.None);
+        await dispatcher1!.LastDispatch!;
 
         result.IsAnswer.ShouldBeTrue();
         (await RowsAsync(66)).ShouldHaveSingleItem();
@@ -767,9 +848,13 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         // to the shared context) would break.
         var client2 = new ScriptedChatClient();
         client2.EnqueueResponse("answer2");
-        var gateway2 = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client2, noticeSender: realSender);
+        TestBudgetNoticeDispatcher? dispatcher2 = null;
+        var gateway2 = CreateGateway(
+            MakeConfig(new[] { SmartPaid }, Budget), client2,
+            makeDispatcher: guard => dispatcher2 = new TestBudgetNoticeDispatcher(guard, realSender));
 
         var result2 = await gateway2.CompleteAsync(MakeRequest(67), CancellationToken.None);
+        await dispatcher2!.LastDispatch!;
 
         result2.IsAnswer.ShouldBeTrue();
         (await RowsAsync(67)).ShouldHaveSingleItem();

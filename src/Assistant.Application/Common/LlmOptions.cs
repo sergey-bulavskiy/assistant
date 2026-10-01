@@ -67,7 +67,7 @@ public class LlmConfig
     public const string FastTier = "fast";
 }
 
-public record LlmConfigParseResult(bool IsEnabled, LlmConfig? Config, IReadOnlyList<string> Errors);
+public record LlmConfigParseResult(bool IsEnabled, LlmConfig? Config, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings);
 
 public static class LlmConfigParser
 {
@@ -81,7 +81,7 @@ public static class LlmConfigParser
         {
             // Silent off (spec 3.2): no LLM_MODELS means the owner hasn't set up LLM yet, not a
             // misconfiguration -- no Error is logged for this case.
-            return new LlmConfigParseResult(false, null, Array.Empty<string>());
+            return new LlmConfigParseResult(false, null, Array.Empty<string>(), Array.Empty<string>());
         }
 
         // Spec §8.9: invalid ENTRIES are dropped individually (one Error each, LLM can stay on);
@@ -89,6 +89,7 @@ public static class LlmConfigParser
         // entry-level problem never silently disables LLM, and a limit-level problem always does.
         var entryErrors = new List<string>();
         var limitErrors = new List<string>();
+        var warnings = new List<string>();
 
         var callsPerMinute = ParsePositiveInt(options.CallsPerMinuteRaw, "LLM_CALLS_PER_MINUTE", limitErrors);
         var callsPerDay = ParsePositiveInt(options.CallsPerDayRaw, "LLM_CALLS_PER_DAY", limitErrors);
@@ -99,13 +100,24 @@ public static class LlmConfigParser
         var maxConcurrentCalls = ParsePositiveInt(options.MaxConcurrentCallsRaw, "LLM_MAX_CONCURRENT_CALLS", limitErrors);
         var modelCooldownMinutes = ParsePositiveInt(options.ModelCooldownMinutesRaw, "LLM_MODEL_COOLDOWN_MINUTES", limitErrors);
 
+        var (budget, budgetProblem) = ParseBudget(options);
+
+        // Review nit: an invalid (not merely absent) LLM_BUDGET_* with no anthropic:/openai: entry
+        // even attempted in LLM_MODELS would otherwise go completely unlogged -- a paid entry
+        // reports budgetProblem itself (one Error per dropped entry, below), but with no paid entry
+        // to drop there is no other place this ever surfaces. One Warning (not Error: nothing was
+        // actually disabled by it -- claude-cli entries never need a budget).
+        if (budgetProblem is not null && BudgetWasAttempted(options) && !HasAnyPaidProviderEntry(options.ModelsRaw))
+        {
+            warnings.Add(budgetProblem);
+        }
+
         if (limitErrors.Count > 0)
         {
-            return new LlmConfigParseResult(false, null, entryErrors.Concat(limitErrors).ToArray());
+            return new LlmConfigParseResult(false, null, entryErrors.Concat(limitErrors).ToArray(), warnings);
         }
 
         var prices = ParsePrices(options.PricesRaw, entryErrors);
-        var (budget, budgetProblem) = ParseBudget(options);
 
         var models = ParseModels(options, validateProvider, prices, budget, budgetProblem, entryErrors);
 
@@ -124,7 +136,7 @@ public static class LlmConfigParser
             // being empty/unset (a silent, error-free off, handled above) -- this logs the
             // accumulated per-entry errors rather than going silent, since the owner DID try to
             // configure something and every attempt failed.
-            return new LlmConfigParseResult(false, null, entryErrors);
+            return new LlmConfigParseResult(false, null, entryErrors, warnings);
         }
 
         var config = new LlmConfig
@@ -144,7 +156,30 @@ public static class LlmConfigParser
         };
         // entryErrors may be non-empty even on success (e.g. a dropped duplicate) -- still reported
         // so the owner sees what happened, but not fatal since at least one model remains.
-        return new LlmConfigParseResult(true, config, entryErrors);
+        return new LlmConfigParseResult(true, config, entryErrors, warnings);
+    }
+
+    private static bool BudgetWasAttempted(LlmOptions options) =>
+        !string.IsNullOrWhiteSpace(options.BudgetDailyUsdRaw) || !string.IsNullOrWhiteSpace(options.BudgetMonthlyUsdRaw);
+
+    private static bool HasAnyPaidProviderEntry(string modelsRaw)
+    {
+        foreach (var part in modelsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colonIndex = part.IndexOf(':');
+            if (colonIndex <= 0 || colonIndex == part.Length - 1)
+            {
+                continue;
+            }
+
+            var provider = part[..colonIndex];
+            if (PaidProviderPrefixes.Contains(provider, StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Application never learns what a provider prefix means (spec §3.1) except for this one

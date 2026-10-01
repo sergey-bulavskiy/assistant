@@ -107,7 +107,7 @@ public static class AnthropicChatClientFactory
             Handlers = new[] { limitHandler }
         });
 
-        return new LimitTranslatingChatClient(client.AsIChatClient(modelName, defaultMaxOutputTokens: null), Translate);
+        return new AuthorFoldingChatClient(new LimitTranslatingChatClient(client.AsIChatClient(modelName, defaultMaxOutputTokens: null), Translate));
     }
 
     private static ModelLimitReachedException? Translate(Exception ex) => ex as ModelLimitReachedException;
@@ -123,10 +123,14 @@ public static class AnthropicChatClientFactory
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
             {
-                errorType = error.TryGetProperty("type", out var t) ? t.GetString() : null;
-                message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
+                // Review nit: GetString() throws InvalidOperationException for a non-string JSON
+                // value -- an unexpected response shape (e.g. a provider returning "type": 123) must
+                // fall through to the conservative per-status default below, not throw out of a
+                // classification helper.
+                errorType = error.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+                message = error.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
                 if (error.TryGetProperty("details", out var details) && details.ValueKind == JsonValueKind.Object &&
-                    details.TryGetProperty("error_code", out var code))
+                    details.TryGetProperty("error_code", out var code) && code.ValueKind == JsonValueKind.String)
                 {
                     errorCode = code.GetString();
                 }
