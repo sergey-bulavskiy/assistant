@@ -15,6 +15,7 @@ public class LlmCallConfiguration : IEntityTypeConfiguration<LlmCall>
         builder.Property(c => c.Model).HasMaxLength(128).IsRequired();
         builder.Property(c => c.Outcome).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(c => c.ReportedCost).HasColumnType("numeric(10,4)");
+        builder.Property(c => c.Cost).HasColumnType("numeric(10,4)").IsRequired();
         builder.HasIndex(c => new { c.FamilyId, c.CreatedAt });
     }
 }

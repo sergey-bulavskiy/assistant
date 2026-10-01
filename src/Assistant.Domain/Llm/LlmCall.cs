@@ -15,6 +15,12 @@ public class LlmCall
     public int? InputTokens { get; set; }
     public int? OutputTokens { get; set; }
     public decimal? ReportedCost { get; set; }
+
+    /// <summary>What this call cost toward the platform budget, in USD: usage x LLM_PRICES for Ok,
+    /// 0 for LimitReached (rejected before any billable work), and the pre-call estimate for a
+    /// Timeout/Failed call without usage. Always 0 for a zero-price entry (claude-cli is forced to
+    /// 0/0). Distinct from ReportedCost, the provider's own self-reported, informational figure.</summary>
+    public decimal Cost { get; set; }
     public long DurationMs { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
