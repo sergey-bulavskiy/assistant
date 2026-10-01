@@ -102,6 +102,18 @@
 - A model entry's `Name` (after the colon in `LLM_MODELS`) must be unique across the whole catalog —
   `/model <name>` and `chat_settings.preferred_model` both key off it, with no provider prefix
   attached, so a collision between two providers' names would let `/model` silently switch provider.
+- `BudgetNoticeSender`'s dedup insert (the `budget_notices` row whose unique index is the actual
+  dedup) runs through its own `AssistantDbContext`, built from `IDbContextFactory<AssistantDbContext>`,
+  never through the request's shared, scoped context. A failed insert on a *shared* context would
+  leave the entity tracked as `Added`, and the next unrelated `SaveChangesAsync` on that same context
+  (e.g. `LlmGateway`'s own call-recording save) would try to re-insert it. Keep any future DB write
+  inside `BudgetNoticeSender` on this same throwaway-context pattern, not on `_db`.
+- `LlmGateway` sends budget notices (`IBudgetNoticeSender`) only *after* a call's cost is already
+  recorded, re-evaluating the budget status at that point -- not with the pre-call status used for
+  candidate filtering -- and only outside the concurrency gate (after it is released). The check is
+  awaited with its own short timeout (`BudgetNoticeCheckTimeout`, 5s) so a slow/unreachable Telegram
+  API or DB never delays the reply by more than that; any exception is caught and logged by type only,
+  never rethrown onto the reply path.
 - A `ModelLimitReachedException`'s `Scope` matters: `Provider` marks every `claude-cli` catalog entry
   unavailable (an account-wide session/weekly/spend/usage limit), `Model` marks only the one that was
   called (a model-named limit like "Opus limit"). Getting this backwards either over-disables working

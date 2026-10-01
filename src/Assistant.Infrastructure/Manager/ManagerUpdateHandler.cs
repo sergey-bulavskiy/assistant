@@ -98,8 +98,16 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
 
         if (command == "usage")
         {
-            var reply = await _usageHandler.BuildReplyAsync(userId, cancellationToken);
-            await telegramClient.SendTextAsync(chatId, topicId, reply, replyToMessageId: null, cancellationToken);
+            // /usage can show platform-wide spend and a per-bot/per-model breakdown of the caller's
+            // own family -- not something to post into a group the bot is in (unlike /settings, which
+            // only lists bots/places/members already visible to that group). Private chats only; a
+            // group message is silently ignored, the same as any other unrecognized context would be.
+            if (update.Message.ChatType == "private")
+            {
+                var reply = await _usageHandler.BuildReplyAsync(userId, cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, reply, replyToMessageId: null, cancellationToken);
+            }
+
             return;
         }
 

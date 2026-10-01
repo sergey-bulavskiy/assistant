@@ -32,16 +32,18 @@ public interface IBudgetNoticeSender
 public class BudgetNoticeSender : IBudgetNoticeSender
 {
     private readonly AssistantDbContext _db;
+    private readonly IDbContextFactory<AssistantDbContext> _dbFactory;
     private readonly ITelegramClientFactory _clientFactory;
     private readonly IOptions<BotOptions> _options;
     private readonly IClock _clock;
     private readonly ILogger<BudgetNoticeSender> _logger;
 
     public BudgetNoticeSender(
-        AssistantDbContext db, ITelegramClientFactory clientFactory, IOptions<BotOptions> options, IClock clock,
-        ILogger<BudgetNoticeSender> logger)
+        AssistantDbContext db, IDbContextFactory<AssistantDbContext> dbFactory, ITelegramClientFactory clientFactory,
+        IOptions<BotOptions> options, IClock clock, ILogger<BudgetNoticeSender> logger)
     {
         _db = db;
+        _dbFactory = dbFactory;
         _clientFactory = clientFactory;
         _options = options;
         _clock = clock;
@@ -112,8 +114,16 @@ public class BudgetNoticeSender : IBudgetNoticeSender
         _ => string.Empty
     };
 
+    /// <summary>Inserts through a dedicated, short-lived <see cref="AssistantDbContext"/> from
+    /// <see cref="_dbFactory"/> -- never through the request's shared <see cref="_db"/>. A failed
+    /// insert (unique violation or otherwise) must never leave a tracked, half-written entity on
+    /// the shared context: that context is reused by the rest of the request (e.g. the gateway's
+    /// own call-recording SaveChanges), and a stray Added entity there would be re-sent on that next,
+    /// unrelated save. Using a throwaway context sidesteps that entirely -- whatever happens to it,
+    /// it is disposed right after and never touches `_db`'s change tracker.</summary>
     private async Task<bool> TryInsertNoticeAsync(string periodKind, DateTimeOffset periodStart, int threshold, CancellationToken cancellationToken)
     {
+        await using var insertDb = await _dbFactory.CreateDbContextAsync(cancellationToken);
         var notice = new BudgetNotice
         {
             PeriodKind = periodKind,
@@ -121,17 +131,16 @@ public class BudgetNoticeSender : IBudgetNoticeSender
             Threshold = threshold,
             CreatedAt = _clock.UtcNow
         };
-        _db.BudgetNotices.Add(notice);
+        insertDb.BudgetNotices.Add(notice);
 
         try
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            await insertDb.SaveChangesAsync(cancellationToken);
             return true;
         }
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
-            _db.Entry(notice).State = EntityState.Detached;
-            return false;
+            return false; // someone else already inserted this (period, state) notice.
         }
     }
 

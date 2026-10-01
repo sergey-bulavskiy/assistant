@@ -33,6 +33,23 @@ public static class InfrastructureServiceCollectionExtensions
                 ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Assistant' is not configured.");
             AssistantDbContext.Configure(options, connectionString);
         });
+        // IDbContextFactory<AssistantDbContext>: a second registration, same connection string, used
+        // only where a short-lived context must be fully isolated from a request's shared, scoped
+        // AssistantDbContext -- today just BudgetNoticeSender's dedup insert (its own AGENTS.md
+        // gotcha). AddDbContextFactory does not register AssistantDbContext itself, so the AddDbContext
+        // call above is still required for every other (scoped) consumer.
+        //
+        // The single-parameter overload (no IServiceProvider) is required here, not the (sp, options)
+        // one used for AddDbContext above: that overload makes EF register DbContextOptions<T> as a
+        // SCOPED service even for this singleton factory, which DI then refuses to build ("Cannot
+        // consume scoped service ... from singleton ..."). `configuration` is captured by closure
+        // instead, which needs no per-request services anyway.
+        services.AddDbContextFactory<AssistantDbContext>(options =>
+        {
+            var connectionString = configuration.GetConnectionString("Assistant")
+                ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Assistant' is not configured.");
+            AssistantDbContext.Configure(options, connectionString);
+        });
 
         services.AddScoped<IMessageStore, MessageStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();

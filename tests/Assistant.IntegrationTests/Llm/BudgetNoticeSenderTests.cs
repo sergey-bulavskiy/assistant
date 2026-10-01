@@ -22,6 +22,38 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         public Assistant.Application.Telegram.ITelegramClient Create(string token) => Client;
     }
 
+    /// <summary>Builds a real, independent <see cref="AssistantDbContext"/> per call, against a given
+    /// connection string -- the production shape of <c>IDbContextFactory&lt;AssistantDbContext&gt;</c>,
+    /// minus DI.</summary>
+    private sealed class TestDbContextFactory(string connectionString) : IDbContextFactory<Assistant.Infrastructure.Persistence.AssistantDbContext>
+    {
+        public Assistant.Infrastructure.Persistence.AssistantDbContext CreateDbContext()
+        {
+            var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
+            Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, connectionString);
+            return new Assistant.Infrastructure.Persistence.AssistantDbContext(options.Options);
+        }
+
+        public Task<Assistant.Infrastructure.Persistence.AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
+
+    /// <summary>Every context it creates points at an address nothing listens on, with a 1s connect
+    /// timeout: any <c>SaveChangesAsync</c> against it fails fast with a connection error -- a
+    /// non-unique-violation failure, unlike the dedup race the other tests in this file cover.</summary>
+    private sealed class BadDbContextFactory : IDbContextFactory<Assistant.Infrastructure.Persistence.AssistantDbContext>
+    {
+        public Assistant.Infrastructure.Persistence.AssistantDbContext CreateDbContext()
+        {
+            var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
+            Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, "Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1");
+            return new Assistant.Infrastructure.Persistence.AssistantDbContext(options.Options);
+        }
+
+        public Task<Assistant.Infrastructure.Persistence.AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
+
     private static readonly DateTimeOffset DayStart = new(2026, 10, 15, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset DayEnd = DayStart.AddDays(1);
     private static readonly DateTimeOffset MonthStart = new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
@@ -35,7 +67,8 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
     {
         _clients = new SingleClientFactory();
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
-        var sender = new BudgetNoticeSender(Db, _clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var sender = new BudgetNoticeSender(
+            Db, new TestDbContextFactory(ConnectionString), _clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
         return (sender, _clients);
     }
 
@@ -155,8 +188,9 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(optionsBuilder, ConnectionString);
         await using var dbB = new Assistant.Infrastructure.Persistence.AssistantDbContext(optionsBuilder.Options);
 
-        var senderA = new BudgetNoticeSender(Db, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
-        var senderB = new BudgetNoticeSender(dbB, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var dbFactory = new TestDbContextFactory(ConnectionString);
+        var senderA = new BudgetNoticeSender(Db, dbFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var senderB = new BudgetNoticeSender(dbB, dbFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
 
         await Task.WhenAll(
             senderA.NotifyAsync(status, CancellationToken.None),
@@ -179,5 +213,28 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
 
         clients.Client.SentMessages.ShouldContain(m => m.ChatId == 111);
         clients.Client.SentMessages.ShouldNotContain(m => m.ChatId == 222);
+    }
+
+    [Fact]
+    public async Task A_non_unique_insert_failure_does_not_leave_the_request_contexts_change_tracker_broken()
+    {
+        // The dedup insert always fails with a connection error, never a unique violation -- the old
+        // code (notice added directly to the shared `Db`) would leave that failed Added entity
+        // tracked on Db forever, breaking every later SaveChangesAsync on it. The fix inserts through
+        // its own throwaway context, so Db must come out of this completely unaffected.
+        var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+        var clients = new SingleClientFactory();
+        var sender = new BudgetNoticeSender(Db, new BadDbContextFactory(), clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+
+        await sender.NotifyAsync(StatusAt(dailySpend: 85m, monthlySpend: 1m), CancellationToken.None);
+
+        // Nothing was sent (the insert never succeeded) and nothing was persisted on the real DB.
+        clients.Client.SentMessages.ShouldBeEmpty();
+        Db.BudgetNotices.Count().ShouldBe(0);
+
+        // The request's own shared context must still be perfectly usable for an unrelated save
+        // afterward (standing in for "the gateway's next save" in the review finding).
+        Db.Families.Add(new Family { Name = "after a failed notice insert", CreatedAt = DateTimeOffset.UtcNow });
+        await Should.NotThrowAsync(async () => await Db.SaveChangesAsync());
     }
 }

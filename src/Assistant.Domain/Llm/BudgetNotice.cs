@@ -11,6 +11,6 @@ public class BudgetNotice
     public long Id { get; set; }
     public string PeriodKind { get; set; } = string.Empty; // DailyPeriod | MonthlyPeriod
     public DateTimeOffset PeriodStart { get; set; }
-    public int Threshold { get; set; } // the warn percent, 100 or the hard percent that was crossed
+    public int Threshold { get; set; } // (int)BudgetState: 1 Warn, 2 Soft, 3 Hard -- never a percent
     public DateTimeOffset CreatedAt { get; set; }
 }

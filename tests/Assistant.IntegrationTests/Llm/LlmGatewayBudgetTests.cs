@@ -8,6 +8,7 @@ using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Assistant.IntegrationTests.Llm;
 
@@ -70,7 +71,53 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private LlmGateway CreateGateway(LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null)
+    /// <summary>Always throws -- proves the gateway's reply never depends on the notice sender
+    /// succeeding (review finding: notices must never break the reply path).</summary>
+    private sealed class ThrowingBudgetNoticeSender : IBudgetNoticeSender
+    {
+        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("synthetic notice-sender failure");
+    }
+
+    /// <summary>Records every status it was asked to notify, so a test can assert not just THAT the
+    /// sender was called but WHICH state it saw -- in particular, the state computed from spend
+    /// including the call that just ran, not the state from before it.</summary>
+    private sealed class SpyBudgetNoticeSender : IBudgetNoticeSender
+    {
+        public List<BudgetStatus> Calls { get; } = new();
+
+        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken)
+        {
+            Calls.Add(status);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>Every context it creates points at an address nothing listens on, with a 1s connect
+    /// timeout: any <c>SaveChangesAsync</c> against it fails fast with a connection error -- a
+    /// non-unique-violation failure, unlike the dedup-insert race <c>BudgetNoticeSenderTests</c>
+    /// already covers.</summary>
+    private sealed class BadDbContextFactory : IDbContextFactory<AssistantDbContext>
+    {
+        public AssistantDbContext CreateDbContext()
+        {
+            var options = new DbContextOptionsBuilder<AssistantDbContext>();
+            AssistantDbContext.Configure(options, "Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1");
+            return new AssistantDbContext(options.Options);
+        }
+
+        public Task<AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class SingleClientFactory : Assistant.Infrastructure.Telegram.ITelegramClientFactory
+    {
+        public Assistant.IntegrationTests.Host.FakeTelegramClient Client { get; } = new();
+        public Assistant.Application.Telegram.ITelegramClient Create(string token) => Client;
+    }
+
+    private LlmGateway CreateGateway(
+        LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null, IBudgetNoticeSender? noticeSender = null)
     {
         var clock = new FixedClock(Now);
         return new LlmGateway(
@@ -82,7 +129,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
             clock,
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, Db, clock),
-            new NoopBudgetNoticeSender(),
+            noticeSender ?? new NoopBudgetNoticeSender(),
             NullLogger<LlmGateway>.Instance);
     }
 
@@ -644,5 +691,90 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);
 
         (await RowsAsync(56)).ShouldBeEmpty();
+    }
+
+    // ---- Post-call budget notices -----------------------------------------------------------
+
+    [Fact]
+    public async Task A_throwing_notice_sender_never_turns_a_successful_call_into_a_refusal()
+    {
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer");
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: new ThrowingBudgetNoticeSender());
+
+        var result = await gateway.CompleteAsync(MakeRequest(63), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.ModelName.ShouldBe(SmartPaid);
+    }
+
+    [Fact]
+    public async Task The_crossing_call_itself_triggers_the_notice_sender_with_the_post_call_state()
+    {
+        // 79.99 + this call's own cost (0.011, from 1000 input @ $1/M + 2000 output @ $5/M) = 80.001,
+        // >= the 80% warn line -- the call that pushes spend over the line, not the next one, must
+        // be the one that sees Warn.
+        await SeedCostAsync(OtherFamily, 79.99m, Now.AddHours(-1));
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer", inputTokens: 1000, outputTokens: 2000);
+        var spy = new SpyBudgetNoticeSender();
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: spy);
+
+        var result = await gateway.CompleteAsync(MakeRequest(64), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        var notified = spy.Calls.ShouldHaveSingleItem();
+        notified.Daily.State.ShouldBe(BudgetState.Warn);
+    }
+
+    [Fact]
+    public async Task A_call_that_does_not_cross_a_threshold_still_reaches_the_sender_which_decides_not_to_act()
+    {
+        // The gateway itself does not decide whether a threshold was crossed -- it calls the sender
+        // whenever a budget is configured, every time, and the sender (BudgetNoticeSenderTests'
+        // own "Nothing_is_sent_below_warn") is what decides nothing needs to happen below Warn.
+        await SeedCostAsync(OtherFamily, 1m, Now.AddHours(-1)); // nowhere near the 80% warn line
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer");
+        var spy = new SpyBudgetNoticeSender();
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: spy);
+
+        await gateway.CompleteAsync(MakeRequest(65), CancellationToken.None);
+
+        var notified = spy.Calls.ShouldHaveSingleItem();
+        notified.Daily.State.ShouldBe(BudgetState.Normal);
+    }
+
+    [Fact]
+    public async Task A_non_unique_notice_insert_failure_does_not_break_the_calls_own_save_and_the_reply_still_succeeds()
+    {
+        // The real BudgetNoticeSender, wired so its dedup insert always fails with a connection error
+        // (not a unique violation) -- proving the gateway's own call-recording SaveChanges (on the
+        // SAME shared Db this test uses) is unaffected, and that the reply still succeeds, both now
+        // and on the gateway's next call.
+        var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
+        var realSender = new BudgetNoticeSender(
+            Db, new BadDbContextFactory(), new SingleClientFactory(), options, new FixedClock(Now), NullLogger<BudgetNoticeSender>.Instance);
+        await SeedCostAsync(OtherFamily, 79.99m, Now.AddHours(-1));
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("answer", inputTokens: 1000, outputTokens: 2000); // crosses warn, see above
+        var gateway = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client, noticeSender: realSender);
+
+        var result = await gateway.CompleteAsync(MakeRequest(66), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        (await RowsAsync(66)).ShouldHaveSingleItem();
+
+        // The gateway's NEXT save (a second, unrelated call sharing the same Db and the same
+        // real sender) must still work -- this is exactly what the old code (notice added directly
+        // to the shared context) would break.
+        var client2 = new ScriptedChatClient();
+        client2.EnqueueResponse("answer2");
+        var gateway2 = CreateGateway(MakeConfig(new[] { SmartPaid }, Budget), client2, noticeSender: realSender);
+
+        var result2 = await gateway2.CompleteAsync(MakeRequest(67), CancellationToken.None);
+
+        result2.IsAnswer.ShouldBeTrue();
+        (await RowsAsync(67)).ShouldHaveSingleItem();
     }
 }

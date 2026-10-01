@@ -75,6 +75,9 @@ public class LlmGateway : ILlmGateway
             return LlmResult.Refused(LlmRefusalReason.RateLimited);
         }
 
+        LlmResult result;
+        var budgetWasConfigured = false;
+
         try
         {
             // Spec §8.8: count llm_calls ATTEMPT rows -- every row this family has written, including
@@ -102,12 +105,11 @@ public class LlmGateway : ILlmGateway
 
             // Budget guard (platform-wide money budget), after the semaphore and the rate guards.
             // With no budget configured budgetStatus is null and nothing below restricts anything.
+            // Spec §10.3/review: notices are NOT sent from this pre-call status -- see the post-call
+            // check after this try/finally, which re-evaluates against the call's own recorded cost.
             var candidates = _catalog.GetCandidateOrder(request.Tier, request.PreferredModel);
             var budgetStatus = await _budget.EvaluateAsync(cancellationToken);
-            if (budgetStatus is not null)
-            {
-                await _budgetNotices.NotifyAsync(budgetStatus, cancellationToken);
-            }
+            budgetWasConfigured = budgetStatus is not null;
 
             var filtered = budgetStatus is null ? candidates : ApplyBudgetFilter(candidates, budgetStatus.Overall);
 
@@ -118,76 +120,117 @@ public class LlmGateway : ILlmGateway
             if (filtered.Count == 0)
             {
                 // Guard refusal: no call, no llm_calls row.
-                return LlmResult.Refused(LlmRefusalReason.BudgetExhausted, budgetResetAt);
+                result = LlmResult.Refused(LlmRefusalReason.BudgetExhausted, budgetResetAt);
             }
-
-            DateTimeOffset? earliestRetry = null;
-
-            foreach (var candidate in filtered)
+            else
             {
-                if (!_availability.IsAvailable(candidate.Name))
+                DateTimeOffset? earliestRetry = null;
+                LlmResult? loopResult = null;
+
+                foreach (var candidate in filtered)
                 {
-                    var unavailableUntil = _availability.RetryAt(candidate.Name);
-                    if (unavailableUntil is { } until && (earliestRetry is null || until < earliestRetry))
+                    if (!_availability.IsAvailable(candidate.Name))
                     {
-                        earliestRetry = until;
+                        var unavailableUntil = _availability.RetryAt(candidate.Name);
+                        if (unavailableUntil is { } until && (earliestRetry is null || until < earliestRetry))
+                        {
+                            earliestRetry = until;
+                        }
+
+                        continue;
                     }
 
-                    continue;
-                }
+                    var price = GetPrice(candidate);
+                    var estimate = LlmCostCalculator.Estimate(request.SystemPrompt.Length, InputChars(request), _config.MaxOutputTokens, price);
 
-                var price = GetPrice(candidate);
-                var estimate = LlmCostCalculator.Estimate(request.SystemPrompt.Length, InputChars(request), _config.MaxOutputTokens, price);
-
-                if (budgetStatus is not null && !LlmCostCalculator.IsZero(price) && ExceededPeriod(budgetStatus, estimate) is { } exceeded)
-                {
-                    // Pre-call estimate would push a period's spend above its hard cap: skip this
-                    // candidate (no call, no row) and try the next one.
-                    //
-                    // This check is itself a pre-call estimate, not a running total: concurrent
-                    // calls can each pass it before any of their own rows land, the same race the
-                    // rate guard above has. How far spend can overshoot the hard cap this way is
-                    // bounded by LLM_MAX_CONCURRENT_CALLS x this candidate's own estimate -- at most
-                    // that many calls are ever in flight at once, so at most that many can race this
-                    // check before a row exists to make the next one fail it. The hard%'s headroom
-                    // above 100% (e.g. the default 120%) exists to absorb exactly this.
-                    if (budgetResetAt is null || exceeded.PeriodEnd < budgetResetAt)
+                    if (budgetStatus is not null && !LlmCostCalculator.IsZero(price) && ExceededPeriod(budgetStatus, estimate) is { } exceeded)
                     {
-                        budgetResetAt = exceeded.PeriodEnd;
+                        // Pre-call estimate would push a period's spend above its hard cap: skip this
+                        // candidate (no call, no row) and try the next one.
+                        //
+                        // This check is itself a pre-call estimate, not a running total: concurrent
+                        // calls can each pass it before any of their own rows land, the same race the
+                        // rate guard above has. How far spend can overshoot the hard cap this way is
+                        // bounded by LLM_MAX_CONCURRENT_CALLS x this candidate's own estimate -- at most
+                        // that many calls are ever in flight at once, so at most that many can race this
+                        // check before a row exists to make the next one fail it. The hard%'s headroom
+                        // above 100% (e.g. the default 120%) exists to absorb exactly this.
+                        if (budgetResetAt is null || exceeded.PeriodEnd < budgetResetAt)
+                        {
+                            budgetResetAt = exceeded.PeriodEnd;
+                        }
+
+                        continue;
                     }
 
-                    continue;
-                }
-
-                var attempt = await TryCandidateAsync(request, candidate, price, estimate, cancellationToken);
-                if (attempt.Retry is { } retryAt)
-                {
-                    if (earliestRetry is null || retryAt < earliestRetry)
+                    var attempt = await TryCandidateAsync(request, candidate, price, estimate, cancellationToken);
+                    if (attempt.Retry is { } retryAt)
                     {
-                        earliestRetry = retryAt;
+                        if (earliestRetry is null || retryAt < earliestRetry)
+                        {
+                            earliestRetry = retryAt;
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    loopResult = attempt.Result!;
+                    break;
                 }
 
-                return attempt.Result!;
+                // A remaining, budget-allowed candidate that is merely unavailable (a limit mark) wins
+                // over a budget skip: it is only temporarily unavailable, so it could still answer once
+                // its own retry time passes, and reporting BudgetExhausted would hide that and (wrongly)
+                // tell the caller only the budget's reset can help. BudgetExhausted is reported only
+                // when the budget filter/estimate removed every candidate that could ever answer this
+                // period -- i.e. no remaining candidate's unavailability is the thing actually standing
+                // in the way.
+                result = loopResult ?? (earliestRetry is { } retry
+                    ? LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, retry)
+                    : budgetResetAt is { } resetAt
+                        ? LlmResult.Refused(LlmRefusalReason.BudgetExhausted, resetAt)
+                        : LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, null));
             }
-
-            // A remaining, budget-allowed candidate that is merely unavailable (a limit mark) wins
-            // over a budget skip: it is only temporarily unavailable, so it could still answer once
-            // its own retry time passes, and reporting BudgetExhausted would hide that and (wrongly)
-            // tell the caller only the budget's reset can help. BudgetExhausted is reported only when
-            // the budget filter/estimate removed every candidate that could ever answer this period --
-            // i.e. no remaining candidate's unavailability is the thing actually standing in the way.
-            return earliestRetry is { } retry
-                ? LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, retry)
-                : budgetResetAt is { } resetAt
-                    ? LlmResult.Refused(LlmRefusalReason.BudgetExhausted, resetAt)
-                    : LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, null);
         }
         finally
         {
             _concurrencyGate.Release();
+        }
+
+        // Spec §10.3/review: notices are sent AFTER the call's cost is recorded (not from the
+        // pre-call status used for filtering above) and OUTSIDE the concurrency gate (already
+        // released by the finally above) -- a slow/unreachable Telegram API or DB must never hold up
+        // every other call waiting for a slot. Only when a budget was actually configured: with none
+        // configured there is nothing to ever cross. Any failure here (including the check itself
+        // timing out) must never turn an already-decided `result` into something else.
+        if (budgetWasConfigured)
+        {
+            await CheckBudgetNoticesAsync();
+        }
+
+        return result;
+    }
+
+    // 5s: long enough for a real DB write + a couple of Telegram sends, short enough that it can
+    // never meaningfully delay the reply path it runs after (see CompleteAsync).
+    private static readonly TimeSpan BudgetNoticeCheckTimeout = TimeSpan.FromSeconds(5);
+
+    private async Task CheckBudgetNoticesAsync()
+    {
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(BudgetNoticeCheckTimeout);
+            var status = await _budget.EvaluateAsync(timeoutCts.Token);
+            if (status is not null)
+            {
+                await _budgetNotices.NotifyAsync(status, timeoutCts.Token);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never rethrown: a notice is best-effort, never part of the call's own result. Log the
+            // exception TYPE only, same rule as RecordCallAsync below.
+            _logger.LogError("Post-call budget notice check failed: {ExceptionType}", ex.GetType().Name);
         }
     }
 

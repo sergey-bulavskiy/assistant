@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Llm;
@@ -9,15 +10,17 @@ using Shouldly;
 
 namespace Assistant.IntegrationTests.Manager;
 
-/// <summary>/usage: owner-only, platform totals + state visible to any owner, per-bot/per-model
-/// breakdown isolated to the caller's own family, zero-price calls shown as "подписка", and the
-/// "budgets aren't configured" text while still showing call counts.</summary>
+/// <summary>/usage: owner-only, platform totals + state visible to any owner, a "today" and "this
+/// month" per-bot/per-model breakdown isolated to the caller's own family (bot shown by username,
+/// not internal id), zero-price calls shown as "подписка", and the "budgets aren't configured" text
+/// while still showing call counts.</summary>
 public class UsageCommandHandlerTests : IntegrationTestBase
 {
     private const string Provider = "anthropic";
     private const string FreeProvider = "claude-cli";
 
     private static readonly DateTimeOffset Now = new(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset TodayStart = new(2026, 10, 15, 0, 0, 0, TimeSpan.Zero);
 
     private sealed class FixedClock(DateTimeOffset now) : IClock
     {
@@ -67,12 +70,25 @@ public class UsageCommandHandlerTests : IntegrationTestBase
         return ownerUserId;
     }
 
-    private async Task SeedLlmCallAsync(long familyId, string provider, string model, decimal cost, int inputTokens = 100, int outputTokens = 50)
+    private async Task<long> SeedBotAsync(long? familyId, string username)
+    {
+        var bot = new Bot
+        {
+            FamilyId = familyId, TelegramBotId = Random.Shared.NextInt64(1000, 1_000_000), Username = username, Role = "general",
+            Status = BotStatus.Active, LastUpdateId = 0, CreatedAt = DateTimeOffset.UtcNow
+        };
+        Db.Bots.Add(bot);
+        await Db.SaveChangesAsync();
+        return bot.Id;
+    }
+
+    private async Task SeedLlmCallAsync(
+        long familyId, long botId, string provider, string model, decimal cost, int inputTokens = 100, int outputTokens = 50, DateTimeOffset? createdAt = null)
     {
         Db.LlmCalls.Add(new LlmCall
         {
             FamilyId = familyId,
-            BotId = 1,
+            BotId = botId,
             Tier = LlmConfig.SmartTier,
             Provider = provider,
             Model = model,
@@ -81,7 +97,7 @@ public class UsageCommandHandlerTests : IntegrationTestBase
             OutputTokens = outputTokens,
             Cost = cost,
             DurationMs = 1,
-            CreatedAt = Now
+            CreatedAt = createdAt ?? Now
         });
         await Db.SaveChangesAsync();
     }
@@ -99,7 +115,8 @@ public class UsageCommandHandlerTests : IntegrationTestBase
     {
         var familyId = await SeedFamilyAsync();
         var ownerId = await SeedOwnerAsync(familyId);
-        await SeedLlmCallAsync(familyId, FreeProvider, "sonnet", cost: 0m);
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "sonnet", cost: 0m);
         var handler = CreateHandler(budget: null);
 
         var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
@@ -115,9 +132,11 @@ public class UsageCommandHandlerTests : IntegrationTestBase
     {
         var familyAId = await SeedFamilyAsync();
         var ownerAId = await SeedOwnerAsync(familyAId);
+        var botAId = await SeedBotAsync(familyAId, "family_a_bot");
         var familyBId = await SeedFamilyAsync();
-        await SeedLlmCallAsync(familyBId, Provider, "claude-haiku-4-5", cost: 5m);
-        await SeedLlmCallAsync(familyAId, FreeProvider, "sonnet", cost: 0m);
+        var botBId = await SeedBotAsync(familyBId, "family_b_bot");
+        await SeedLlmCallAsync(familyBId, botBId, Provider, "claude-haiku-4-5", cost: 5m);
+        await SeedLlmCallAsync(familyAId, botAId, FreeProvider, "sonnet", cost: 0m);
         var handler = CreateHandler(budget: new BudgetConfig(2m, 30m, 80, 120));
 
         var reply = await handler.BuildReplyAsync(ownerAId, CancellationToken.None);
@@ -127,6 +146,7 @@ public class UsageCommandHandlerTests : IntegrationTestBase
         reply.ShouldContain("claude-cli:sonnet"); // own family's breakdown
         reply.ShouldContain("подписка"); // zero-price call shown as "подписка"
         reply.ShouldNotContain("claude-haiku-4-5"); // NOT family B's breakdown
+        reply.ShouldNotContain("family_b_bot");
     }
 
     [Fact]
@@ -134,18 +154,102 @@ public class UsageCommandHandlerTests : IntegrationTestBase
     {
         var familyId = await SeedFamilyAsync();
         var ownerId = await SeedOwnerAsync(familyId);
-        await SeedLlmCallAsync(familyId, FreeProvider, "sonnet", cost: 0m);
-        Db.LlmCalls.Add(new LlmCall
-        {
-            FamilyId = familyId, BotId = 1, Tier = LlmConfig.SmartTier, Provider = FreeProvider, Model = "old-model",
-            Outcome = LlmCallOutcome.Ok, Cost = 0m, DurationMs = 1, CreatedAt = Now.AddMonths(-2)
-        });
-        await Db.SaveChangesAsync();
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "sonnet", cost: 0m);
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "old-model", cost: 0m, createdAt: Now.AddMonths(-2));
         var handler = CreateHandler(budget: null);
 
         var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
 
         reply.ShouldContain("1 вызовов"); // only this month's call counted
         reply.ShouldNotContain("old-model");
+    }
+
+    [Fact]
+    public async Task Shows_the_bot_username_not_its_internal_id()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "my_named_bot");
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "sonnet", cost: 0m);
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.ShouldContain("Бот my_named_bot:");
+        reply.ShouldNotContain($"Бот {botId}:");
+    }
+
+    [Fact]
+    public async Task Today_and_this_month_each_get_their_own_breakdown_section()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "today-model", cost: 0m, createdAt: Now);
+        // Earlier this month, but before today's UTC midnight -- counted in the month section, not
+        // in the today section.
+        await SeedLlmCallAsync(familyId, botId, FreeProvider, "earlier-this-month-model", cost: 0m, createdAt: TodayStart.AddDays(-1));
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        var todaySectionIndex = reply.IndexOf("Ваша семья (сегодня)", StringComparison.Ordinal);
+        var monthSectionIndex = reply.IndexOf("Ваша семья (этот месяц)", StringComparison.Ordinal);
+        todaySectionIndex.ShouldBeGreaterThanOrEqualTo(0);
+        monthSectionIndex.ShouldBeGreaterThan(todaySectionIndex);
+
+        var todaySection = reply[todaySectionIndex..monthSectionIndex];
+        todaySection.ShouldContain("today-model");
+        todaySection.ShouldNotContain("earlier-this-month-model");
+
+        var monthSection = reply[monthSectionIndex..];
+        monthSection.ShouldContain("today-model");
+        monthSection.ShouldContain("earlier-this-month-model");
+    }
+
+    [Fact]
+    public async Task A_reply_longer_than_the_Telegram_cap_is_truncated_at_a_line_boundary()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var botId = await SeedBotAsync(familyId, "test_role_bot");
+        for (var i = 0; i < 200; i++)
+        {
+            await SeedLlmCallAsync(familyId, botId, FreeProvider, $"model-{i:000}", cost: 0m);
+        }
+
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.Length.ShouldBeLessThanOrEqualTo(4096);
+        reply.ShouldEndWith("\n…");
+        // The cut lands on a whole line boundary, not mid-line: every breakdown/header line this
+        // handler generates ends with '.' or ':', so the content right before the appended marker
+        // must end with one of those, never a sliced-off fragment of a model name.
+        var beforeMarker = reply[..^"\n…".Length];
+        (beforeMarker.EndsWith('.') || beforeMarker.EndsWith(':')).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_owner_who_is_also_a_member_of_another_familys_table_row_still_gets_a_deterministic_reply()
+    {
+        // Guards against FirstOrDefaultAsync with no ordering: seeding two Approved-owner rows for
+        // the same Telegram user id across two families (not reachable via /claim today, but cheap to
+        // guard against directly) must not make the reply flaky between runs.
+        var familyAId = await SeedFamilyAsync();
+        var familyBId = await SeedFamilyAsync();
+        var ownerUserId = Random.Shared.NextInt64(1000, 1_000_000);
+        Db.FamilyMembers.AddRange(
+            new FamilyMember { FamilyId = familyAId, TelegramUserId = ownerUserId, DisplayName = "owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow },
+            new FamilyMember { FamilyId = familyBId, TelegramUserId = ownerUserId, DisplayName = "owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+        var handler = CreateHandler(budget: null);
+
+        var first = await handler.BuildReplyAsync(ownerUserId, CancellationToken.None);
+        var second = await handler.BuildReplyAsync(ownerUserId, CancellationToken.None);
+
+        first.ShouldBe(second);
     }
 }

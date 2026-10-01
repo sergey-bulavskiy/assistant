@@ -33,8 +33,13 @@ public class UsageCommandHandler
 
     public async Task<string> BuildReplyAsync(long callerUserId, CancellationToken cancellationToken)
     {
+        // Deterministic even if the caller happens to own more than one family (not possible today --
+        // /claim refuses a second family outright -- but FirstOrDefaultAsync with no ordering would
+        // otherwise be a database-order-dependent pick).
         var caller = await _db.FamilyMembers.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(m => m.TelegramUserId == callerUserId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
+            .Where(m => m.TelegramUserId == callerUserId && m.IsOwner && m.Status == FamilyMemberStatus.Approved)
+            .OrderBy(m => m.FamilyId)
+            .FirstOrDefaultAsync(cancellationToken);
         if (caller is null)
         {
             return "У вас нет прав.";
@@ -56,41 +61,65 @@ public class UsageCommandHandler
         }
 
         var now = _clock.UtcNow;
+        var dayStart = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
         var monthStart = new DateTimeOffset(new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc), TimeSpan.Zero);
 
-        // Own family only (spec §10.3 isolation): platform totals above never carry a family's own
-        // breakdown, but the breakdown itself must never cross into another family's calls.
-        var ownFamilyCalls = await _db.LlmCalls.IgnoreQueryFilters()
-            .Where(c => c.FamilyId == caller.FamilyId && c.CreatedAt >= monthStart)
-            .ToListAsync(cancellationToken);
-
         lines.Add(string.Empty);
-        lines.Add($"Ваша семья (этот месяц): {ownFamilyCalls.Count} вызовов.");
-
-        foreach (var byBot in ownFamilyCalls.GroupBy(c => c.BotId).OrderBy(g => g.Key))
-        {
-            lines.Add($"Бот {byBot.Key}:");
-            foreach (var byModel in byBot.GroupBy(c => (c.Provider, c.Model)).OrderBy(g => g.Key.Provider).ThenBy(g => g.Key.Model))
-            {
-                var calls = byModel.ToList();
-                var tokens = calls.Sum(c => (long)(c.InputTokens ?? 0) + (c.OutputTokens ?? 0));
-                var cost = calls.Sum(c => c.Cost);
-                var costText = cost == 0m ? "подписка" : $"${cost:0.0000}";
-                lines.Add($"- {byModel.Key.Provider}:{byModel.Key.Model}: {calls.Count} вызовов, {tokens} токенов, {costText}.");
-            }
-        }
+        await AppendFamilyPeriodAsync(lines, "Ваша семья (сегодня)", caller.FamilyId, dayStart, cancellationToken);
+        lines.Add(string.Empty);
+        await AppendFamilyPeriodAsync(lines, "Ваша семья (этот месяц)", caller.FamilyId, monthStart, cancellationToken);
 
         var reply = string.Join("\n", lines);
         // Telegram message cap (spec: "keep messages under 4096 chars"). A family with enough
-        // calls/models to exceed this would need pagination, out of scope for M3b -- truncate with
-        // a visible marker rather than silently failing to send.
+        // calls/models to exceed this would need pagination, out of scope for M3b -- truncate at the
+        // last full line within the cap rather than mid-line, with a visible marker.
         const int telegramMessageLimit = 4096;
         if (reply.Length > telegramMessageLimit)
         {
-            reply = reply[..(telegramMessageLimit - 1)] + "…";
+            var cut = reply.LastIndexOf('\n', telegramMessageLimit - 2);
+            reply = (cut > 0 ? reply[..cut] : reply[..(telegramMessageLimit - 1)]) + "\n…";
         }
 
         return reply;
+    }
+
+    /// <summary>Own family only (spec §10.3 isolation): platform totals above never carry a family's
+    /// own breakdown, but the breakdown itself must never cross into another family's calls. Grouping
+    /// and the token/cost sums are done in SQL (GroupBy + Sum, translated by EF), not by loading every
+    /// row and aggregating in memory.</summary>
+    private async Task AppendFamilyPeriodAsync(List<string> lines, string label, long familyId, DateTimeOffset periodStart, CancellationToken cancellationToken)
+    {
+        var totalCalls = await _db.LlmCalls.IgnoreQueryFilters()
+            .CountAsync(c => c.FamilyId == familyId && c.CreatedAt >= periodStart, cancellationToken);
+        lines.Add($"{label}: {totalCalls} вызовов.");
+
+        var groups = await (
+            from c in _db.LlmCalls.IgnoreQueryFilters()
+            join b in _db.Bots.IgnoreQueryFilters() on c.BotId equals b.Id
+            where c.FamilyId == familyId && c.CreatedAt >= periodStart
+            group c by new { c.BotId, b.Username, c.Provider, c.Model } into g
+            select new
+            {
+                g.Key.BotId,
+                g.Key.Username,
+                g.Key.Provider,
+                g.Key.Model,
+                Calls = g.Count(),
+                InputTokens = g.Sum(x => (long)(x.InputTokens ?? 0)),
+                OutputTokens = g.Sum(x => (long)(x.OutputTokens ?? 0)),
+                Cost = g.Sum(x => x.Cost)
+            }).ToListAsync(cancellationToken);
+
+        foreach (var byBot in groups.GroupBy(g => (g.BotId, g.Username)).OrderBy(g => g.Key.BotId))
+        {
+            lines.Add($"Бот {byBot.Key.Username}:");
+            foreach (var row in byBot.OrderBy(r => r.Provider).ThenBy(r => r.Model))
+            {
+                var tokens = row.InputTokens + row.OutputTokens;
+                var costText = row.Cost == 0m ? "подписка" : $"${row.Cost:0.0000}";
+                lines.Add($"- {row.Provider}:{row.Model}: {row.Calls} вызовов, {tokens} токенов, {costText}.");
+            }
+        }
     }
 
     private static string StateText(BudgetState state) => state switch
