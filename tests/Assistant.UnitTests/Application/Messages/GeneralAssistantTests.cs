@@ -38,6 +38,9 @@ public class GeneralAssistantTests
         CallTimeoutSeconds = 60,
         MaxConcurrentCalls = 2,
         ModelCooldownMinutes = 5,
+        Prices = new Dictionary<string, ModelPrice>(),
+        Budget = null,
+        FastModels = Array.Empty<ModelCatalogEntry>(),
     };
 
     private GeneralAssistant CreateAssistant(LlmConfig? config = null, bool llmOff = false) =>

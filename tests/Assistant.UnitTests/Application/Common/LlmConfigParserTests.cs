@@ -212,4 +212,141 @@ public class LlmConfigParserTests
         result.Config.ShouldBeNull();
         result.Errors.Count.ShouldBe(2);
     }
+
+    // --- M3b Task 1: prices, budgets, fast tier ---------------------------------------------
+
+    private static LlmOptions ValidWithAnthropic()
+    {
+        var options = Valid();
+        options.ModelsRaw = "claude-cli:sonnet,anthropic:claude-haiku-4-5";
+        options.AnthropicApiKey = "test-anthropic-key";
+        options.PricesRaw = "claude-haiku-4-5=1/5";
+        options.BudgetDailyUsdRaw = "2";
+        options.BudgetMonthlyUsdRaw = "30";
+        return options;
+    }
+
+    [Fact]
+    public void A_priced_anthropic_entry_with_a_key_and_budget_is_kept()
+    {
+        var result = LlmConfigParser.Parse(ValidWithAnthropic(), AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet", "claude-haiku-4-5" });
+        result.Config.Prices["claude-haiku-4-5"].InputUsdPerMillion.ShouldBe(1m);
+        result.Config.Prices["claude-haiku-4-5"].OutputUsdPerMillion.ShouldBe(5m);
+        result.Config.Budget.ShouldNotBeNull();
+        result.Config.Budget!.DailyUsd.ShouldBe(2m);
+        result.Config.Budget.MonthlyUsd.ShouldBe(30m);
+        result.Config.Budget.WarnPercent.ShouldBe(80); // default
+        result.Config.Budget.HardPercent.ShouldBe(120); // default
+    }
+
+    [Fact]
+    public void Claude_cli_entries_are_always_priced_zero_even_if_LLM_PRICES_names_them()
+    {
+        var options = Valid();
+        options.PricesRaw = "sonnet=9/9"; // sonnet is the claude-cli entry's name in Valid()
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.Prices["sonnet"].InputUsdPerMillion.ShouldBe(0m);
+        result.Config.Prices["sonnet"].OutputUsdPerMillion.ShouldBe(0m);
+    }
+
+    [Fact]
+    public void An_anthropic_entry_with_no_api_key_is_dropped_not_fatal()
+    {
+        var options = ValidWithAnthropic();
+        options.AnthropicApiKey = "";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue(); // the claude-cli entry survives
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Errors.ShouldContain(e => e.Contains("ANTHROPIC_API_KEY"));
+    }
+
+    [Fact]
+    public void An_anthropic_entry_with_no_price_is_dropped_not_fatal()
+    {
+        var options = ValidWithAnthropic();
+        options.PricesRaw = "";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Errors.ShouldContain(e => e.Contains("LLM_PRICES"));
+    }
+
+    [Theory]
+    [InlineData("", "30")]
+    [InlineData("2", "")]
+    [InlineData("10", "5")] // daily > monthly
+    public void A_paid_entry_with_missing_or_invalid_budget_is_dropped_not_fatal(string daily, string monthly)
+    {
+        var options = ValidWithAnthropic();
+        options.BudgetDailyUsdRaw = daily;
+        options.BudgetMonthlyUsdRaw = monthly;
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Config.Budget.ShouldBeNull();
+        result.Errors.ShouldContain(e => e.Contains("claude-haiku-4-5") && e.Contains("BUDGET"));
+    }
+
+    [Theory]
+    [InlineData("100")]  // not < 100
+    [InlineData("0")]
+    [InlineData("not-a-number")]
+    public void An_invalid_warn_percent_drops_paid_entries_with_defaults_kept_for_hard(string badWarn)
+    {
+        var options = ValidWithAnthropic();
+        options.BudgetWarnPercentRaw = badWarn;
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.Budget.ShouldBeNull();
+        result.Config.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+    }
+
+    [Fact]
+    public void Zero_zero_prices_are_allowed_for_a_paid_entry()
+    {
+        var options = ValidWithAnthropic();
+        options.PricesRaw = "claude-haiku-4-5=0/0";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.Prices["claude-haiku-4-5"].InputUsdPerMillion.ShouldBe(0m);
+        result.Config.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet", "claude-haiku-4-5" });
+    }
+
+    [Fact]
+    public void LLM_FAST_MODELS_resolves_to_entries_already_in_LLM_MODELS_in_its_own_order()
+    {
+        var options = ValidWithAnthropic();
+        options.ModelsRaw = "claude-cli:sonnet,claude-cli:haiku,anthropic:claude-haiku-4-5";
+        options.PricesRaw = "claude-haiku-4-5=1/5";
+        options.FastModelsRaw = "claude-cli:haiku,anthropic:claude-haiku-4-5";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.FastModels.Select(m => m.Name).ShouldBe(new[] { "haiku", "claude-haiku-4-5" });
+    }
+
+    [Fact]
+    public void A_fast_model_entry_not_present_in_LLM_MODELS_is_dropped_with_an_error()
+    {
+        var options = Valid();
+        options.FastModelsRaw = "claude-cli:does-not-exist";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.FastModels.ShouldBeEmpty();
+        result.Errors.ShouldContain(e => e.Contains("LLM_FAST_MODELS"));
+    }
 }

@@ -94,6 +94,9 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
             CallTimeoutSeconds = 60,
             MaxConcurrentCalls = 2,
             ModelCooldownMinutes = 5,
+            Prices = new Dictionary<string, ModelPrice>(),
+            Budget = null,
+            FastModels = Array.Empty<ModelCatalogEntry>()
         };
         var generalAssistant = new GeneralAssistant(
             messageStore, _gateway, new ChatSettingsStore(Db, clock), config, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);

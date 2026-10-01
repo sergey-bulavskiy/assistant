@@ -34,7 +34,10 @@ public class LlmGatewayTests : IntegrationTestBase
         MaxOutputTokens = 1024,
         CallTimeoutSeconds = callTimeoutSeconds,
         MaxConcurrentCalls = maxConcurrentCalls,
-        ModelCooldownMinutes = modelCooldownMinutes
+        ModelCooldownMinutes = modelCooldownMinutes,
+        Prices = new Dictionary<string, ModelPrice>(),
+        Budget = null,
+        FastModels = Array.Empty<ModelCatalogEntry>()
     };
 
     private LlmGateway CreateGateway(

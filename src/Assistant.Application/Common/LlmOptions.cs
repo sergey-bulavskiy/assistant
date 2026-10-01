@@ -15,6 +15,20 @@ public class LlmOptions
     public string CallTimeoutSecondsRaw { get; set; } = string.Empty;
     public string MaxConcurrentCallsRaw { get; set; } = string.Empty;
     public string ModelCooldownMinutesRaw { get; set; } = string.Empty;
+
+    // M3b additions (spec §3, §4, §10.2, §10.4). Credentials/URLs are read as strings, same reason
+    // as every other raw field here -- an empty value must be distinguishable from "not set".
+    public string PricesRaw { get; set; } = string.Empty;                 // LLM_PRICES
+    public string AnthropicApiKey { get; set; } = string.Empty;           // ANTHROPIC_API_KEY
+    public string AnthropicProxy { get; set; } = string.Empty;            // ANTHROPIC_PROXY
+    public string OpenAiApiKey { get; set; } = string.Empty;              // OPENAI_API_KEY
+    public string OpenAiBaseUrl { get; set; } = string.Empty;             // OPENAI_BASE_URL
+    public string OpenAiProxy { get; set; } = string.Empty;               // OPENAI_PROXY
+    public string BudgetDailyUsdRaw { get; set; } = string.Empty;         // LLM_BUDGET_DAILY_USD
+    public string BudgetMonthlyUsdRaw { get; set; } = string.Empty;       // LLM_BUDGET_MONTHLY_USD
+    public string BudgetWarnPercentRaw { get; set; } = string.Empty;      // LLM_BUDGET_WARN_PERCENT (default 80)
+    public string BudgetHardPercentRaw { get; set; } = string.Empty;      // LLM_BUDGET_HARD_PERCENT (default 120)
+    public string FastModelsRaw { get; set; } = string.Empty;             // LLM_FAST_MODELS
 }
 
 // One "provider:name" entry from LLM_MODELS. Name (the part after the colon) is what /model and
@@ -22,6 +36,14 @@ public class LlmOptions
 // ProviderPrefix (the part before the colon, lower-cased) is looked up by IChatClientProvider --
 // Application never learns what the prefix means or which provider it names.
 public record ModelCatalogEntry(string ProviderPrefix, string Name);
+
+// Per-million-token USD price for one catalog entry (spec §10.2). claude-cli entries are always
+// forced to 0/0 regardless of any LLM_PRICES text naming them.
+public record ModelPrice(decimal InputUsdPerMillion, decimal OutputUsdPerMillion);
+
+// Platform-wide day/month real-money budget (spec §10.4). Warn/hard are percentages of the
+// relevant limit (day or month) at which the budget guard starts warning/blocking.
+public record BudgetConfig(decimal DailyUsd, decimal MonthlyUsd, int WarnPercent, int HardPercent);
 
 public class LlmConfig
 {
@@ -34,9 +56,15 @@ public class LlmConfig
     public required int CallTimeoutSeconds { get; init; }
     public required int MaxConcurrentCalls { get; init; }
     public required int ModelCooldownMinutes { get; init; }
+    public required IReadOnlyDictionary<string, ModelPrice> Prices { get; init; }
+    public required BudgetConfig? Budget { get; init; }
+    public required IReadOnlyList<ModelCatalogEntry> FastModels { get; init; }
 
     // M3a defines exactly one tier; its chain is LLM_MODELS' own order (spec section 3.1).
     public const string SmartTier = "smart";
+
+    // Spec §4: LLM_FAST_MODELS is the "fast" tier, resolved against the surviving LLM_MODELS catalog.
+    public const string FastTier = "fast";
 }
 
 public record LlmConfigParseResult(bool IsEnabled, LlmConfig? Config, IReadOnlyList<string> Errors);
@@ -62,8 +90,6 @@ public static class LlmConfigParser
         var entryErrors = new List<string>();
         var limitErrors = new List<string>();
 
-        var models = ParseModels(options.ModelsRaw, validateProvider, entryErrors);
-
         var callsPerMinute = ParsePositiveInt(options.CallsPerMinuteRaw, "LLM_CALLS_PER_MINUTE", limitErrors);
         var callsPerDay = ParsePositiveInt(options.CallsPerDayRaw, "LLM_CALLS_PER_DAY", limitErrors);
         var maxContextMessages = ParsePositiveInt(options.MaxContextMessagesRaw, "LLM_MAX_CONTEXT_MESSAGES", limitErrors);
@@ -77,6 +103,19 @@ public static class LlmConfigParser
         {
             return new LlmConfigParseResult(false, null, entryErrors.Concat(limitErrors).ToArray());
         }
+
+        var prices = ParsePrices(options.PricesRaw, entryErrors);
+        var (budget, budgetProblem) = ParseBudget(options);
+
+        var models = ParseModels(options, validateProvider, prices, budget, budgetProblem, entryErrors);
+
+        // Spec: claude-cli entries are priced 0 regardless of any LLM_PRICES text naming them.
+        foreach (var entry in models.Where(m => string.Equals(m.ProviderPrefix, LlmProviderClaudeCliPrefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            prices[entry.Name] = new ModelPrice(0m, 0m);
+        }
+
+        var fastModels = ParseFastModels(options.FastModelsRaw, models, entryErrors);
 
         if (models.Count == 0)
         {
@@ -98,19 +137,31 @@ public static class LlmConfigParser
             MaxOutputTokens = maxOutputTokens,
             CallTimeoutSeconds = callTimeoutSeconds,
             MaxConcurrentCalls = maxConcurrentCalls,
-            ModelCooldownMinutes = modelCooldownMinutes
+            ModelCooldownMinutes = modelCooldownMinutes,
+            Prices = prices,
+            Budget = budget,
+            FastModels = fastModels
         };
         // entryErrors may be non-empty even on success (e.g. a dropped duplicate) -- still reported
         // so the owner sees what happened, but not fatal since at least one model remains.
         return new LlmConfigParseResult(true, config, entryErrors);
     }
 
-    private static IReadOnlyList<ModelCatalogEntry> ParseModels(string raw, Func<string, string?> validateProvider, List<string> errors)
+    // Application never learns what a provider prefix means (spec §3.1) except for this one
+    // literal, needed only to force claude-cli's own price to 0/0 -- it never affects which
+    // providers' entries are kept, only pricing of an already-kept claude-cli entry.
+    private const string LlmProviderClaudeCliPrefix = "claude-cli";
+
+    private static readonly string[] PaidProviderPrefixes = { "anthropic", "openai" };
+
+    private static IReadOnlyList<ModelCatalogEntry> ParseModels(
+        LlmOptions options, Func<string, string?> validateProvider,
+        IReadOnlyDictionary<string, ModelPrice> prices, BudgetConfig? budget, string? budgetProblem, List<string> errors)
     {
         var entries = new List<ModelCatalogEntry>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var part in options.ModelsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var colonIndex = part.IndexOf(':');
             if (colonIndex <= 0 || colonIndex == part.Length - 1)
@@ -132,7 +183,10 @@ public static class LlmConfigParser
             }
 
             // Provider validity is checked before reserving the name for duplicate detection, so a
-            // dropped entry never blocks a later, valid entry from reusing its name.
+            // dropped entry never blocks a later, valid entry from reusing its name. This callback
+            // only tells us whether Infrastructure recognizes/can use this provider prefix at all
+            // (e.g. claude-cli needing a token) -- price/budget are M3b additions this parser checks
+            // itself below, since Application never learns a provider's credentials either way.
             var providerError = validateProvider(provider);
             if (providerError is not null)
             {
@@ -146,10 +200,152 @@ public static class LlmConfigParser
                 continue;
             }
 
+            if (PaidProviderPrefixes.Contains(provider, StringComparer.OrdinalIgnoreCase))
+            {
+                var isAnthropic = string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase);
+                var apiKey = isAnthropic ? options.AnthropicApiKey : options.OpenAiApiKey;
+                var keyVar = isAnthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+
+                if (string.IsNullOrEmpty(apiKey))
+                {
+                    errors.Add($"LLM_MODELS entry '{part}' needs a non-empty {keyVar}; dropped.");
+                    seenNames.Remove(name);
+                    continue;
+                }
+
+                if (!prices.ContainsKey(name))
+                {
+                    errors.Add($"LLM_MODELS entry '{part}' has no price in LLM_PRICES; dropped.");
+                    seenNames.Remove(name);
+                    continue;
+                }
+
+                if (budget is null)
+                {
+                    errors.Add($"LLM_MODELS entry '{part}' dropped: {budgetProblem}.");
+                    seenNames.Remove(name);
+                    continue;
+                }
+            }
+
             entries.Add(new ModelCatalogEntry(provider, name));
         }
 
         return entries;
+    }
+
+    private static Dictionary<string, ModelPrice> ParsePrices(string raw, List<string> errors)
+    {
+        var prices = new Dictionary<string, ModelPrice>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var eq = part.IndexOf('=');
+            if (eq <= 0 || eq == part.Length - 1)
+            {
+                errors.Add($"LLM_PRICES entry '{part}' is not in 'name=input/output' form; dropped.");
+                continue;
+            }
+
+            var name = part[..eq];
+            var priceText = part[(eq + 1)..];
+            var slash = priceText.IndexOf('/');
+            if (slash <= 0 || slash == priceText.Length - 1)
+            {
+                errors.Add($"LLM_PRICES entry '{part}' price is not in 'input/output' form; dropped.");
+                continue;
+            }
+
+            var inputOk = decimal.TryParse(priceText[..slash], NumberStyles.Number, CultureInfo.InvariantCulture, out var input) && input >= 0;
+            var outputOk = decimal.TryParse(priceText[(slash + 1)..], NumberStyles.Number, CultureInfo.InvariantCulture, out var output) && output >= 0;
+            if (!inputOk || !outputOk)
+            {
+                errors.Add($"LLM_PRICES entry '{part}' has a non-numeric or negative price; dropped.");
+                continue;
+            }
+
+            if (!prices.TryAdd(name, new ModelPrice(input, output)))
+            {
+                errors.Add($"LLM_PRICES entry '{part}' has a duplicate name '{name}'; dropped (keeping the first).");
+            }
+        }
+
+        return prices;
+    }
+
+    private static (BudgetConfig? Budget, string? Problem) ParseBudget(LlmOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.BudgetDailyUsdRaw) && string.IsNullOrWhiteSpace(options.BudgetMonthlyUsdRaw))
+        {
+            return (null, "LLM_BUDGET_DAILY_USD/LLM_BUDGET_MONTHLY_USD are not set");
+        }
+
+        if (!decimal.TryParse(options.BudgetDailyUsdRaw, NumberStyles.Number, CultureInfo.InvariantCulture, out var daily) || daily <= 0)
+        {
+            return (null, "LLM_BUDGET_DAILY_USD must be a positive number");
+        }
+
+        if (!decimal.TryParse(options.BudgetMonthlyUsdRaw, NumberStyles.Number, CultureInfo.InvariantCulture, out var monthly) || monthly <= 0)
+        {
+            return (null, "LLM_BUDGET_MONTHLY_USD must be a positive number");
+        }
+
+        if (daily > monthly)
+        {
+            return (null, "LLM_BUDGET_DAILY_USD must not exceed LLM_BUDGET_MONTHLY_USD");
+        }
+
+        var warnRaw = string.IsNullOrWhiteSpace(options.BudgetWarnPercentRaw) ? "80" : options.BudgetWarnPercentRaw;
+        var hardRaw = string.IsNullOrWhiteSpace(options.BudgetHardPercentRaw) ? "120" : options.BudgetHardPercentRaw;
+
+        if (!int.TryParse(warnRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var warn) || warn <= 0 || warn >= 100)
+        {
+            return (null, "LLM_BUDGET_WARN_PERCENT must be a positive integer below 100");
+        }
+
+        if (!int.TryParse(hardRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hard) || hard < 100)
+        {
+            return (null, "LLM_BUDGET_HARD_PERCENT must be an integer of at least 100");
+        }
+
+        return (new BudgetConfig(daily, monthly, warn, hard), null);
+    }
+
+    private static IReadOnlyList<ModelCatalogEntry> ParseFastModels(string raw, IReadOnlyList<ModelCatalogEntry> models, List<string> errors)
+    {
+        var result = new List<ModelCatalogEntry>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colonIndex = part.IndexOf(':');
+            if (colonIndex <= 0 || colonIndex == part.Length - 1)
+            {
+                errors.Add($"LLM_FAST_MODELS entry '{part}' is not in 'provider:model' form; dropped.");
+                continue;
+            }
+
+            var provider = part[..colonIndex];
+            var name = part[(colonIndex + 1)..];
+
+            if (!seen.Add(name))
+            {
+                errors.Add($"LLM_FAST_MODELS entry '{part}' is a duplicate; dropped.");
+                continue;
+            }
+
+            var match = models.FirstOrDefault(m =>
+                string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(m.ProviderPrefix, provider, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                errors.Add($"LLM_FAST_MODELS entry '{part}' does not match a configured LLM_MODELS entry; dropped.");
+                continue;
+            }
+
+            result.Add(match);
+        }
+
+        return result;
     }
 
     private static int ParsePositiveInt(string raw, string variableName, List<string> errors)
