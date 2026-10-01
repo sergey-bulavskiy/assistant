@@ -18,6 +18,14 @@ public class ScriptedChatClient : IChatClient
             Usage = new UsageDetails { InputTokenCount = inputTokens, OutputTokenCount = outputTokens }
         }));
 
+    /// <summary>Enqueues a response with only one of input/output token counts reported (the other
+    /// left null), to simulate a provider that returns partial usage.</summary>
+    public void EnqueueResponsePartialUsage(string text, int? inputTokens, int? outputTokens) =>
+        _script.Enqueue(_ => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text))
+        {
+            Usage = new UsageDetails { InputTokenCount = inputTokens, OutputTokenCount = outputTokens }
+        }));
+
     /// <summary>Enqueues a response carrying a reported cost via
     /// <see cref="Assistant.Infrastructure.Llm.LlmResponseKeys.ReportedCostUsd"/>, using
     /// <paramref name="asJsonElement"/> to simulate the value arriving as a <c>JsonElement</c> (as it

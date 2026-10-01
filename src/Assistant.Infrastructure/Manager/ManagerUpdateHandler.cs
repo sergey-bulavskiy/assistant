@@ -27,6 +27,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     private readonly BotPollingCoordinator _coordinator;
     private readonly IApprovalService _approvals;
     private readonly IClock _clock;
+    private readonly UsageCommandHandler _usageHandler;
     private readonly ILogger<ManagerUpdateHandler> _logger;
 
     public ManagerUpdateHandler(
@@ -38,6 +39,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         BotPollingCoordinator coordinator,
         IApprovalService approvals,
         IClock clock,
+        UsageCommandHandler usageHandler,
         ILogger<ManagerUpdateHandler> logger)
     {
         _db = db;
@@ -48,6 +50,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         _coordinator = coordinator;
         _approvals = approvals;
         _clock = clock;
+        _usageHandler = usageHandler;
         _logger = logger;
     }
 
@@ -90,6 +93,21 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         if (command == "settings")
         {
             await HandleSettingsAsync(chatId, topicId, userId, telegramClient, cancellationToken);
+            return;
+        }
+
+        if (command == "usage")
+        {
+            // /usage can show platform-wide spend and a per-bot/per-model breakdown of the caller's
+            // own family -- not something to post into a group the bot is in (unlike /settings, which
+            // only lists bots/places/members already visible to that group). Private chats only; a
+            // group message is silently ignored, the same as any other unrecognized context would be.
+            if (update.Message.ChatType == "private")
+            {
+                var reply = await _usageHandler.BuildReplyAsync(userId, cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, reply, replyToMessageId: null, cancellationToken);
+            }
+
             return;
         }
 

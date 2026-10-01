@@ -16,20 +16,35 @@ public class ChatClientProviderTests
     }
 
     [Fact]
-    public void Returns_the_client_registered_for_a_known_prefix()
+    public void A_composite_provider_model_key_is_preferred_over_the_bare_prefix()
     {
-        var client = new StubChatClient();
-        var provider = new ChatClientProvider(new Dictionary<string, IChatClient> { ["claude-cli"] = client });
+        var perModel = new StubChatClient();
+        var shared = new StubChatClient();
+        var provider = new ChatClientProvider(new Dictionary<string, IChatClient>
+        {
+            ["anthropic:claude-haiku-4-5"] = perModel,
+            ["claude-cli"] = shared
+        });
 
-        provider.GetClient("claude-cli").ShouldBeSameAs(client);
+        provider.GetClient("anthropic", "claude-haiku-4-5").ShouldBeSameAs(perModel);
     }
 
     [Fact]
-    public void An_unregistered_prefix_throws()
+    public void A_bare_prefix_registration_still_serves_every_model_of_that_prefix()
+    {
+        var shared = new StubChatClient();
+        var provider = new ChatClientProvider(new Dictionary<string, IChatClient> { ["claude-cli"] = shared });
+
+        provider.GetClient("claude-cli", "sonnet").ShouldBeSameAs(shared);
+        provider.GetClient("claude-cli", "haiku").ShouldBeSameAs(shared);
+    }
+
+    [Fact]
+    public void Neither_a_composite_nor_a_bare_registration_throws()
     {
         var provider = new ChatClientProvider(new Dictionary<string, IChatClient>());
 
-        Should.Throw<InvalidOperationException>(() => provider.GetClient("unknown"));
+        Should.Throw<InvalidOperationException>(() => provider.GetClient("openai", "gpt-6-luna"));
     }
 
     [Fact]
@@ -38,6 +53,6 @@ public class ChatClientProviderTests
         var client = new StubChatClient();
         var provider = new ChatClientProvider(new Dictionary<string, IChatClient> { ["claude-cli"] = client });
 
-        provider.GetClient("CLAUDE-CLI").ShouldBeSameAs(client);
+        provider.GetClient("CLAUDE-CLI", "sonnet").ShouldBeSameAs(client);
     }
 }

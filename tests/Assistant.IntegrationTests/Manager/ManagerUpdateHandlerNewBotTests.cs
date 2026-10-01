@@ -66,7 +66,9 @@ public class ManagerUpdateHandlerNewBotTests : IntegrationTestBase
             new PollingHealth(), _clock, NullLoggerFactory.Instance);
         var approvals = new ApprovalService(db, clients, options, _clock);
 
-        var handler = new ManagerUpdateHandler(db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, _clock, NullLogger<ManagerUpdateHandler>.Instance);
+        var handler = new ManagerUpdateHandler(
+            db, new FixedClaimCode(), pending, clients, encryptor, coordinator, approvals, _clock,
+            new UsageCommandHandler(db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), _clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
         return (handler, clients, pending, coordinator);
     }
 

@@ -1,3 +1,4 @@
+using Assistant.Domain.Llm;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -31,5 +32,31 @@ public class MigrationTests : IntegrationTestBase
         (await Db.Database.SqlQueryRaw<int>(
             "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'messages' AND column_name = 'direction'")
             .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task M3b_budget_table_and_cost_column_exist()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.tables WHERE table_name = 'budget_notices'")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'llm_calls' AND column_name = 'cost'")
+            .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Budget_notice_is_unique_per_period_kind_start_and_threshold()
+    {
+        var periodStart = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero);
+        Db.BudgetNotices.Add(new BudgetNotice { PeriodKind = BudgetNotice.DailyPeriod, PeriodStart = periodStart, Threshold = 80, CreatedAt = periodStart });
+        // Same period, different threshold / kind: allowed.
+        Db.BudgetNotices.Add(new BudgetNotice { PeriodKind = BudgetNotice.DailyPeriod, PeriodStart = periodStart, Threshold = 100, CreatedAt = periodStart });
+        Db.BudgetNotices.Add(new BudgetNotice { PeriodKind = BudgetNotice.MonthlyPeriod, PeriodStart = periodStart, Threshold = 80, CreatedAt = periodStart });
+        await Db.SaveChangesAsync();
+
+        Db.BudgetNotices.Add(new BudgetNotice { PeriodKind = BudgetNotice.DailyPeriod, PeriodStart = periodStart, Threshold = 80, CreatedAt = periodStart });
+
+        await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
     }
 }

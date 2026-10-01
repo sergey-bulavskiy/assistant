@@ -45,6 +45,9 @@ public class AssistantDbContext : DbContext
 
     public DbSet<LlmCall> LlmCalls => Set<LlmCall>();
 
+    // Platform-wide (no FamilyId, no query filter): budgets span every family.
+    public DbSet<BudgetNotice> BudgetNotices => Set<BudgetNotice>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AssistantDbContext).Assembly);

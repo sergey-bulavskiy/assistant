@@ -63,7 +63,9 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
         var approvals = new ApprovalService(Db, clients, options, clock);
-        return new ManagerUpdateHandler(Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
+        return new ManagerUpdateHandler(
+            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock,
+            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
     }
 
     private static IncomingUpdate ClaimCommand(long updateId, long userId, string? username, string args) =>
@@ -131,7 +133,9 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
             new NoopScopeFactory(dbA), clientsA, encryptorA, botOptionsA, PollingWorkerSettings.Default,
             new PollingHealth(), clockA, NullLoggerFactory.Instance);
         var approvalsA = new ApprovalService(dbA, clientsA, botOptionsA, clockA);
-        var handlerA = new ManagerUpdateHandler(dbA, new FixedClaimCode(), new PendingBotCreations(dbA, clockA), clientsA, encryptorA, coordinatorA, approvalsA, clockA, NullLogger<ManagerUpdateHandler>.Instance);
+        var handlerA = new ManagerUpdateHandler(
+            dbA, new FixedClaimCode(), new PendingBotCreations(dbA, clockA), clientsA, encryptorA, coordinatorA, approvalsA, clockA,
+            new UsageCommandHandler(dbA, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockA, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
         var telegramA = new FakeTelegramClient();
 
         var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
@@ -145,7 +149,9 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
             new NoopScopeFactory(dbB), clientsB, encryptorB, botOptionsB, PollingWorkerSettings.Default,
             new PollingHealth(), clockB, NullLoggerFactory.Instance);
         var approvalsB = new ApprovalService(dbB, clientsB, botOptionsB, clockB);
-        var handlerB = new ManagerUpdateHandler(dbB, new FixedClaimCode(), new PendingBotCreations(dbB, clockB), clientsB, encryptorB, coordinatorB, approvalsB, clockB, NullLogger<ManagerUpdateHandler>.Instance);
+        var handlerB = new ManagerUpdateHandler(
+            dbB, new FixedClaimCode(), new PendingBotCreations(dbB, clockB), clientsB, encryptorB, coordinatorB, approvalsB, clockB,
+            new UsageCommandHandler(dbB, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockB, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
         var telegramB = new FakeTelegramClient();
 
         await Task.WhenAll(

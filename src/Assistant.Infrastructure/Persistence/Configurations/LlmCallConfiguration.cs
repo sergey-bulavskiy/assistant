@@ -15,6 +15,11 @@ public class LlmCallConfiguration : IEntityTypeConfiguration<LlmCall>
         builder.Property(c => c.Model).HasMaxLength(128).IsRequired();
         builder.Property(c => c.Outcome).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(c => c.ReportedCost).HasColumnType("numeric(10,4)");
+        builder.Property(c => c.Cost).HasColumnType("numeric(10,4)").IsRequired();
         builder.HasIndex(c => new { c.FamilyId, c.CreatedAt });
+        // The budget guard's spend query is platform-wide (IgnoreQueryFilters, no FamilyId
+        // predicate) -- it needs its own index on CreatedAt alone; the composite index above
+        // doesn't help a query that never filters on FamilyId.
+        builder.HasIndex(c => c.CreatedAt);
     }
 }

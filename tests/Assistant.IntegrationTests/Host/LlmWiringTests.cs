@@ -56,7 +56,31 @@ public class LlmWiringTests : IAsyncLifetime
     {
         "LLM_MODELS", "LLM_CALLS_PER_MINUTE", "LLM_CALLS_PER_DAY", "LLM_MAX_CONTEXT_MESSAGES",
         "LLM_MAX_INPUT_CHARS", "LLM_MAX_OUTPUT_TOKENS", "LLM_CALL_TIMEOUT_SECONDS",
-        "LLM_MAX_CONCURRENT_CALLS", "LLM_MODEL_COOLDOWN_MINUTES", "CLAUDE_CODE_OAUTH_TOKEN"
+        "LLM_MAX_CONCURRENT_CALLS", "LLM_MODEL_COOLDOWN_MINUTES", "CLAUDE_CODE_OAUTH_TOKEN",
+        // M3b additions (Task 9): api keys/proxies/prices/budget, also set/cleared around each
+        // StartWithEnvAsync call so no test leaks one of these into the next.
+        "LLM_PRICES", "ANTHROPIC_API_KEY", "ANTHROPIC_PROXY", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+        "OPENAI_PROXY", "LLM_BUDGET_DAILY_USD", "LLM_BUDGET_MONTHLY_USD", "LLM_BUDGET_WARN_PERCENT",
+        "LLM_BUDGET_HARD_PERCENT", "LLM_FAST_MODELS"
+    };
+
+    // Shared valid base for every M3b test below: claude-cli:sonnet always works (no API key
+    // needed beyond the OAuth token), so these tests only vary the anthropic-specific variables.
+    private static Dictionary<string, string?> ValidBaseEnv(string models) => new()
+    {
+        ["LLM_MODELS"] = models,
+        ["LLM_CALLS_PER_MINUTE"] = "10",
+        ["LLM_CALLS_PER_DAY"] = "200",
+        ["LLM_MAX_CONTEXT_MESSAGES"] = "30",
+        ["LLM_MAX_INPUT_CHARS"] = "40000",
+        ["LLM_MAX_OUTPUT_TOKENS"] = "4000",
+        ["LLM_CALL_TIMEOUT_SECONDS"] = "120",
+        ["LLM_MAX_CONCURRENT_CALLS"] = "2",
+        ["LLM_MODEL_COOLDOWN_MINUTES"] = "30",
+        ["CLAUDE_CODE_OAUTH_TOKEN"] = "test-oauth-token",
+        ["LLM_PRICES"] = "claude-haiku-4-5=1/5",
+        ["LLM_BUDGET_DAILY_USD"] = "2",
+        ["LLM_BUDGET_MONTHLY_USD"] = "30"
     };
 
     private async Task<AssistantWebApplicationFactory> StartWithEnvAsync(IReadOnlyDictionary<string, string?> env)
@@ -188,5 +212,108 @@ public class LlmWiringTests : IAsyncLifetime
         var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
 
         gateway.ShouldBeOfType<NullLlmGateway>();
+    }
+
+    [Fact]
+    public async Task With_an_anthropic_entry_and_an_ANTHROPIC_API_KEY_set_the_entry_resolves()
+    {
+        var env = ValidBaseEnv("claude-cli:sonnet,anthropic:claude-haiku-4-5");
+        env["ANTHROPIC_API_KEY"] = "test-anthropic-key";
+
+        using var factory = await StartWithEnvAsync(env);
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<LlmGateway>();
+        gateway.IsEnabled.ShouldBeTrue();
+
+        var catalog = scope.ServiceProvider.GetRequiredService<ModelCatalog>();
+        catalog.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet", "claude-haiku-4-5" });
+
+        // Constructing the client never contacts the network -- this only proves DI wired the
+        // entry through to a resolvable IChatClient, not that a real call would succeed.
+        var chatClients = scope.ServiceProvider.GetRequiredService<IChatClientProvider>();
+        Should.NotThrow(() => chatClients.GetClient("anthropic", "claude-haiku-4-5"));
+    }
+
+    [Fact]
+    public async Task With_an_anthropic_entry_and_no_ANTHROPIC_API_KEY_the_entry_is_dropped_and_claude_cli_still_works()
+    {
+        var env = ValidBaseEnv("claude-cli:sonnet,anthropic:claude-haiku-4-5");
+        // ANTHROPIC_API_KEY deliberately missing.
+
+        using var factory = await StartWithEnvAsync(env);
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<LlmGateway>();
+        gateway.IsEnabled.ShouldBeTrue();
+
+        var catalog = scope.ServiceProvider.GetRequiredService<ModelCatalog>();
+        catalog.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+
+        var startupResult = scope.ServiceProvider.GetRequiredService<LlmStartupResult>();
+        startupResult.Errors.ShouldContain(e => e.Contains("ANTHROPIC_API_KEY"));
+    }
+
+    [Fact]
+    public async Task An_invalid_ANTHROPIC_PROXY_drops_the_anthropic_entry_and_claude_cli_still_works()
+    {
+        var env = ValidBaseEnv("claude-cli:sonnet,anthropic:claude-haiku-4-5");
+        env["ANTHROPIC_API_KEY"] = "test-anthropic-key";
+        env["ANTHROPIC_PROXY"] = "not-a-valid-proxy-url";
+
+        using var factory = await StartWithEnvAsync(env);
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<LlmGateway>();
+        gateway.IsEnabled.ShouldBeTrue();
+
+        var catalog = scope.ServiceProvider.GetRequiredService<ModelCatalog>();
+        catalog.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+
+        var startupResult = scope.ServiceProvider.GetRequiredService<LlmStartupResult>();
+        startupResult.Errors.ShouldContain(e => e.Contains("ANTHROPIC_PROXY") && !e.Contains("not-a-valid-proxy-url"));
+    }
+
+    [Fact]
+    public async Task An_invalid_OPENAI_BASE_URL_drops_the_openai_entry_and_claude_cli_still_works()
+    {
+        var env = ValidBaseEnv("claude-cli:sonnet,openai:gpt-6-luna");
+        env["OPENAI_API_KEY"] = "test-openai-key";
+        env["OPENAI_BASE_URL"] = "not-a-valid-url";
+        env["LLM_PRICES"] = "claude-haiku-4-5=1/5,gpt-6-luna=1/5";
+
+        using var factory = await StartWithEnvAsync(env);
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<LlmGateway>();
+        gateway.IsEnabled.ShouldBeTrue();
+
+        var catalog = scope.ServiceProvider.GetRequiredService<ModelCatalog>();
+        catalog.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+
+        var startupResult = scope.ServiceProvider.GetRequiredService<LlmStartupResult>();
+        startupResult.Errors.ShouldContain(e => e.Contains("OPENAI_BASE_URL") && !e.Contains("not-a-valid-url"));
+
+        // Constructing every other provider's client must still work -- the whole
+        // IChatClientProvider singleton factory must not have thrown.
+        var chatClients = scope.ServiceProvider.GetRequiredService<IChatClientProvider>();
+        Should.NotThrow(() => chatClients.GetClient("claude-cli", "sonnet"));
+    }
+
+    [Fact]
+    public async Task UsageCommandHandler_resolves_even_when_LLM_is_entirely_off()
+    {
+        using var factory = await StartWithEnvAsync(new Dictionary<string, string?>());
+
+        using var scope = factory.Services.CreateScope();
+        var gateway = scope.ServiceProvider.GetRequiredService<ILlmGateway>();
+        gateway.ShouldBeOfType<NullLlmGateway>();
+
+        var usageHandler = scope.ServiceProvider.GetRequiredService<Assistant.Infrastructure.Manager.UsageCommandHandler>();
+        usageHandler.ShouldNotBeNull();
     }
 }

@@ -1,0 +1,184 @@
+using Assistant.Application.Common;
+using Assistant.Domain.Llm;
+using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Telegram;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Npgsql;
+
+namespace Assistant.Infrastructure.Llm;
+
+public interface IBudgetNoticeSender
+{
+    Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken);
+}
+
+/// <summary>Sends one DM per (period, state) the FIRST time it's reached, to every platform admin
+/// (spec §10.3: owners of the first-claimed family), through the manager bot's own client -- same
+/// insert-then-send pattern as ApprovalService (Verified facts §D.4). Never blocks or fails the LLM
+/// call it's attached to: any exception here is logged (type only) and swallowed, not rethrown.
+///
+/// Deviation from the plan's Step 2 code (execution notes "Reaffirms: Tasks 7-8 must use
+/// BudgetState, not rounded Percent"): the plan's WarnThresholdFor/HardThresholdFor derived the
+/// dedup "threshold" from BudgetPeriodStatus.Percent, which is display-only and keeps climbing call
+/// after call -- its own "Pitfall" paragraph already flagged this as wrong (it would insert a new
+/// row, and send a new DM, for every distinct percent value past the warn line, not once per
+/// threshold). BudgetState.Warn/Soft/Hard already are the fixed, finite set of thresholds the spec
+/// means ("one warning DM per period per threshold"); their numeric enum value is stored as
+/// BudgetNotice.Threshold, so the unique (kind, start, threshold) index dedups on the state actually
+/// crossed, not on a continuously-varying percent.</summary>
+public class BudgetNoticeSender : IBudgetNoticeSender
+{
+    private readonly AssistantDbContext _db;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ITelegramClientFactory _clientFactory;
+    private readonly IOptions<BotOptions> _options;
+    private readonly IClock _clock;
+    private readonly ILogger<BudgetNoticeSender> _logger;
+
+    public BudgetNoticeSender(
+        AssistantDbContext db, IServiceScopeFactory scopeFactory, ITelegramClientFactory clientFactory,
+        IOptions<BotOptions> options, IClock clock, ILogger<BudgetNoticeSender> logger)
+    {
+        _db = db;
+        _scopeFactory = scopeFactory;
+        _clientFactory = clientFactory;
+        _options = options;
+        _clock = clock;
+        _logger = logger;
+    }
+
+    public async Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await NotifyPeriodAsync(status.Daily, cancellationToken);
+            await NotifyPeriodAsync(status.Monthly, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("BudgetNoticeSender failed: {ExceptionType}", ex.GetType().Name);
+        }
+    }
+
+    private async Task NotifyPeriodAsync(BudgetPeriodStatus period, CancellationToken cancellationToken)
+    {
+        var threshold = ThresholdFor(period.State);
+        if (threshold is null)
+        {
+            return; // Normal: nothing to notify.
+        }
+
+        // Check-before-insert (review finding): on the fast path -- every call after the first one
+        // for this (kind, start, threshold) -- this answers "already sent?" with a plain read, no
+        // write attempt at all, so no Error is ever logged for the (expected, frequent) common case.
+        // The insert+unique-violation-catch below still runs on EVERY check, concurrent or not: two
+        // callers can both pass this AnyAsync before either has inserted, so it remains the only
+        // thing that actually prevents a double-send under a real race -- see
+        // Two_concurrent_calls_at_the_same_threshold_only_send_once.
+        await using (var checkScope = _scopeFactory.CreateAsyncScope())
+        {
+            var checkDb = checkScope.ServiceProvider.GetRequiredService<AssistantDbContext>();
+            var alreadySent = await checkDb.BudgetNotices.AnyAsync(
+                n => n.PeriodKind == period.Kind && n.PeriodStart == period.PeriodStart && n.Threshold == threshold.Value,
+                cancellationToken);
+            if (alreadySent)
+            {
+                return;
+            }
+        }
+
+        if (!await TryInsertNoticeAsync(period.Kind, period.PeriodStart, threshold.Value, cancellationToken))
+        {
+            return; // someone else already sent this (period, state) notice.
+        }
+
+        var admins = await PlatformAdmins.GetAsync(_db, cancellationToken);
+        if (admins.Count == 0)
+        {
+            return;
+        }
+
+        var text = BuildText(period);
+        var managerClient = _clientFactory.Create(_options.Value.ManagerToken);
+        foreach (var admin in admins)
+        {
+            try
+            {
+                await managerClient.SendTextAsync(admin.TelegramUserId, null, text, replyToMessageId: null, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Review nit: one admin's send failing (e.g. they blocked the manager bot) must never
+                // stop the others from getting their DM. Type only, same rule as NotifyAsync's own
+                // catch above.
+                _logger.LogError("Failed to send a budget notice DM: {ExceptionType}", ex.GetType().Name);
+            }
+        }
+    }
+
+    private static int? ThresholdFor(BudgetState state) => state switch
+    {
+        BudgetState.Warn => (int)BudgetState.Warn,
+        BudgetState.Soft => (int)BudgetState.Soft,
+        BudgetState.Hard => (int)BudgetState.Hard,
+        _ => null
+    };
+
+    private static string PeriodLabel(string periodKind) =>
+        periodKind == BudgetNotice.MonthlyPeriod ? "в этом месяце" : "сегодня";
+
+    private static string BuildText(BudgetPeriodStatus period) => period.State switch
+    {
+        BudgetState.Warn =>
+            $"Бюджет LLM: предупреждение. Расход {PeriodLabel(period.Kind)}: ${period.Spend:0.00} из ${period.Limit:0.00} ({period.Percent}%).",
+        BudgetState.Soft =>
+            $"Бюджет LLM: достигнут порог 100%. Расход {PeriodLabel(period.Kind)}: ${period.Spend:0.00} из ${period.Limit:0.00}. " +
+            "Включены ограничения: доступны только быстрые и бесплатные модели.",
+        BudgetState.Hard =>
+            $"Бюджет LLM исчерпан. Расход {PeriodLabel(period.Kind)}: ${period.Spend:0.00} из ${period.Limit:0.00}. " +
+            "Доступны только бесплатные модели.",
+        _ => string.Empty
+    };
+
+    /// <summary>Inserts through a brand-new DI scope's own <see cref="AssistantDbContext"/> -- never
+    /// through the request's shared <see cref="_db"/>. A failed insert (unique violation or
+    /// otherwise) must never leave a tracked, half-written entity on the shared context: that
+    /// context is reused by the rest of the request (e.g. the gateway's own call-recording
+    /// SaveChanges), and a stray Added entity there would be re-sent on that next, unrelated save.
+    /// Creating a fresh scope sidesteps that entirely -- whatever happens to its context, the whole
+    /// scope (and the context with it) is disposed right after and never touches `_db`'s change
+    /// tracker. The new scope's own <c>ICurrentFamily</c> is never set (stays unscoped/null), which
+    /// is fine here: <c>budget_notices</c> has no family query filter and this insert touches
+    /// nothing else.</summary>
+    private async Task<bool> TryInsertNoticeAsync(string periodKind, DateTimeOffset periodStart, int threshold, CancellationToken cancellationToken)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var insertDb = scope.ServiceProvider.GetRequiredService<AssistantDbContext>();
+        var notice = new BudgetNotice
+        {
+            PeriodKind = periodKind,
+            PeriodStart = periodStart,
+            Threshold = threshold,
+            CreatedAt = _clock.UtcNow
+        };
+        insertDb.BudgetNotices.Add(notice);
+
+        try
+        {
+            await insertDb.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            return false; // someone else already inserted this (period, state) notice.
+        }
+    }
+
+    private static bool IsUniqueViolation(Exception ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }
+        || ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
+}

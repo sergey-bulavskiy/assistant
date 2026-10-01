@@ -16,6 +16,11 @@ public class FakeTelegramClient : ITelegramClient
 
     public string? ManagedBotTokenToReturn { get; set; } = "test-managed-bot-token";
 
+    /// <summary>When set, <see cref="SendTextAsync"/> throws for a message to this chat id only --
+    /// every other chat id's send still succeeds. Used to prove one recipient's send failure never
+    /// stops the others (e.g. BudgetNoticeSender's per-admin loop).</summary>
+    public long? ThrowOnSendToChatId { get; set; }
+
     /// <summary>
     /// One-shot switch simulating Telegram redelivering updates the offset has already moved past
     /// (a rare but real Telegram Bot API behavior). When set, the *next* <see cref="GetUpdatesAsync"/>
@@ -66,6 +71,17 @@ public class FakeTelegramClient : ITelegramClient
             {
                 return _chatActionsSent.ToArray();
             }
+        }
+    }
+
+    /// <summary>Clears recorded sent messages/buttons so a test can assert "nothing more was sent"
+    /// after an earlier, expected round of sends.</summary>
+    public void ClearSent()
+    {
+        lock (_lock)
+        {
+            _sentMessages.Clear();
+            _sentButtons.Clear();
         }
     }
 
@@ -133,6 +149,11 @@ public class FakeTelegramClient : ITelegramClient
     {
         lock (_lock)
         {
+            if (ThrowOnSendToChatId == chatId)
+            {
+                throw new InvalidOperationException("simulated send failure");
+            }
+
             _sentMessages.Add((chatId, topicId, text, replyToMessageId));
             return Task.FromResult(_nextSentMessageId++);
         }

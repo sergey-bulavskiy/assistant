@@ -102,7 +102,88 @@
 - A model entry's `Name` (after the colon in `LLM_MODELS`) must be unique across the whole catalog —
   `/model <name>` and `chat_settings.preferred_model` both key off it, with no provider prefix
   attached, so a collision between two providers' names would let `/model` silently switch provider.
+- `BudgetNoticeSender.NotifyPeriodAsync` checks whether a (kind, start, threshold) notice already
+  exists (a plain `AnyAsync`, through its own fresh scope) *before* ever attempting the insert --
+  the common case (every call after the first one for a given crossing) never even reaches the
+  insert, so it never logs an Error for what is really just "already sent". The insert itself (plus
+  its unique-violation catch) still runs unconditionally after that check: two callers can both pass
+  the `AnyAsync` read before either has inserted, so the insert+catch is what actually prevents a
+  double-send under a real race, not the check. Both the check and the dedup insert (the
+  `budget_notices` row whose unique index is the actual dedup) run through their own
+  `AssistantDbContext`, resolved from a brand-new DI scope created via
+  `IServiceScopeFactory.CreateAsyncScope()`, never through the request's shared, scoped context. A
+  failed insert on a *shared* context would leave the entity tracked as `Added`, and the next
+  unrelated `SaveChangesAsync` on that same context (e.g. `LlmGateway`'s own call-recording save)
+  would try to re-insert it. The new scope's `ICurrentFamily` is never set, which is fine since
+  `budget_notices` has no family filter. Keep any future DB write inside `BudgetNoticeSender` on
+  this same fresh-scope pattern, not on `_db`. Each admin send is wrapped in its own try/catch too --
+  one owner's send failing (e.g. they blocked the manager bot) must never stop the others' DMs.
+- `LlmGateway` never awaits the post-call budget-notice check on the reply path at all: once a
+  call's cost is recorded, it hands the whole re-evaluate-and-notify step to `IBudgetNoticeDispatcher`
+  (`BudgetNoticeDispatcher.cs`) and discards the returned `Task`
+  (`_ = _budgetNoticeDispatcher.Dispatch();`) -- the dispatcher creates its *own* DI scope (its own
+  `AssistantDbContext`, its own `IBudgetGuard`/`IBudgetNoticeSender`) inside a `Task.Run`, so the
+  request's shared, scoped `_db` is never touched by it and a slow/unreachable Telegram API or DB
+  can never delay the reply by any amount, not just by a bounded timeout. The dispatcher re-evaluates
+  budget status fresh (not the pre-call status used for candidate filtering) and bounds its own work
+  with a short timeout (`BudgetNoticeDispatcher`'s `CheckTimeout`, 5s); any exception (including that
+  timeout firing) is caught and logged by type only, inside the dispatcher, never rethrown anywhere.
+  `IBudgetNoticeDispatcher` exists specifically as a test seam: `Dispatch()` returns the started
+  `Task` *without having awaited it* so a test can await it directly for deterministic, bounded
+  completion -- the reply path itself must still only ever discard what it returns, never await it.
 - A `ModelLimitReachedException`'s `Scope` matters: `Provider` marks every `claude-cli` catalog entry
   unavailable (an account-wide session/weekly/spend/usage limit), `Model` marks only the one that was
   called (a model-named limit like "Opus limit"). Getting this backwards either over-disables working
   models or under-disables ones that are actually rate-limited.
+- **API providers (`anthropic:`/`openai:` entries):** `IChatClientProvider` registers one client per
+  catalog entry for these two (keyed `"prefix:modelName"`), not one shared client per prefix like
+  `claude-cli` — each entry gets its own `IChatClient` but all entries of the same provider share one
+  `HttpClient` (confirmed safe: neither SDK's `IChatClient.Dispose()` disposes a passed-in
+  `HttpClient`). Both official SDKs are constructed with `MaxRetries = 0` (fallback is this gateway's
+  job, not the SDK's), a proxy-aware `HttpClient` built by `ProxyHandlerFactory`, and
+  `HttpClient.Timeout = Timeout.InfiniteTimeSpan` (each factory already sets the SDK's own timeout to
+  `callTimeout + 5s`, and the gateway's own `CancelAfter(callTimeout)` always wins that race). A 429
+  or 400 is classified into `ModelLimitReachedException`'s `Provider`/`Model` scope by reading the
+  response **error body** (`error.type`/`error.details.error_code`/`error.message` for Anthropic,
+  `error.code`/`error.type` for OpenAI), not by whether a `Retry-After` header is present — both a
+  genuine rate limit and a provider-side spend cap return the same 429 shape. **Never** pass
+  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_PROXY`/`OPENAI_PROXY` anywhere near
+  `ClaudeCliOptions` or the CLI child process — they belong only inside
+  `InfrastructureServiceCollectionExtensions.cs`'s DI wiring (the `LlmOptions` construction and the
+  `IChatClientProvider` factory lambda), confirmed by a regression test that builds a real
+  `ClaudeCliChatClient` call with these set as real process environment variables and asserts the
+  child environment contains neither.
+- An invalid `ANTHROPIC_PROXY`/`OPENAI_PROXY` (`ProxyHandlerFactory.Create` fails) drops every
+  `LLM_MODELS`/`LLM_FAST_MODELS` entry of that one provider (one Error each), the same way any other
+  invalid paid entry (missing key, missing price, no budget configured) is dropped individually — it
+  never throws and never stops `claude-cli` entries or the other provider from working. If every
+  surviving entry turns out to need a now-invalid proxy, LLM itself falls back off, same "zero valid
+  models means off" rule `LlmConfigParser.Parse` already uses for an empty `LLM_MODELS`.
+- `OPENAI_BASE_URL` is validated the same way, at the same place (right next to the proxy checks in
+  `InfrastructureServiceCollectionExtensions.cs`), for the same reason: `OpenAiChatClientFactory.Create`
+  does a bare `new Uri(baseUrl)` with no try/catch, inside the `IChatClientProvider` singleton
+  factory lambda -- an invalid value there would throw while resolving that lambda and break every
+  entry of every provider, including `claude-cli`, not just `openai:` ones. An invalid value drops
+  every `openai:` entry (one Error, naming only the variable), never the raw value.
+- Group authorship for the two API providers is folded into the message text itself
+  (`AuthorFoldingChatClient`, wrapping the SDK client inside both `AnthropicChatClientFactory` and
+  `OpenAiChatClientFactory`) as `[author]: text`, since neither SDK's Messages API has a per-message
+  author field the way `claude-cli`'s own `<msg author="...">` framing does. Don't add this folding
+  to `ContextBuilder` or `LlmGateway` itself -- it is provider-specific and must stay out of
+  `claude-cli`'s own path, which keeps reading `ChatMessage.AuthorName` directly.
+- Soft budget state's candidate order (`LlmGateway.ApplyBudgetFilter`): the chat's own current
+  preference stays first if Soft allows it at all, then every `LLM_FAST_MODELS` entry in *that
+  variable's own* declared order (not the main `LLM_MODELS` chain's -- the owner may rank them
+  differently there), then every zero-price entry in chain order. Don't "simplify" this back to
+  filtering the chain in place; a multi-entry `LLM_FAST_MODELS` list needs its own order honoured
+  independently of where those models happen to sit in the main chain.
+- **Budgets are platform-wide by design, not per-family** — `BudgetGuard`'s spend query and
+  `BudgetNoticeSender`'s dedup insert both use `IgnoreQueryFilters()` deliberately, with a comment
+  saying so each time. Don't "fix" this to be family-scoped; that would silently defeat the whole
+  point (a family could spend without the platform-wide cap ever tripping). `BudgetState` (not the
+  rounded, display-only `Percent`) is what every threshold comparison and notice dedup must use.
+- A proxy URL (`ANTHROPIC_PROXY`/`OPENAI_PROXY`) may carry embedded credentials — never log it, not
+  even at Debug, not even in an exception message. `ProxyHandlerFactory` never returns the URL itself
+  on failure, only the variable name (`$"{variableName} must be an absolute http://, https:// or
+  socks5:// proxy URL."`); if you add any logging near proxy handling, log only whether a proxy is
+  configured, never its value.

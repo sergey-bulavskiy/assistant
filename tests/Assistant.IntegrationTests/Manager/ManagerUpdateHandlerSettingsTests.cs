@@ -99,14 +99,18 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
         var handler = new ManagerUpdateHandler(
-            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
+            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock,
+            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
 
         return (handler, clients.Client);
     }
 
     private static IncomingUpdate Command(long updateId, long userId, string text) =>
+        CommandInChat(updateId, userId, text, chatType: "private", chatId: userId);
+
+    private static IncomingUpdate CommandInChat(long updateId, long userId, string text, string chatType, long chatId) =>
         new(updateId, new IncomingMessage(
-            ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: "test_owner",
+            ChatId: chatId, ChatType: chatType, ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: "test_owner",
             Text: text, Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
             SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null));
 
@@ -268,5 +272,27 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         var ownerCount = await Db.FamilyMembers.IgnoreQueryFilters().CountAsync(m => m.FamilyId == _familyId && m.IsOwner);
         ownerCount.ShouldBe(1);
         telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "У вас нет прав.");
+    }
+
+    [Fact]
+    public async Task Usage_from_the_owner_in_a_private_chat_gets_a_reply()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/usage"), CancellationToken.None);
+
+        telegram.SentMessages.ShouldContain(m => m.Text.Contains("вызовов"));
+    }
+
+    [Fact]
+    public async Task Usage_in_a_group_chat_gets_no_reply()
+    {
+        // /usage can show the caller's own family's per-bot/per-model spend breakdown -- unlike
+        // /settings, that is not something to post where every member of the group can read it.
+        var (handler, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CommandInChat(1, 111, "/usage", chatType: "group", chatId: -500), CancellationToken.None);
+
+        telegram.SentMessages.ShouldBeEmpty();
     }
 }

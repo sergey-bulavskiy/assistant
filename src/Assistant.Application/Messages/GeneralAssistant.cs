@@ -252,12 +252,19 @@ public class GeneralAssistant : IGeneralAssistant
         LlmRefusalReason.AllModelsUnavailable => result.RetryAt is { } retryAt && IsKnownRetryTime(retryAt, now)
             ? $"Все модели сейчас недоступны (лимиты), попробуйте позже. Не раньше {FormatTime(retryAt)} UTC."
             : "Все модели сейчас недоступны (лимиты), попробуйте позже.",
+        LlmRefusalReason.BudgetExhausted => result.RetryAt is { } resetAt
+            ? $"Лимит расходов исчерпан до {FormatDateTime(resetAt)} UTC."
+            : "Лимит расходов исчерпан, попробуйте позже.",
         LlmRefusalReason.Failed => FailedText,
         _ => NotConfiguredText // NotConfigured (and an answer without text, which the gateway never returns).
     };
 
     private static string FormatTime(DateTimeOffset time) =>
         time.UtcDateTime.ToString("HH:mm", CultureInfo.InvariantCulture);
+
+    // A budget reset can be days away (monthly), so it carries the date too.
+    private static string FormatDateTime(DateTimeOffset time) =>
+        time.UtcDateTime.ToString("dd.MM HH:mm", CultureInfo.InvariantCulture);
 
     // A retry time far in the future (e.g. DateTimeOffset.MaxValue, used while a model has never
     // been marked available -- see ClaudeCliInstallerHostedService) is not a real ETA: showing it

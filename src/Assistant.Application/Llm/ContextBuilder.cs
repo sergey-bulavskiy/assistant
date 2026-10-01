@@ -46,6 +46,16 @@ public static class ContextBuilder
             firstKeptIndex++;
         }
 
+        // Review nit: Anthropic (and the other API providers) require the first message in a
+        // request to be a User one -- the char-budget trim above can otherwise leave an Assistant
+        // turn first (the oldest surviving messages happened to start with the bot's own reply).
+        // The current message appended above is always User, so this loop always terminates before
+        // running past the end of the list.
+        while (firstKeptIndex < messages.Count - 1 && messages[firstKeptIndex].Role == LlmMessageRole.Assistant)
+        {
+            firstKeptIndex++;
+        }
+
         return messages.Skip(firstKeptIndex).ToArray();
     }
 }

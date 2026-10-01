@@ -38,6 +38,10 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   are tested only against fake `IChatClient`/`ILlmGateway` implementations
   (`Assistant.IntegrationTests/Llm/ScriptedChatClient.cs`, `Assistant.UnitTests/Fakes/FakeLlmGateway.cs`).
   A `CLAUDE_CODE_OAUTH_TOKEN` is never required to build or run this repo's test suite.
+- No test for the Anthropic/OpenAI providers ever reaches the network — both are exercised only
+  through a fake `HttpMessageHandler` returning canned 429/other responses
+  (`AnthropicChatClientFactoryTests`, `OpenAiChatClientFactoryTests`). Neither an `ANTHROPIC_API_KEY`
+  nor an `OPENAI_API_KEY` is ever required to build or run this repo's test suite.
 - `Assistant.IntegrationTests`: every test gets a fresh, migrated database from IntegreSQL
   (`Infrastructure/IntegreSqlPool.cs`). Derive DB tests from `IntegrationTestBase`; host tests use
   `AssistantWebApplicationFactory`, which swaps in a fake Telegram client, a controllable

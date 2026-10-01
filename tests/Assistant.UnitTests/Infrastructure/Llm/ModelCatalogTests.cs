@@ -19,7 +19,10 @@ public class ModelCatalogTests
         MaxOutputTokens = 4000,
         CallTimeoutSeconds = 120,
         MaxConcurrentCalls = 2,
-        ModelCooldownMinutes = 30
+        ModelCooldownMinutes = 30,
+        Prices = new Dictionary<string, ModelPrice>(),
+        Budget = null,
+        FastModels = Array.Empty<ModelCatalogEntry>()
     });
 
     [Fact]
@@ -48,7 +51,10 @@ public class ModelCatalogTests
             MaxOutputTokens = 4000,
             CallTimeoutSeconds = 120,
             MaxConcurrentCalls = 2,
-            ModelCooldownMinutes = 30
+            ModelCooldownMinutes = 30,
+            Prices = new Dictionary<string, ModelPrice>(),
+            Budget = null,
+            FastModels = Array.Empty<ModelCatalogEntry>()
         });
 
         var order = catalog.GetCandidateOrder(LlmConfig.SmartTier, preferredModel: "b");

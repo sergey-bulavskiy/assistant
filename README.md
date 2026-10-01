@@ -15,6 +15,7 @@ features on top of this pipeline.
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
 | `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
 | `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, allow/deny a user still waiting for approval, disable/enable a user, make an approved user an owner. |
+| `/usage` | owners, private chat only | Platform-wide spend/state for today and this calendar month (if budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own family. |
 
 **Role bots:**
 
@@ -168,10 +169,10 @@ the rest of the bots work with none of them set. Steps in this exact order (spec
 
 **Notes:**
 - The General assistant runs the Claude Code CLI (`claude -p`) as its model provider — this is a
-  deliberate, temporary exception to this project's normal "no coding-agent tooling as a runtime
-  dependency" stance, chosen because it works on a Claude subscription with no separate API billing.
-  A later milestone adds direct Anthropic/OpenAI API providers behind the same interface, with no
-  change to how `/model`/`/new` or any role-bot code works.
+  deliberate exception to this project's normal "no coding-agent tooling as a runtime dependency"
+  stance, chosen because it works on a Claude subscription with no separate API billing. Direct
+  Anthropic/OpenAI API providers are also available behind the same interface, with no change to how
+  `/model`/`/new` or any role-bot code works — see "Set up API providers and budgets" below.
 - The CLI itself is **not** part of this (public) image — it's proprietary software, so a background
   service installs the pinned version (`CLAUDE_CLI_VERSION`) into its own dedicated volume the first
   time the container starts with a `claude-cli:` entry configured. Until that finishes (usually a few
@@ -179,7 +180,57 @@ the rest of the bots work with none of them set. Steps in this exact order (spec
   `claude-cli install failed` if it doesn't clear up shortly — a persistent failure most often means
   the container can't reach `claude.ai` to run the installer.
 
-## 7. Smoke test
+## 7. Set up API providers and budgets (optional)
+
+Skip this if `claude-cli` (the previous section) is enough for now — every variable here is optional
+and empty by default.
+
+1. **Before putting a key in `.env`:** create a dedicated API key used only by this app (not a key
+   shared with anything else), and set a monthly spend limit at the provider — a project budget in
+   the OpenAI dashboard, or a monthly spend limit in the Anthropic Console. This app's own
+   `LLM_BUDGET_*` variables are a second, independent guard on top of that provider-side cap, not a
+   replacement for it: the app cannot verify the provider-side cap exists, so set it first.
+2. Get an API key from Anthropic (`ANTHROPIC_API_KEY`) and/or OpenAI (`OPENAI_API_KEY`). Optionally
+   `OPENAI_BASE_URL` (an OpenAI-compatible endpoint other than `api.openai.com`) and
+   `ANTHROPIC_PROXY`/`OPENAI_PROXY` (`http://`, `https://` or `socks5://[user:pass@]host:port`, if
+   this provider needs to be reached through a proxy from this network).
+3. Add `anthropic:<model>`/`openai:<model>` entries to `LLM_MODELS` (alongside or instead of
+   `claude-cli:` ones — every entry, regardless of provider, falls back to the next one in the order
+   listed) and a matching price in `LLM_PRICES` for each one: comma-separated
+   `name=input/output` entries, prices in USD per million tokens (e.g.
+   `claude-haiku-4-5=1/5,gpt-6-luna=0.1/0.5` — see `deploy/.env.example` for current example model
+   ids; check current provider docs for current ids and prices). A `claude-cli:` entry always costs 0
+   toward budgets and needs no price entry. An `anthropic:`/`openai:` entry missing its API key or its
+   price is dropped individually (one logged error) without stopping any other entry, including other
+   `claude-cli:` models.
+4. Set `LLM_BUDGET_DAILY_USD` and `LLM_BUDGET_MONTHLY_USD` (both required together — a paid entry
+   stays disabled until both are set). Optionally `LLM_BUDGET_WARN_PERCENT` (default 80) and
+   `LLM_BUDGET_HARD_PERCENT` (default 120). **The real ceiling this app will ever spend in a
+   day/month is that number × `LLM_BUDGET_HARD_PERCENT` / 100, plus possible overshoot of a few calls
+   already in flight when the cap is crossed** (so a $2 daily budget with the default hard% can in
+   practice reach a bit over $2.40) — size the provider-side cap from step 1 with that real ceiling in
+   mind, not the `LLM_BUDGET_*` number alone.
+5. Optional: `LLM_FAST_MODELS` — a cheaper, ordered `provider:model` fallback chain (every entry must
+   already appear in `LLM_MODELS`) used automatically once spend crosses 100% of either period, before
+   the hard cutoff.
+6. `docker compose -f deploy/docker-compose.yml up -d` (same note as the `claude-cli` section:
+   Watchtower alone does not pick up new environment variables).
+
+Budget state, checked after every call and before each new one:
+- **Below warn%:** normal — every configured paid and subscription model stays usable.
+- **Warn (≥ warn%, < 100%):** nothing is restricted yet; platform admins (owners of the first family)
+  get a one-time DM through the manager bot the first time spend crosses this line for the day or the
+  month.
+- **Soft (≥ 100%, < hard%):** platform admins get another DM; new calls restrict to `LLM_FAST_MODELS`
+  entries and zero-price (`claude-cli`) entries only — other paid models are skipped as unavailable.
+- **Hard (≥ hard%):** platform admins get a third DM; only zero-price (`claude-cli`) entries still
+  answer. If none is configured, the assistant refuses with a message naming when the budget resets.
+
+`/usage` (manager bot, owners only, private chat) shows current spend and state for today and this
+month (when budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own
+family, covering both today and this calendar month.
+
+## 8. Smoke test
 
 An automated smoke test drives real Telegram through one throwaway account: once the repository
 variable `SMOKE_ENABLED` is `true`, CD runs it on every merge to `main` and moves `latest` (what

@@ -34,8 +34,20 @@ public class LlmGatewayTests : IntegrationTestBase
         MaxOutputTokens = 1024,
         CallTimeoutSeconds = callTimeoutSeconds,
         MaxConcurrentCalls = maxConcurrentCalls,
-        ModelCooldownMinutes = modelCooldownMinutes
+        ModelCooldownMinutes = modelCooldownMinutes,
+        Prices = new Dictionary<string, ModelPrice>(),
+        Budget = null,
+        FastModels = Array.Empty<ModelCatalogEntry>()
     };
+
+    // Budget is always null in this file's configs, so LlmGateway never actually dispatches a
+    // post-call notice check (guarded by "budgetWasConfigured") -- a no-op fake keeps these tests
+    // decoupled from the dispatcher/sender's own DB/Telegram wiring, which BudgetNoticeSenderTests
+    // and LlmGatewayBudgetTests already cover.
+    private sealed class NoopBudgetNoticeDispatcher : IBudgetNoticeDispatcher
+    {
+        public Task Dispatch() => Task.CompletedTask;
+    }
 
     private LlmGateway CreateGateway(
         LlmConfig config,
@@ -52,6 +64,8 @@ public class LlmGatewayTests : IntegrationTestBase
             db ?? Db,
             clock ?? new SystemClock(),
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
+            new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
+            new NoopBudgetNoticeDispatcher(),
             NullLogger<LlmGateway>.Instance);
 
     private LlmGateway CreateGatewayWithProviders(
@@ -67,6 +81,8 @@ public class LlmGatewayTests : IntegrationTestBase
             Db,
             clock ?? new SystemClock(),
             new ConcurrentCallGate(config.MaxConcurrentCalls),
+            new BudgetGuard(config, Db, clock ?? new SystemClock()),
+            new NoopBudgetNoticeDispatcher(),
             NullLogger<LlmGateway>.Instance);
 
     /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to
