@@ -44,6 +44,19 @@ services:
       # back to this plan's own pinned default inside the app (Task 9) -- an .env without this
       # variable still gets a working, reviewed version, never "latest".
       CLAUDE_CLI_VERSION: ${CLAUDE_CLI_VERSION:-2.1.285}
+      # M3b: paid API providers and the platform-wide money budget (all optional; empty = that
+      # provider/feature stays off, same "app always starts" rule as every LLM_* var above).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_PROXY: ${ANTHROPIC_PROXY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_PROXY: ${OPENAI_PROXY:-}
+      LLM_PRICES: ${LLM_PRICES:-}
+      LLM_FAST_MODELS: ${LLM_FAST_MODELS:-}
+      LLM_BUDGET_DAILY_USD: ${LLM_BUDGET_DAILY_USD:-}
+      LLM_BUDGET_MONTHLY_USD: ${LLM_BUDGET_MONTHLY_USD:-}
+      LLM_BUDGET_WARN_PERCENT: ${LLM_BUDGET_WARN_PERCENT:-80}
+      LLM_BUDGET_HARD_PERCENT: ${LLM_BUDGET_HARD_PERCENT:-120}
     volumes:
       - claude-home:/home/app/.claude-home
     labels:
