@@ -16,7 +16,9 @@ public record IncomingMessage(
     DateTimeOffset SentAt,
     DateTimeOffset? EditedAt,
     long? MigrateToChatId,
-    string RawJson);
+    string RawJson,
+    int? ReplyToMessageId,
+    long? ReplyToUserId);
 
 /// <summary>A tap on an inline button. <see cref="MessageChatId"/>/<see cref="MessageId"/> identify
 /// the message the button was attached to, so its buttons can later be edited/removed.</summary>

@@ -15,6 +15,7 @@ public class UpdateHandler
     private readonly IApprovalService _approvals;
     private readonly ICurrentFamily _currentFamily;
     private readonly IManagerUpdateHandler _managerHandler;
+    private readonly IGeneralAssistant _generalAssistant;
     private readonly IOptions<BotOptions> _options;
     private readonly BuildInfo _buildInfo;
     private readonly IClock _clock;
@@ -25,6 +26,7 @@ public class UpdateHandler
         IApprovalService approvals,
         ICurrentFamily currentFamily,
         IManagerUpdateHandler managerHandler,
+        IGeneralAssistant generalAssistant,
         IOptions<BotOptions> options,
         BuildInfo buildInfo,
         IClock clock,
@@ -34,6 +36,7 @@ public class UpdateHandler
         _approvals = approvals;
         _currentFamily = currentFamily;
         _managerHandler = managerHandler;
+        _generalAssistant = generalAssistant;
         _options = options;
         _buildInfo = buildInfo;
         _clock = clock;
@@ -112,6 +115,12 @@ public class UpdateHandler
         var result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
         _logger.LogInformation("update {UpdateId} processed with outcome {Outcome}", update.UpdateId, result.Outcome);
 
+        if (IsGeneral(bot))
+        {
+            await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken);
+            return;
+        }
+
         var reply = ReplyPolicy.Decide(message, result, bot.Username, () => VersionText.Format(_buildInfo, _clock.UtcNow));
         if (reply is null)
         {
@@ -120,11 +129,15 @@ public class UpdateHandler
 
         try
         {
-            await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, cancellationToken);
+            await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, replyToMessageId: null, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError("failed to send reply: {ExceptionType}", ex.GetType().Name);
         }
     }
+
+    // Spec 2.1: role `general`, trimmed and case-insensitive (roles are stored as typed to /newbot).
+    private static bool IsGeneral(ReceivingBot bot) =>
+        string.Equals(bot.Role.Trim(), "general", StringComparison.OrdinalIgnoreCase);
 }

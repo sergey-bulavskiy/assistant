@@ -1,5 +1,6 @@
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
+using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
 using Assistant.Infrastructure.Families;
@@ -44,6 +45,12 @@ public class FamilyIsolationTests : IAsyncLifetime
         db.Messages.Add(new StoredMessage { BotId = botA.TelegramBotId, FamilyId = familyA.Id, ChatId = -100, TelegramMessageId = 1, ChatType = "group", Kind = MessageKind.Text, Text = "test message A", SentAt = DateTimeOffset.UtcNow, Raw = "{}", CreatedAt = DateTimeOffset.UtcNow });
         db.Messages.Add(new StoredMessage { BotId = botB.TelegramBotId, FamilyId = familyB.Id, ChatId = -100, TelegramMessageId = 1, ChatType = "group", Kind = MessageKind.Text, Text = "test message B", SentAt = DateTimeOffset.UtcNow, Raw = "{}", CreatedAt = DateTimeOffset.UtcNow });
 
+        db.ChatSettings.Add(new ChatSetting { FamilyId = familyA.Id, BotId = botA.Id, ChatId = -100, TopicId = null, PreferredModel = "family A model", UpdatedAt = DateTimeOffset.UtcNow });
+        db.ChatSettings.Add(new ChatSetting { FamilyId = familyB.Id, BotId = botB.Id, ChatId = -100, TopicId = null, PreferredModel = "family B model", UpdatedAt = DateTimeOffset.UtcNow });
+
+        db.LlmCalls.Add(new LlmCall { FamilyId = familyA.Id, BotId = botA.Id, Tier = "cheap", Provider = "test", Model = "test model A", Outcome = LlmCallOutcome.Ok, DurationMs = 1, CreatedAt = DateTimeOffset.UtcNow });
+        db.LlmCalls.Add(new LlmCall { FamilyId = familyB.Id, BotId = botB.Id, Tier = "cheap", Provider = "test", Model = "test model B", Outcome = LlmCallOutcome.Ok, DurationMs = 1, CreatedAt = DateTimeOffset.UtcNow });
+
         await db.SaveChangesAsync();
     }
 
@@ -70,6 +77,11 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.Places.CountAsync()).ShouldBe(1);
         (await db.Messages.CountAsync()).ShouldBe(1);
         (await db.Messages.SingleAsync()).Text.ShouldBe("test message A");
+
+        (await db.ChatSettings.CountAsync()).ShouldBe(1);
+        (await db.ChatSettings.SingleAsync()).PreferredModel.ShouldBe("family A model");
+        (await db.LlmCalls.CountAsync()).ShouldBe(1);
+        (await db.LlmCalls.SingleAsync()).Model.ShouldBe("test model A");
     }
 
     [Fact]
@@ -84,6 +96,11 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.Places.CountAsync()).ShouldBe(1);
         (await db.Messages.CountAsync()).ShouldBe(1);
         (await db.Messages.SingleAsync()).Text.ShouldBe("test message B");
+
+        (await db.ChatSettings.CountAsync()).ShouldBe(1);
+        (await db.ChatSettings.SingleAsync()).PreferredModel.ShouldBe("family B model");
+        (await db.LlmCalls.CountAsync()).ShouldBe(1);
+        (await db.LlmCalls.SingleAsync()).Model.ShouldBe("test model B");
     }
 
     [Fact]

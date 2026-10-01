@@ -129,4 +129,85 @@ public class MessageStore : IMessageStore
         await transaction.CommitAsync(cancellationToken);
         return new StoreResult(outcome, messageDbId);
     }
+
+    public async Task StoreOutgoingAsync(
+        long botId, long chatId, int? topicId, string chatType, int telegramMessageId, string text, CancellationToken cancellationToken)
+    {
+        var bot = await _db.Bots.IgnoreQueryFilters().AsNoTracking().FirstOrDefaultAsync(b => b.TelegramBotId == botId, cancellationToken)
+            ?? throw new InvalidOperationException($"bots row for telegram bot id {botId} not found.");
+
+        var entity = new StoredMessage
+        {
+            BotId = botId,
+            FamilyId = bot.FamilyId,
+            Direction = MessageDirection.Out,
+            ChatId = chatId,
+            TopicId = topicId,
+            TelegramMessageId = telegramMessageId,
+            UserId = null,
+            Username = null,
+            ChatType = chatType,
+            Kind = MessageKind.Text,
+            Text = text,
+            SentAt = _clock.UtcNow,
+            Raw = "{}", // spec §8.2: outgoing rows get raw = '{}', not null/empty -- there is no Telegram update to store.
+            CreatedAt = _clock.UtcNow
+        };
+        var entry = _db.Messages.Add(entity);
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            // A failed SaveChanges (e.g. a unique-index violation) must not leave this entry tracked:
+            // the same DbContext/scope is reused for the rest of the request (e.g. the next split
+            // part's own StoreOutgoingAsync call), and an EF Core DbContext re-attempts every
+            // still-tracked Added entity on its next SaveChangesAsync, which would otherwise repeat
+            // this same failure forever and take down unrelated writes with it.
+            entry.State = EntityState.Detached;
+            throw;
+        }
+        // Deliberately does NOT touch bot state / LastUpdateId: outgoing replies never advance the
+        // bot's Telegram offset (spec §8.2) -- only StoreAsync, for inbound updates, does that.
+    }
+
+    public async Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken)
+    {
+        if (maxMessages <= 0)
+        {
+            return Array.Empty<ContextMessage>();
+        }
+
+        // No IgnoreQueryFilters(): UpdateHandler always calls ICurrentFamily.Set(bot.FamilyId) before
+        // this runs (spec §2.4), and every row this bot writes (StoreAsync/StoreOutgoingAsync) carries
+        // that same FamilyId, so StoredMessage's query filter (FamilyId == null || == current family)
+        // already admits every row that matches BotId/ChatId/TopicId below -- it filters out nothing
+        // this method should return.
+        var query = _db.Messages.AsNoTracking()
+            .Where(m => m.BotId == botId && m.ChatId == chatId && m.TopicId == topicId
+                && m.Kind == MessageKind.Text
+                && !m.Text!.StartsWith("/")); // commands (e.g. /new, /model) are never LLM context (spec §2.4)
+
+        if (afterMessageId is { } afterId)
+        {
+            query = query.Where(m => m.Id > afterId);
+        }
+
+        if (beforeMessageId is { } beforeId)
+        {
+            query = query.Where(m => m.Id < beforeId);
+        }
+
+        var rows = await query
+            .OrderByDescending(m => m.Id)
+            .Take(maxMessages)
+            .Select(m => new ContextMessage(m.Direction, m.Username, m.Text!, m.SentAt))
+            .ToListAsync(cancellationToken);
+
+        rows.Reverse();
+        return rows;
+    }
 }

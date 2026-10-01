@@ -70,7 +70,7 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         new(updateId, new IncomingMessage(
             ChatId: userId, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: (int)updateId, UserId: userId, Username: username,
             Text: $"/claim {args}", Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
-            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}"));
+            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null));
 
     [Fact]
     public async Task Correct_code_creates_the_first_family_with_the_sender_as_owner()

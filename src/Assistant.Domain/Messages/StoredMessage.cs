@@ -5,6 +5,7 @@ public class StoredMessage
     public long Id { get; set; }
     public long BotId { get; set; }
     public long? FamilyId { get; set; }
+    public MessageDirection Direction { get; set; } = MessageDirection.In;
     public long ChatId { get; set; }
     public int? TopicId { get; set; }
     public int TelegramMessageId { get; set; }

@@ -33,6 +33,11 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   Never paste real messages, user ids or chat ids, even "anonymized".
 - `Assistant.UnitTests`: no I/O. Use the fakes in `Assistant.UnitTests/Fakes`
   (`FakeTelegramClient`, `FakeMessageStore`, `FixedClock`) instead of mocking libraries.
+- The real Claude Code CLI is never invoked by any automated test — `ClaudeCliChatClient` is tested
+  only against `FakeProcessRunner` (`Assistant.UnitTests/Fakes`), and `LlmGateway`/`GeneralAssistant`
+  are tested only against fake `IChatClient`/`ILlmGateway` implementations
+  (`Assistant.IntegrationTests/Llm/ScriptedChatClient.cs`, `Assistant.UnitTests/Fakes/FakeLlmGateway.cs`).
+  A `CLAUDE_CODE_OAUTH_TOKEN` is never required to build or run this repo's test suite.
 - `Assistant.IntegrationTests`: every test gets a fresh, migrated database from IntegreSQL
   (`Infrastructure/IntegreSqlPool.cs`). Derive DB tests from `IntegrationTestBase`; host tests use
   `AssistantWebApplicationFactory`, which swaps in a fake Telegram client, a controllable

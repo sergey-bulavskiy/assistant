@@ -51,6 +51,8 @@ public static class TelegramUpdateMapper
         var text = TextSanitizer.SanitizeText(tgMessage.Text ?? tgMessage.Caption);
         var chatTitle = TextSanitizer.SanitizeText(tgMessage.Chat.Title);
         var rawJson = TextSanitizer.SanitizeRawJson(JsonSerializer.Serialize(update, JsonBotAPI.Options));
+        var replyToMessageId = tgMessage.ReplyToMessage?.Id;
+        var replyToUserId = tgMessage.ReplyToMessage?.From?.Id;
 
         var message = new IncomingMessage(
             ChatId: tgMessage.Chat.Id,
@@ -66,7 +68,9 @@ public static class TelegramUpdateMapper
             SentAt: DateTime.SpecifyKind(tgMessage.Date, DateTimeKind.Utc),
             EditedAt: tgMessage.EditDate.HasValue ? DateTime.SpecifyKind(tgMessage.EditDate.Value, DateTimeKind.Utc) : null,
             MigrateToChatId: tgMessage.MigrateToChatId,
-            RawJson: rawJson);
+            RawJson: rawJson,
+            ReplyToMessageId: replyToMessageId,
+            ReplyToUserId: replyToUserId);
 
         return new IncomingUpdate(update.Id, message);
     }

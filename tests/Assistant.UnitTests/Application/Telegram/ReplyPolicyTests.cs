@@ -25,7 +25,7 @@ public class ReplyPolicyTests
             SentAt: DateTimeOffset.UtcNow,
             EditedAt: null,
             MigrateToChatId: null,
-            RawJson: "{}");
+            RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     [Fact]
     public void Returns_null_when_message_is_null()

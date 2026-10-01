@@ -2,8 +2,9 @@
 
 A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
 **role bots** for it; role bots quietly record the messages of approved people in approved chats
-into PostgreSQL. There is no LLM yet: role bots only store messages and confirm them in private
-chats. Later milestones add the assistant features on top of this pipeline.
+into PostgreSQL, and one role bot -- the **General assistant** -- can also answer with a real LLM
+(the Claude Code CLI on a Claude subscription) once configured. Later milestones add more assistant
+features on top of this pipeline.
 
 ## What it does
 
@@ -24,6 +25,19 @@ chats. Later milestones add the assistant features on top of this pipeline.
 - Messages from approved users in approved places are stored exactly once per Telegram update, even
   across restarts. In private chats the bot replies `Получил ✅ #<id>`; in groups it stays silent.
 - `/start` (private chats) and `/version` (any chat) reply with a greeting and the running version.
+
+**General assistant** (a role bot created with `/newbot general`): answers with a real LLM instead
+of just storing messages.
+
+- Private chats: replies to every ordinary message. Approved groups/topics: only when addressed
+  (mentioned by @username, or replied to) — a plain message in a group it's in is still stored, just
+  not answered.
+- `/new` starts a fresh conversation in that chat/topic (earlier messages stop being sent as
+  context). `/model` shows the configured models and lets you pin this chat to one (`/model auto`
+  returns to the default). `/version` as usual.
+- Needs `LLM_MODELS` and `CLAUDE_CODE_OAUTH_TOKEN` configured (see "Set up the General assistant"
+  below) — without them it replies "Ассистент пока не настроен." and every other bot keeps working
+  normally.
 
 ## Privacy
 
@@ -78,6 +92,11 @@ POSTGRES_DB=assistant
 IMAGE_TAG=latest
 ```
 
+To also enable the General assistant now (optional, can be done later — step 6): set
+`CLAUDE_CODE_OAUTH_TOKEN` and `LLM_MODELS`. Every other `LLM_*` limit already has a working default
+from `deploy/docker-compose.yml` — leave them unset unless you have a reason to override one in
+`.env` (see `deploy/.env.example`).
+
 `POSTGRES_PASSWORD` must contain **only letters and digits** — it's interpolated directly into a
 Postgres connection string in `deploy/docker-compose.yml`, and punctuation there (`:`, `@`, `/`,
 etc.) can break parsing.
@@ -106,7 +125,61 @@ commands and replies, not ordinary messages. Before adding a role bot to a group
 `/mybots` → the role bot → Bot Settings → **Group Privacy** → **Turn off**. (Making the bot a group
 admin also works.)
 
-## 6. Smoke test
+## 6. Set up the General assistant (optional)
+
+Skip this section if you don't want an LLM-backed bot yet — every `LLM_*` variable is optional and
+the rest of the bots work with none of them set. Steps in this exact order (spec §8.11):
+
+1. On a desktop with a browser, generate a Claude Code CLI auth token (requires a Claude
+   subscription, not an API key):
+
+   ```bash
+   claude setup-token
+   ```
+
+   This prints a token to your terminal without saving it anywhere — copy it somewhere you'll paste
+   it into `deploy/.env` in step 3.
+2. Send `/newbot general` to the manager bot (same flow as any other role bot). If this bot will be
+   used in groups, also turn off **Group Privacy** for it in BotFather (the manager bot's own
+   creation flow doesn't do this for you) — otherwise it never sees group messages to check for a
+   mention/reply.
+3. Put the token from step 1 and at least `LLM_MODELS` into `deploy/.env`, e.g.:
+
+   ```
+   CLAUDE_CODE_OAUTH_TOKEN=<the token from step 1>
+   LLM_MODELS=claude-cli:sonnet,claude-cli:haiku
+   ```
+
+   The first `LLM_MODELS` entry is tried first; later ones are the fallback chain when one runs out
+   of usage limits. Every other `LLM_*` variable (rate/day caps, context size, timeouts) already has
+   a working default from `deploy/docker-compose.yml`, and `CLAUDE_CLI_VERSION` (the pinned CLI
+   version) defaults inside the app itself — see `deploy/.env.example` to override any of them.
+4. Pull the updated `deploy/docker-compose.yml` (it now mounts a `claude-home` volume and reads the
+   new variables) and run:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d
+   ```
+
+   **This manual step matters even if Watchtower is already running**: Watchtower only replaces the
+   image on the *existing* container — it does not pick up new environment variables or new volume
+   mounts from a changed compose file. The `claude-home` volume and every `LLM_*`/`CLAUDE_CLI_VERSION`
+   variable only take effect after this explicit `docker compose up -d`.
+
+**Notes:**
+- The General assistant runs the Claude Code CLI (`claude -p`) as its model provider — this is a
+  deliberate, temporary exception to this project's normal "no coding-agent tooling as a runtime
+  dependency" stance, chosen because it works on a Claude subscription with no separate API billing.
+  A later milestone adds direct Anthropic/OpenAI API providers behind the same interface, with no
+  change to how `/model`/`/new` or any role-bot code works.
+- The CLI itself is **not** part of this (public) image — it's proprietary software, so a background
+  service installs the pinned version (`CLAUDE_CLI_VERSION`) into its own dedicated volume the first
+  time the container starts with a `claude-cli:` entry configured. Until that finishes (usually a few
+  seconds), `/model` shows every `claude-cli` model as unavailable; check the container logs for
+  `claude-cli install failed` if it doesn't clear up shortly — a persistent failure most often means
+  the container can't reach `claude.ai` to run the installer.
+
+## 7. Smoke test
 
 An automated smoke test drives real Telegram through one throwaway account: once the repository
 variable `SMOKE_ENABLED` is `true`, CD runs it on every merge to `main` and moves `latest` (what

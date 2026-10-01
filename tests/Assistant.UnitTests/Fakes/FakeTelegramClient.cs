@@ -4,13 +4,23 @@ namespace Assistant.UnitTests.Fakes;
 
 public class FakeTelegramClient : ITelegramClient
 {
-    public List<(long ChatId, int? TopicId, string Text)> Sent { get; } = new();
+    public List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> Sent { get; } = new();
 
     public List<(long ChatId, int MessageId, IReadOnlyList<InlineButton> Buttons)> ButtonEdits { get; } = new();
+
+    public List<(long ChatId, int? TopicId, string Action)> ChatActionsSent { get; } = new();
 
     public List<(string CallbackQueryId, string? Text)> AnsweredCallbacks { get; } = new();
 
     public bool ThrowOnSend { get; set; }
+
+    public bool ThrowOnChatAction { get; set; }
+
+    /// <summary>When set, SendTextAsync throws for this 1-based call number only (earlier and later
+    /// sends succeed).</summary>
+    public int? ThrowOnSendNumber { get; set; }
+
+    private int _sendCalls;
 
     private int _nextSentMessageId = 1;
 
@@ -21,21 +31,33 @@ public class FakeTelegramClient : ITelegramClient
         long offset, int timeoutSeconds, IReadOnlyList<UpdateKind> allowedUpdates, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<IncomingUpdate>>(Array.Empty<IncomingUpdate>());
 
-    public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken)
+    public Task<int> SendTextAsync(long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
     {
-        if (ThrowOnSend)
+        _sendCalls++;
+        if (ThrowOnSend || _sendCalls == ThrowOnSendNumber)
         {
             throw new InvalidOperationException("simulated send failure");
         }
 
-        Sent.Add((chatId, topicId, text));
+        Sent.Add((chatId, topicId, text, replyToMessageId));
+        return Task.FromResult(_nextSentMessageId++);
+    }
+
+    public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
+    {
+        ChatActionsSent.Add((chatId, topicId, action));
+        if (ThrowOnChatAction)
+        {
+            throw new InvalidOperationException("simulated chat action failure");
+        }
+
         return Task.CompletedTask;
     }
 
     public Task<int> SendTextWithButtonsAsync(
         long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
     {
-        Sent.Add((chatId, topicId, text));
+        Sent.Add((chatId, topicId, text, null));
         return Task.FromResult(_nextSentMessageId++);
     }
 

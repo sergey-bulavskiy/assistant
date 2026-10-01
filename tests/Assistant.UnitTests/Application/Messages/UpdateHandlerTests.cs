@@ -64,12 +64,29 @@ public class UpdateHandlerTests
         }
     }
 
-    private static readonly ReceivingBot RoleBot = new(BotDbId: 1, TelegramBotId: 999, Username: "test_bot", FamilyId: 42, Role: "general");
+    private sealed class FakeGeneralAssistant : IGeneralAssistant
+    {
+        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result)> Calls { get; } = new();
+
+        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+        {
+            Calls.Add((bot, message, storeResult));
+            return Task.CompletedTask;
+        }
+    }
+
+    // A non-general role bot: keeps the pre-M3a store-and-acknowledge behaviour.
+    private static readonly ReceivingBot RoleBot = new(BotDbId: 1, TelegramBotId: 999, Username: "test_bot", FamilyId: 42, Role: "test");
+    private static readonly ReceivingBot GeneralBot = RoleBot with { Role = "general" };
     private static readonly ReceivingBot ManagerBot = new(BotDbId: 2, TelegramBotId: 998, Username: "test_manager_bot", FamilyId: null, Role: "manager");
 
-    private static (UpdateHandler Handler, FakeMessageStore Store, FakeTelegramClient Telegram, FakeApprovalService Approvals, FakeManagerUpdateHandler Manager) CreateHandler()
+    private static (UpdateHandler Handler, FakeMessageStore Store, FakeTelegramClient Telegram, FakeApprovalService Approvals, FakeManagerUpdateHandler Manager) CreateHandler() =>
+        CreateHandler(new FakeGeneralAssistant());
+
+    private static (UpdateHandler Handler, FakeMessageStore Store, FakeTelegramClient Telegram, FakeApprovalService Approvals, FakeManagerUpdateHandler Manager) CreateHandler(
+        IGeneralAssistant generalAssistant, FakeMessageStore? messageStore = null)
     {
-        var store = new FakeMessageStore();
+        var store = messageStore ?? new FakeMessageStore();
         var telegram = new FakeTelegramClient();
         var approvals = new FakeApprovalService();
         var currentFamily = new FakeCurrentFamily();
@@ -77,7 +94,7 @@ public class UpdateHandlerTests
         var options = Options.Create(new BotOptions { ManagerToken = "test-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var clock = new FixedClock(DateTimeOffset.UtcNow);
-        var handler = new UpdateHandler(store, approvals, currentFamily, manager, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        var handler = new UpdateHandler(store, approvals, currentFamily, manager, generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
         return (handler, store, telegram, approvals, manager);
     }
 
@@ -96,7 +113,7 @@ public class UpdateHandlerTests
             SentAt: DateTimeOffset.UtcNow,
             EditedAt: null,
             MigrateToChatId: null,
-            RawJson: "{}");
+            RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
 
     [Fact]
     public async Task Manager_bot_updates_are_delegated_to_the_manager_handler_and_never_stored_as_a_message()
@@ -221,5 +238,67 @@ public class UpdateHandlerTests
         var call = store.Calls.ShouldHaveSingleItem();
         call.UpdateId.ShouldBe(7);
         call.Message.ShouldBe(message);
+    }
+
+    [Theory]
+    [InlineData("general")]
+    [InlineData(" General ")]
+    [InlineData("GENERAL")]
+    public async Task General_role_bot_messages_are_routed_to_the_general_assistant_not_the_reply_policy(string role)
+    {
+        var general = new FakeGeneralAssistant();
+        var (handler, store, telegram, _, _) = CreateHandler(general);
+        var message = Message(userId: 111);
+
+        await handler.HandleAsync(RoleBot with { Role = role }, telegram, new IncomingUpdate(20, message), CancellationToken.None);
+
+        store.Calls.ShouldHaveSingleItem().Message.ShouldBe(message);
+        var call = general.Calls.ShouldHaveSingleItem();
+        call.Message.ShouldBe(message);
+        call.Result.Outcome.ShouldBe(StoreOutcome.Stored);
+        telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("test")]
+    [InlineData("generalist")]
+    [InlineData("cook")]
+    public async Task Other_role_bots_keep_the_acknowledgement_and_never_reach_the_general_assistant(string role)
+    {
+        var general = new FakeGeneralAssistant();
+        var (handler, _, telegram, _, _) = CreateHandler(general);
+
+        await handler.HandleAsync(RoleBot with { Role = role }, telegram, new IncomingUpdate(21, Message(userId: 111)), CancellationToken.None);
+
+        general.Calls.ShouldBeEmpty();
+        telegram.Sent.ShouldHaveSingleItem().Text.ShouldStartWith("Получил");
+    }
+
+    [Fact]
+    public async Task General_bot_is_not_reached_when_the_user_is_not_approved()
+    {
+        var general = new FakeGeneralAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(general);
+        approvals.NextMemberStatus = FamilyMemberStatus.Pending;
+
+        await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(22, Message(userId: 111)), CancellationToken.None);
+
+        general.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task General_bot_answers_through_the_real_general_assistant()
+    {
+        var store = new FakeMessageStore();
+        var gateway = new FakeLlmGateway();
+        var assistant = new GeneralAssistant(
+            store, gateway, new FakeChatSettingsStore(), config: null, new FixedClock(DateTimeOffset.UtcNow),
+            new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow), NullLogger<GeneralAssistant>.Instance);
+        var (handler, _, telegram, _, _) = CreateHandler(assistant, store);
+
+        await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(23, Message(userId: 111)), CancellationToken.None);
+
+        telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Ассистент пока не настроен.");
+        gateway.Requests.ShouldBeEmpty();
     }
 }

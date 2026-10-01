@@ -6,9 +6,10 @@ public class FakeTelegramClient : ITelegramClient
 {
     private readonly object _lock = new();
     private readonly List<IncomingUpdate> _updates = new();
-    private readonly List<(long ChatId, int? TopicId, string Text)> _sentMessages = new();
+    private readonly List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> _sentMessages = new();
     private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
+    private readonly List<(long ChatId, int? TopicId, string Action)> _chatActionsSent = new();
     private int _getMeFailuresRemaining;
     private int _nextSentMessageId = 1;
     private readonly BotIdentity _identity = new(999, "test_bot");
@@ -23,7 +24,7 @@ public class FakeTelegramClient : ITelegramClient
     /// </summary>
     public bool IgnoreOffset { get; set; }
 
-    public IReadOnlyList<(long ChatId, int? TopicId, string Text)> SentMessages
+    public IReadOnlyList<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> SentMessages
     {
         get
         {
@@ -53,6 +54,17 @@ public class FakeTelegramClient : ITelegramClient
             lock (_lock)
             {
                 return _answeredCallbacks.ToArray();
+            }
+        }
+    }
+
+    public IReadOnlyList<(long ChatId, int? TopicId, string Action)> ChatActionsSent
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _chatActionsSent.ToArray();
             }
         }
     }
@@ -117,11 +129,20 @@ public class FakeTelegramClient : ITelegramClient
         return result;
     }
 
-    public Task SendTextAsync(long chatId, int? topicId, string text, CancellationToken cancellationToken)
+    public Task<int> SendTextAsync(long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
-            _sentMessages.Add((chatId, topicId, text));
+            _sentMessages.Add((chatId, topicId, text, replyToMessageId));
+            return Task.FromResult(_nextSentMessageId++);
+        }
+    }
+
+    public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _chatActionsSent.Add((chatId, topicId, action));
         }
 
         return Task.CompletedTask;
@@ -132,7 +153,7 @@ public class FakeTelegramClient : ITelegramClient
     {
         lock (_lock)
         {
-            _sentMessages.Add((chatId, topicId, text));
+            _sentMessages.Add((chatId, topicId, text, null));
             _sentButtons.Add((text, buttons));
             return Task.FromResult(_nextSentMessageId++);
         }

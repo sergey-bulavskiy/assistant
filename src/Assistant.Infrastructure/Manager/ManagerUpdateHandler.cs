@@ -96,7 +96,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         if (command is not null)
         {
             _logger.LogInformation("manager received an unhandled command: {Command}", command);
-            await telegramClient.SendTextAsync(chatId, topicId, "Неизвестная команда.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Неизвестная команда.", replyToMessageId: null, cancellationToken);
         }
     }
 
@@ -106,7 +106,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             .FirstOrDefaultAsync(m => m.TelegramUserId == userId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
         if (caller is null)
         {
-            await telegramClient.SendTextAsync(chatId, topicId, "Только владелец семьи может использовать /settings.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Только владелец семьи может использовать /settings.", replyToMessageId: null, cancellationToken);
             return;
         }
 
@@ -115,7 +115,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         var bots = await _db.Bots.IgnoreQueryFilters().Where(b => b.FamilyId == familyId).ToListAsync(cancellationToken);
         if (bots.Count == 0)
         {
-            await telegramClient.SendTextAsync(chatId, topicId, "Боты: нет.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Боты: нет.", replyToMessageId: null, cancellationToken);
         }
         foreach (var bot in bots)
         {
@@ -132,7 +132,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         var places = await _db.Places.IgnoreQueryFilters().Where(p => botIds.Contains(p.BotId)).ToListAsync(cancellationToken);
         if (places.Count == 0)
         {
-            await telegramClient.SendTextAsync(chatId, topicId, "Места: нет.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Места: нет.", replyToMessageId: null, cancellationToken);
         }
         foreach (var place in places)
         {
@@ -201,14 +201,14 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             if (alreadyClaimed)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", replyToMessageId: null, cancellationToken);
                 return;
             }
 
             if (code is null || code != _claimCode.Code)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                await telegramClient.SendTextAsync(chatId, topicId, "Неверный код.", cancellationToken);
+                await telegramClient.SendTextAsync(chatId, topicId, "Неверный код.", replyToMessageId: null, cancellationToken);
                 return;
             }
 
@@ -235,11 +235,11 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         catch (Exception ex) when (IsSerializationFailure(ex))
         {
             _logger.LogInformation("claim lost a concurrent race (serialization failure); treating as already claimed.");
-            await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Платформа уже активирована.", replyToMessageId: null, cancellationToken);
             return;
         }
 
-        await telegramClient.SendTextAsync(chatId, topicId, "Готово! Семья создана, вы её владелец. Команда /newbot создаёт бота роли.", cancellationToken);
+        await telegramClient.SendTextAsync(chatId, topicId, "Готово! Семья создана, вы её владелец. Команда /newbot создаёт бота роли.", replyToMessageId: null, cancellationToken);
     }
 
     // EF Core's default (non-retrying) execution strategy detects that a serialization failure is
@@ -265,14 +265,14 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     {
         if (role is null)
         {
-            await telegramClient.SendTextAsync(chatId, topicId, "Укажите роль: /newbot <роль>, например /newbot general.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Укажите роль: /newbot <роль>, например /newbot general.", replyToMessageId: null, cancellationToken);
             return;
         }
 
         if (role.Length > IPendingBotCreations.MaxRoleLength)
         {
             await telegramClient.SendTextAsync(
-                chatId, topicId, $"Роль слишком длинная: не больше {IPendingBotCreations.MaxRoleLength} символов.", cancellationToken);
+                chatId, topicId, $"Роль слишком длинная: не больше {IPendingBotCreations.MaxRoleLength} символов.", replyToMessageId: null, cancellationToken);
             return;
         }
 
@@ -280,7 +280,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
             .AnyAsync(m => m.TelegramUserId == userId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
         if (!isOwner)
         {
-            await telegramClient.SendTextAsync(chatId, topicId, "Только владелец семьи может создавать ботов.", cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, "Только владелец семьи может создавать ботов.", replyToMessageId: null, cancellationToken);
             return;
         }
 
@@ -288,7 +288,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
 
         var suggestedUsername = GenerateSuggestedUsername(role);
         var link = $"https://t.me/newbot/{managerUsername}/{suggestedUsername}?name={Uri.EscapeDataString(role)}";
-        await telegramClient.SendTextAsync(chatId, topicId, $"Нажмите, чтобы создать бота роли «{role}»: {link}", cancellationToken);
+        await telegramClient.SendTextAsync(chatId, topicId, $"Нажмите, чтобы создать бота роли «{role}»: {link}", replyToMessageId: null, cancellationToken);
     }
 
     private async Task HandleCallbackAsync(CallbackQueryInfo callback, ITelegramClient telegramClient, CancellationToken cancellationToken)
@@ -519,7 +519,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
 
         await _coordinator.StartBotAsync(bot.Id, cancellationToken);
 
-        await telegramClient.SendTextAsync(creatorUserId, null, $"Бот @{identity.Username} создан и запущен (роль: {role}).", cancellationToken);
+        await telegramClient.SendTextAsync(creatorUserId, null, $"Бот @{identity.Username} создан и запущен (роль: {role}).", replyToMessageId: null, cancellationToken);
     }
 
     // Telegram bot usernames: 5-32 chars, letters/digits/underscores, must end with "bot". This is

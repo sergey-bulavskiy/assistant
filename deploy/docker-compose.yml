@@ -25,6 +25,27 @@ services:
       TELEGRAM_MANAGER_BOT_TOKEN: ${TELEGRAM_MANAGER_BOT_TOKEN}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       ConnectionStrings__Assistant: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=postgres;Password=${POSTGRES_PASSWORD}
+      # LLM_MODELS and CLAUDE_CODE_OAUTH_TOKEN have no default here on purpose -- the LLM stays off
+      # until the owner sets both in .env (README "Set up the General assistant"). Every *limit*
+      # below does get a default matching .env.example, since the app itself still requires them
+      # (LlmConfigParser turns the whole config off if any limit is missing/invalid) -- an .env that
+      # only sets LLM_MODELS/CLAUDE_CODE_OAUTH_TOKEN still gets a working LLM.
+      LLM_MODELS: ${LLM_MODELS:-}
+      LLM_CALLS_PER_MINUTE: ${LLM_CALLS_PER_MINUTE:-10}
+      LLM_CALLS_PER_DAY: ${LLM_CALLS_PER_DAY:-200}
+      LLM_MAX_CONTEXT_MESSAGES: ${LLM_MAX_CONTEXT_MESSAGES:-30}
+      LLM_MAX_INPUT_CHARS: ${LLM_MAX_INPUT_CHARS:-40000}
+      LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-4000}
+      LLM_CALL_TIMEOUT_SECONDS: ${LLM_CALL_TIMEOUT_SECONDS:-120}
+      LLM_MAX_CONCURRENT_CALLS: ${LLM_MAX_CONCURRENT_CALLS:-2}
+      LLM_MODEL_COOLDOWN_MINUTES: ${LLM_MODEL_COOLDOWN_MINUTES:-30}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Pinned Claude Code CLI version the hosted service installs (spec §8.10). Empty/unset falls
+      # back to this plan's own pinned default inside the app (Task 9) -- an .env without this
+      # variable still gets a working, reviewed version, never "latest".
+      CLAUDE_CLI_VERSION: ${CLAUDE_CLI_VERSION:-2.1.285}
+    volumes:
+      - claude-home:/home/app/.claude-home
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -37,3 +58,4 @@ services:
 
 volumes:
   postgres-data:
+  claude-home:

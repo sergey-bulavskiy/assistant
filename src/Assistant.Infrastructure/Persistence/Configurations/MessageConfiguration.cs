@@ -11,6 +11,7 @@ public class MessageConfiguration : IEntityTypeConfiguration<StoredMessage>
         builder.ToTable("messages");
         builder.HasKey(m => m.Id);
         builder.Property(m => m.ChatType).HasMaxLength(32).IsRequired();
+        builder.Property(m => m.Direction).HasConversion<string>().HasMaxLength(8).HasDefaultValue(MessageDirection.In).IsRequired();
         builder.Property(m => m.Kind).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(m => m.Raw).HasColumnType("jsonb").IsRequired();
         builder.Property(m => m.Username).HasMaxLength(256);

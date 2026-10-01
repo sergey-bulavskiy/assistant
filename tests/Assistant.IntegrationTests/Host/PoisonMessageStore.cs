@@ -33,4 +33,12 @@ public sealed class PoisonMessageStore : IMessageStore
 
         return _inner.StoreAsync(botId, updateId, message, cancellationToken);
     }
+
+    public Task StoreOutgoingAsync(
+        long botId, long chatId, int? topicId, string chatType, int telegramMessageId, string text, CancellationToken cancellationToken) =>
+        _inner.StoreOutgoingAsync(botId, chatId, topicId, chatType, telegramMessageId, text, cancellationToken);
+
+    public Task<IReadOnlyList<ContextMessage>> GetRecentContextAsync(
+        long botId, long chatId, int? topicId, long? afterMessageId, long? beforeMessageId, int maxMessages, CancellationToken cancellationToken) =>
+        _inner.GetRecentContextAsync(botId, chatId, topicId, afterMessageId, beforeMessageId, maxMessages, cancellationToken);
 }
