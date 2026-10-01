@@ -3,8 +3,15 @@ using Microsoft.Extensions.AI;
 namespace Assistant.Infrastructure.Llm;
 
 /// <summary>Wraps an SDK-provided IChatClient, translating that provider's quota/rate-limit
-/// exception into ModelLimitReachedException; everything else passes through unchanged. Streaming is
-/// never used by LlmGateway (M3a) and is only delegated, not translated.</summary>
+/// exception into ModelLimitReachedException; everything else passes through unchanged.
+///
+/// Streaming is never used by LlmGateway (M3a/M3b) and is only delegated, not translated: a
+/// provider's 429/limit error on a streaming call surfaces mid-enumeration (inside
+/// `IAsyncEnumerable<ChatResponseUpdate>.MoveNextAsync`, not from `GetStreamingResponseAsync`
+/// itself, which returns before any HTTP call happens), so this class's try/catch-and-translate
+/// shape does not cover it. If a future milestone turns streaming on, `GetStreamingResponseAsync`
+/// needs its own translation (e.g. wrapping the enumerator) -- don't assume this class already
+/// handles it.</summary>
 public class LimitTranslatingChatClient : IChatClient
 {
     private readonly IChatClient _inner;

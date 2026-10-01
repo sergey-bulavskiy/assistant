@@ -349,4 +349,52 @@ public class LlmConfigParserTests
         result.Config!.FastModels.ShouldBeEmpty();
         result.Errors.ShouldContain(e => e.Contains("LLM_FAST_MODELS"));
     }
+
+    // --- Review fix nits -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("99")]           // < 100
+    [InlineData("not-a-number")]
+    public void An_invalid_hard_percent_drops_paid_entries_with_defaults_kept_for_warn(string badHard)
+    {
+        var options = ValidWithAnthropic();
+        options.BudgetHardPercentRaw = badHard;
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.Config!.Budget.ShouldBeNull();
+        result.Config.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Errors.ShouldContain(e => e.Contains("LLM_BUDGET_HARD_PERCENT"));
+    }
+
+    [Fact]
+    public void A_negative_price_is_rejected_and_the_paid_entry_is_dropped_not_fatal()
+    {
+        var options = ValidWithAnthropic();
+        options.PricesRaw = "claude-haiku-4-5=-1/5";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Config.Prices.ShouldNotContainKey("claude-haiku-4-5");
+        result.Errors.ShouldContain(e => e.Contains("LLM_PRICES") && e.Contains("negative"));
+    }
+
+    [Fact]
+    public void An_openai_entry_with_no_api_key_is_dropped_not_fatal()
+    {
+        var options = Valid();
+        options.ModelsRaw = "claude-cli:sonnet,openai:gpt-6-luna";
+        options.OpenAiApiKey = "";
+        options.PricesRaw = "gpt-6-luna=1/5";
+        options.BudgetDailyUsdRaw = "2";
+        options.BudgetMonthlyUsdRaw = "30";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue(); // the claude-cli entry survives
+        result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
+        result.Errors.ShouldContain(e => e.Contains("OPENAI_API_KEY"));
+    }
 }
