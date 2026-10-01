@@ -145,6 +145,7 @@ public static class InfrastructureServiceCollectionExtensions
                 claudeCliModelNames,
                 sp.GetRequiredService<ILogger<ClaudeCliInstallerHostedService>>()));
             services.AddSingleton(new ConcurrentCallGate(llmConfig.MaxConcurrentCalls));
+            services.AddScoped<IBudgetGuard, BudgetGuard>();
             services.AddScoped<ILlmGateway, LlmGateway>();
         }
         else

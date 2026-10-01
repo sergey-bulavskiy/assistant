@@ -19,6 +19,7 @@ public class LlmGateway : ILlmGateway
     private readonly AssistantDbContext _db;
     private readonly IClock _clock;
     private readonly ConcurrentCallGate _concurrencyGate;
+    private readonly IBudgetGuard _budget;
     private readonly ILogger<LlmGateway> _logger;
 
     public LlmGateway(
@@ -29,6 +30,7 @@ public class LlmGateway : ILlmGateway
         AssistantDbContext db,
         IClock clock,
         ConcurrentCallGate concurrencyGate,
+        IBudgetGuard budget,
         ILogger<LlmGateway> logger)
     {
         _config = config;
@@ -38,6 +40,7 @@ public class LlmGateway : ILlmGateway
         _db = db;
         _clock = clock;
         _concurrencyGate = concurrencyGate;
+        _budget = budget;
         _logger = logger;
     }
 
@@ -94,10 +97,25 @@ public class LlmGateway : ILlmGateway
                 return LlmResult.Refused(LlmRefusalReason.DailyCapReached);
             }
 
+            // Budget guard (platform-wide money budget), after the semaphore and the rate guards.
+            // With no budget configured budgetStatus is null and nothing below restricts anything.
             var candidates = _catalog.GetCandidateOrder(request.Tier, request.PreferredModel);
+            var budgetStatus = await _budget.EvaluateAsync(cancellationToken);
+            var filtered = budgetStatus is null ? candidates : ApplyBudgetFilter(candidates, budgetStatus.Overall);
+
+            // The earliest moment a budget skip could stop applying (the binding period's reset);
+            // set whenever at least one candidate was skipped for budget, filtered out or estimated.
+            DateTimeOffset? budgetResetAt = filtered.Count < candidates.Count ? budgetStatus!.Binding.PeriodEnd : null;
+
+            if (filtered.Count == 0)
+            {
+                // Guard refusal: no call, no llm_calls row.
+                return LlmResult.Refused(LlmRefusalReason.BudgetExhausted, budgetResetAt);
+            }
+
             DateTimeOffset? earliestRetry = null;
 
-            foreach (var candidate in candidates)
+            foreach (var candidate in filtered)
             {
                 if (!_availability.IsAvailable(candidate.Name))
                 {
@@ -110,7 +128,22 @@ public class LlmGateway : ILlmGateway
                     continue;
                 }
 
-                var attempt = await TryCandidateAsync(request, candidate, cancellationToken);
+                var price = GetPrice(candidate);
+                var estimate = LlmCostCalculator.Estimate(request.SystemPrompt.Length, InputChars(request), _config.MaxOutputTokens, price);
+
+                if (budgetStatus is not null && !LlmCostCalculator.IsZero(price) && ExceededPeriod(budgetStatus, estimate) is { } exceeded)
+                {
+                    // Pre-call estimate would push a period's spend above its hard cap: skip this
+                    // candidate (no call, no row) and try the next one.
+                    if (budgetResetAt is null || exceeded.PeriodEnd < budgetResetAt)
+                    {
+                        budgetResetAt = exceeded.PeriodEnd;
+                    }
+
+                    continue;
+                }
+
+                var attempt = await TryCandidateAsync(request, candidate, price, estimate, cancellationToken);
                 if (attempt.Retry is { } retryAt)
                 {
                     if (earliestRetry is null || retryAt < earliestRetry)
@@ -124,7 +157,11 @@ public class LlmGateway : ILlmGateway
                 return attempt.Result!;
             }
 
-            return LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, earliestRetry);
+            // A budget skip is the more actionable reason: it wins over AllModelsUnavailable whenever
+            // at least one candidate was skipped for budget and none answered.
+            return budgetResetAt is { } resetAt
+                ? LlmResult.Refused(LlmRefusalReason.BudgetExhausted, resetAt)
+                : LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, earliestRetry);
         }
         finally
         {
@@ -132,8 +169,42 @@ public class LlmGateway : ILlmGateway
         }
     }
 
+    private ModelPrice GetPrice(ModelCatalogEntry entry) =>
+        _config.Prices.TryGetValue(entry.Name, out var price) ? price : new ModelPrice(0m, 0m);
+
+    // Everything sent as this call's input besides the system prompt: the whole context window.
+    private static int InputChars(LlmRequest request) => request.Messages.Sum(m => m.Text.Length);
+
+    /// <summary>The period whose hard cap (limit x hard%) the estimate would push spend above, or
+    /// null; the monthly one first, since its reset is the later one.</summary>
+    private static BudgetPeriodStatus? ExceededPeriod(BudgetStatus status, decimal estimate) =>
+        status.Monthly.Spend + estimate > status.Monthly.HardCap ? status.Monthly
+        : status.Daily.Spend + estimate > status.Daily.HardCap ? status.Daily
+        : null;
+
+    /// <summary>Normal/Warn: unchanged. Soft: only LLM_FAST_MODELS entries plus zero-price entries,
+    /// in chain order (so a chat's preferred model stays first only if it is allowed); if that
+    /// leaves nothing, behave as Hard. Hard: only zero-price entries.</summary>
+    private IReadOnlyList<ModelCatalogEntry> ApplyBudgetFilter(IReadOnlyList<ModelCatalogEntry> candidates, BudgetState state)
+    {
+        if (state is BudgetState.Normal or BudgetState.Warn)
+        {
+            return candidates;
+        }
+
+        var zeroPrice = candidates.Where(c => LlmCostCalculator.IsZero(GetPrice(c))).ToArray();
+        if (state == BudgetState.Hard)
+        {
+            return zeroPrice;
+        }
+
+        var fastNames = _config.FastModels.Select(m => m.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var softAllowed = candidates.Where(c => fastNames.Contains(c.Name) || LlmCostCalculator.IsZero(GetPrice(c))).ToArray();
+        return softAllowed.Length > 0 ? softAllowed : zeroPrice;
+    }
+
     private async Task<(LlmResult? Result, DateTimeOffset? Retry)> TryCandidateAsync(
-        LlmRequest request, ModelCatalogEntry candidate, CancellationToken cancellationToken)
+        LlmRequest request, ModelCatalogEntry candidate, ModelPrice price, decimal estimate, CancellationToken cancellationToken)
     {
         // The concurrency slot is already held for the whole CompleteAsync call (see above) -- this
         // method does NOT acquire/release it per candidate.
@@ -173,7 +244,8 @@ public class LlmGateway : ILlmGateway
                 _availability.MarkUnavailable(candidate.Name, until);
             }
 
-            await RecordCallAsync(request, candidate, LlmCallOutcome.LimitReached, null, null, null, stopwatch.ElapsedMilliseconds);
+            // Cost 0: the provider rejected the call before any billable work.
+            await RecordCallAsync(request, candidate, LlmCallOutcome.LimitReached, null, null, null, 0m, stopwatch.ElapsedMilliseconds);
 
             // ModelAvailability never shortens an existing mark (a longer cooldown from an earlier
             // failure wins), so the retry we report must reflect what actually got recorded, not the
@@ -195,7 +267,8 @@ public class LlmGateway : ILlmGateway
             // timeouts are Failed, not retried on the next candidate in M3a.
             stopwatch.Stop();
             _logger.LogWarning("LLM call to {Model} timed out after {ElapsedMs}ms", candidate.Name, stopwatch.ElapsedMilliseconds);
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, stopwatch.ElapsedMilliseconds);
+            // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
+            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
             return (LlmResult.Refused(LlmRefusalReason.Failed), null);
         }
         catch (TimeoutException)
@@ -207,14 +280,15 @@ public class LlmGateway : ILlmGateway
             // outcome.
             stopwatch.Stop();
             _logger.LogWarning("LLM call to {Model} timed out after {ElapsedMs}ms", candidate.Name, stopwatch.ElapsedMilliseconds);
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, stopwatch.ElapsedMilliseconds);
+            // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
+            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
             return (LlmResult.Refused(LlmRefusalReason.Failed), null);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _logger.LogError("LLM call to {Model} failed: {ExceptionType}", candidate.Name, ex.GetType().Name);
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, stopwatch.ElapsedMilliseconds);
+            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
             return (LlmResult.Refused(LlmRefusalReason.Failed), null);
         }
 
@@ -223,18 +297,26 @@ public class LlmGateway : ILlmGateway
         // real answer into a Failed result -- see RecordCallAsync.
         stopwatch.Stop();
 
+        // The provider answered: cost comes from its usage (0 for a zero-price entry). An empty
+        // answer is still billed -- usage x price when usage came back, otherwise the estimate.
+        var inputTokens = response.Usage?.InputTokenCount;
+        var outputTokens = response.Usage?.OutputTokenCount;
+        var cost = inputTokens is null && outputTokens is null
+            ? estimate
+            : LlmCostCalculator.Compute(inputTokens ?? 0, outputTokens ?? 0, price);
+
         if (string.IsNullOrWhiteSpace(response.Text))
         {
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, stopwatch.ElapsedMilliseconds);
+            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, cost, stopwatch.ElapsedMilliseconds);
             return (LlmResult.Refused(LlmRefusalReason.Failed), null);
         }
 
         var reportedCost = ExtractReportedCost(response);
         await RecordCallAsync(
             request, candidate, LlmCallOutcome.Ok,
-            response.Usage?.InputTokenCount is { } i ? (int)i : null,
-            response.Usage?.OutputTokenCount is { } o ? (int)o : null,
-            reportedCost, stopwatch.ElapsedMilliseconds);
+            inputTokens is { } i ? (int)i : null,
+            outputTokens is { } o ? (int)o : null,
+            reportedCost, cost, stopwatch.ElapsedMilliseconds);
 
         return (LlmResult.Answered(response.Text, candidate.Name), null);
     }
@@ -261,7 +343,7 @@ public class LlmGateway : ILlmGateway
 
     private async Task RecordCallAsync(
         LlmRequest request, ModelCatalogEntry candidate, LlmCallOutcome outcome,
-        int? inputTokens, int? outputTokens, decimal? reportedCost, long durationMs)
+        int? inputTokens, int? outputTokens, decimal? reportedCost, decimal cost, long durationMs)
     {
         var call = new LlmCall
         {
@@ -274,6 +356,7 @@ public class LlmGateway : ILlmGateway
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
             ReportedCost = reportedCost,
+            Cost = cost,
             DurationMs = durationMs,
             CreatedAt = _clock.UtcNow
         };

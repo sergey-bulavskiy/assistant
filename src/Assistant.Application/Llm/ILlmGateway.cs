@@ -15,7 +15,9 @@ public record LlmRequest(
     string SystemPrompt,
     IReadOnlyList<LlmMessage> Messages);
 
-public enum LlmRefusalReason { NotConfigured, RateLimited, DailyCapReached, AllModelsUnavailable, Failed }
+/// <summary>BudgetExhausted: the platform money budget leaves no callable model; its RetryAt is the
+/// reset of the binding budget period (next UTC day or month).</summary>
+public enum LlmRefusalReason { NotConfigured, RateLimited, DailyCapReached, AllModelsUnavailable, Failed, BudgetExhausted }
 
 public record LlmResult(bool IsAnswer, string? Text, string? ModelName, LlmRefusalReason? RefusalReason, DateTimeOffset? RetryAt)
 {

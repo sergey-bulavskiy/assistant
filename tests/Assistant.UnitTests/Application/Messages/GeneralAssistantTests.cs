@@ -508,6 +508,7 @@ public class GeneralAssistantTests
     [InlineData(LlmRefusalReason.DailyCapReached, "Дневной лимит запросов исчерпан, продолжим завтра.")]
     [InlineData(LlmRefusalReason.AllModelsUnavailable, "Все модели сейчас недоступны (лимиты), попробуйте позже.")]
     [InlineData(LlmRefusalReason.Failed, "Не получилось ответить, попробуйте ещё раз.")]
+    [InlineData(LlmRefusalReason.BudgetExhausted, "Лимит расходов исчерпан, попробуйте позже.")]
     [InlineData(LlmRefusalReason.NotConfigured, "Ассистент пока не настроен.")]
     public async Task Refusals_reply_with_the_spec_text(LlmRefusalReason reason, string expected)
     {
@@ -527,6 +528,17 @@ public class GeneralAssistantTests
         await HandleAsync(Msg("test question"));
 
         _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Все модели сейчас недоступны (лимиты), попробуйте позже. Не раньше 14:05 UTC.");
+    }
+
+    [Fact]
+    public async Task Budget_exhausted_names_the_reset_date_and_time()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.BudgetExhausted, new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero));
+
+        await HandleAsync(Msg("test question"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Лимит расходов исчерпан до 01.11 00:00 UTC.");
+        _store.OutgoingMessages.ShouldBeEmpty();
     }
 
     [Fact]

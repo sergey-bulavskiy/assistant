@@ -55,6 +55,7 @@ public class LlmGatewayTests : IntegrationTestBase
             db ?? Db,
             clock ?? new SystemClock(),
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
+            new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
             NullLogger<LlmGateway>.Instance);
 
     private LlmGateway CreateGatewayWithProviders(
@@ -70,6 +71,7 @@ public class LlmGatewayTests : IntegrationTestBase
             Db,
             clock ?? new SystemClock(),
             new ConcurrentCallGate(config.MaxConcurrentCalls),
+            new BudgetGuard(config, Db, clock ?? new SystemClock()),
             NullLogger<LlmGateway>.Instance);
 
     /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to
