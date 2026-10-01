@@ -118,3 +118,37 @@
   unavailable (an account-wide session/weekly/spend/usage limit), `Model` marks only the one that was
   called (a model-named limit like "Opus limit"). Getting this backwards either over-disables working
   models or under-disables ones that are actually rate-limited.
+- **API providers (`anthropic:`/`openai:` entries):** `IChatClientProvider` registers one client per
+  catalog entry for these two (keyed `"prefix:modelName"`), not one shared client per prefix like
+  `claude-cli` — each entry gets its own `IChatClient` but all entries of the same provider share one
+  `HttpClient` (confirmed safe: neither SDK's `IChatClient.Dispose()` disposes a passed-in
+  `HttpClient`). Both official SDKs are constructed with `MaxRetries = 0` (fallback is this gateway's
+  job, not the SDK's), a proxy-aware `HttpClient` built by `ProxyHandlerFactory`, and
+  `HttpClient.Timeout = Timeout.InfiniteTimeSpan` (each factory already sets the SDK's own timeout to
+  `callTimeout + 5s`, and the gateway's own `CancelAfter(callTimeout)` always wins that race). A 429
+  or 400 is classified into `ModelLimitReachedException`'s `Provider`/`Model` scope by reading the
+  response **error body** (`error.type`/`error.details.error_code`/`error.message` for Anthropic,
+  `error.code`/`error.type` for OpenAI), not by whether a `Retry-After` header is present — both a
+  genuine rate limit and a provider-side spend cap return the same 429 shape. **Never** pass
+  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_PROXY`/`OPENAI_PROXY` anywhere near
+  `ClaudeCliOptions` or the CLI child process — they belong only inside
+  `InfrastructureServiceCollectionExtensions.cs`'s DI wiring (the `LlmOptions` construction and the
+  `IChatClientProvider` factory lambda), confirmed by a regression test that builds a real
+  `ClaudeCliChatClient` call with these set as real process environment variables and asserts the
+  child environment contains neither.
+- An invalid `ANTHROPIC_PROXY`/`OPENAI_PROXY` (`ProxyHandlerFactory.Create` fails) drops every
+  `LLM_MODELS`/`LLM_FAST_MODELS` entry of that one provider (one Error each), the same way any other
+  invalid paid entry (missing key, missing price, no budget configured) is dropped individually — it
+  never throws and never stops `claude-cli` entries or the other provider from working. If every
+  surviving entry turns out to need a now-invalid proxy, LLM itself falls back off, same "zero valid
+  models means off" rule `LlmConfigParser.Parse` already uses for an empty `LLM_MODELS`.
+- **Budgets are platform-wide by design, not per-family** — `BudgetGuard`'s spend query and
+  `BudgetNoticeSender`'s dedup insert both use `IgnoreQueryFilters()` deliberately, with a comment
+  saying so each time. Don't "fix" this to be family-scoped; that would silently defeat the whole
+  point (a family could spend without the platform-wide cap ever tripping). `BudgetState` (not the
+  rounded, display-only `Percent`) is what every threshold comparison and notice dedup must use.
+- A proxy URL (`ANTHROPIC_PROXY`/`OPENAI_PROXY`) may carry embedded credentials — never log it, not
+  even at Debug, not even in an exception message. `ProxyHandlerFactory` never returns the URL itself
+  on failure, only the variable name (`$"{variableName} must be an absolute http://, https:// or
+  socks5:// proxy URL."`); if you add any logging near proxy handling, log only whether a proxy is
+  configured, never its value.
