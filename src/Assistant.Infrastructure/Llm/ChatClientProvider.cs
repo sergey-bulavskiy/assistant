@@ -4,17 +4,29 @@ namespace Assistant.Infrastructure.Llm;
 
 public class ChatClientProvider : IChatClientProvider
 {
-    private readonly IReadOnlyDictionary<string, IChatClient> _clientsByPrefix;
+    private readonly IReadOnlyDictionary<string, IChatClient> _clientsByKey;
 
-    public ChatClientProvider(IReadOnlyDictionary<string, IChatClient> clientsByPrefix)
+    public ChatClientProvider(IReadOnlyDictionary<string, IChatClient> clientsByKey)
     {
-        _clientsByPrefix = new Dictionary<string, IChatClient>(clientsByPrefix, StringComparer.OrdinalIgnoreCase);
+        _clientsByKey = new Dictionary<string, IChatClient>(clientsByKey, StringComparer.OrdinalIgnoreCase);
     }
 
-    public IReadOnlyCollection<string> RegisteredPrefixes => _clientsByPrefix.Keys.ToArray();
+    public IReadOnlyCollection<string> RegisteredPrefixes =>
+        _clientsByKey.Keys.Select(k => k.Split(':', 2)[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    public IChatClient GetClient(string providerPrefix) =>
-        _clientsByPrefix.TryGetValue(providerPrefix, out var client)
-            ? client
-            : throw new InvalidOperationException($"No IChatClient registered for provider prefix '{providerPrefix}'.");
+    public IChatClient GetClient(string providerPrefix, string modelName)
+    {
+        var compositeKey = $"{providerPrefix}:{modelName}";
+        if (_clientsByKey.TryGetValue(compositeKey, out var perModelClient))
+        {
+            return perModelClient;
+        }
+
+        if (_clientsByKey.TryGetValue(providerPrefix, out var sharedClient))
+        {
+            return sharedClient;
+        }
+
+        throw new InvalidOperationException($"No IChatClient registered for '{compositeKey}' or bare prefix '{providerPrefix}'.");
+    }
 }

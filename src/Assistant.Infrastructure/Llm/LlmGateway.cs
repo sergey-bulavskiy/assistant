@@ -142,7 +142,7 @@ public class LlmGateway : ILlmGateway
 
         try
         {
-            var client = _chatClients.GetClient(candidate.ProviderPrefix);
+            var client = _chatClients.GetClient(candidate.ProviderPrefix, candidate.Name);
             var chatMessages = new List<ChatMessage> { new(ChatRole.System, request.SystemPrompt) };
             chatMessages.AddRange(request.Messages.Select(
                 m => new ChatMessage(m.Role == LlmMessageRole.User ? ChatRole.User : ChatRole.Assistant, m.Text) { AuthorName = m.Author }));
