@@ -38,6 +38,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ICurrentFamily, CurrentFamily>();
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
+        services.AddScoped<UsageCommandHandler>();
         services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
         services.AddScoped<IPendingBotCreations, PendingBotCreations>();
         services.AddScoped<IChatSettingsStore, ChatSettingsStore>();
@@ -152,6 +153,14 @@ public static class InfrastructureServiceCollectionExtensions
         else
         {
             services.AddSingleton<ILlmGateway, NullLlmGateway>();
+            // UsageCommandHandler (always constructed, through ManagerUpdateHandler) takes a plain
+            // IBudgetGuard so it never special-cases "LLM off" itself -- NullBudgetGuard's
+            // EvaluateAsync returning null already means "no budget configured", same as a real
+            // BudgetGuard with LlmConfig.Budget null. IBudgetGuard is otherwise only registered
+            // inside the LLM-on branch above (LlmGateway's own dependency); IBudgetNoticeSender is
+            // only ever needed by LlmGateway, which isn't registered in this branch, so it needs no
+            // fallback registration here.
+            services.AddSingleton<IBudgetGuard, NullBudgetGuard>();
         }
 
         services.AddSingleton<ITokenEncryptor>(sp =>

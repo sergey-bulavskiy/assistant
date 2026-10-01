@@ -56,7 +56,8 @@ public class ManagerUpdateHandlerCallbackTests : IntegrationTestBase
             new NoopScopeFactory(Db), clients, encryptor, options, PollingWorkerSettings.Default,
             new PollingHealth(), clock, NullLoggerFactory.Instance);
         var handler = new ManagerUpdateHandler(
-            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock, NullLogger<ManagerUpdateHandler>.Instance);
+            Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock,
+            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock), NullLogger<ManagerUpdateHandler>.Instance);
 
         return (handler, clients.Client);
     }

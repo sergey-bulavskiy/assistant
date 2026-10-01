@@ -27,6 +27,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     private readonly BotPollingCoordinator _coordinator;
     private readonly IApprovalService _approvals;
     private readonly IClock _clock;
+    private readonly UsageCommandHandler _usageHandler;
     private readonly ILogger<ManagerUpdateHandler> _logger;
 
     public ManagerUpdateHandler(
@@ -38,6 +39,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         BotPollingCoordinator coordinator,
         IApprovalService approvals,
         IClock clock,
+        UsageCommandHandler usageHandler,
         ILogger<ManagerUpdateHandler> logger)
     {
         _db = db;
@@ -48,6 +50,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         _coordinator = coordinator;
         _approvals = approvals;
         _clock = clock;
+        _usageHandler = usageHandler;
         _logger = logger;
     }
 
@@ -90,6 +93,13 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         if (command == "settings")
         {
             await HandleSettingsAsync(chatId, topicId, userId, telegramClient, cancellationToken);
+            return;
+        }
+
+        if (command == "usage")
+        {
+            var reply = await _usageHandler.BuildReplyAsync(userId, cancellationToken);
+            await telegramClient.SendTextAsync(chatId, topicId, reply, replyToMessageId: null, cancellationToken);
             return;
         }
 
