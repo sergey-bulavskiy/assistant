@@ -61,6 +61,15 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
     // Daily $100, monthly $1000, warn 80%, hard 120%: daily hard cap $120, monthly $1200.
     private static readonly BudgetConfig Budget = new(DailyUsd: 100m, MonthlyUsd: 1000m, WarnPercent: 80, HardPercent: 120);
 
+    // This file's own concern is candidate filtering/cost recording, not notices (those are
+    // BudgetNoticeSenderTests' job) -- a no-op fake keeps these tests decoupled from the sender's
+    // own DB/Telegram wiring even though Budget is non-null here, so LlmGateway's
+    // "budgetStatus is not null" guard would otherwise call the real sender on every test.
+    private sealed class NoopBudgetNoticeSender : IBudgetNoticeSender
+    {
+        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private LlmGateway CreateGateway(LlmConfig config, ScriptedChatClient client, ModelAvailability? availability = null)
     {
         var clock = new FixedClock(Now);
@@ -73,6 +82,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
             clock,
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, Db, clock),
+            new NoopBudgetNoticeSender(),
             NullLogger<LlmGateway>.Instance);
     }
 

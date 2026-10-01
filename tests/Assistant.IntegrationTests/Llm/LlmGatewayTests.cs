@@ -40,6 +40,15 @@ public class LlmGatewayTests : IntegrationTestBase
         FastModels = Array.Empty<ModelCatalogEntry>()
     };
 
+    // Budget is always null in this file's configs, so LlmGateway never actually calls
+    // IBudgetNoticeSender.NotifyAsync (guarded by "budgetStatus is not null") -- a no-op fake keeps
+    // these tests decoupled from the sender's own DB/Telegram wiring, which BudgetNoticeSenderTests
+    // and LlmGatewayBudgetTests already cover.
+    private sealed class NoopBudgetNoticeSender : IBudgetNoticeSender
+    {
+        public Task NotifyAsync(BudgetStatus status, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private LlmGateway CreateGateway(
         LlmConfig config,
         ScriptedChatClient client,
@@ -56,6 +65,7 @@ public class LlmGatewayTests : IntegrationTestBase
             clock ?? new SystemClock(),
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
+            new NoopBudgetNoticeSender(),
             NullLogger<LlmGateway>.Instance);
 
     private LlmGateway CreateGatewayWithProviders(
@@ -72,6 +82,7 @@ public class LlmGatewayTests : IntegrationTestBase
             clock ?? new SystemClock(),
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, Db, clock ?? new SystemClock()),
+            new NoopBudgetNoticeSender(),
             NullLogger<LlmGateway>.Instance);
 
     /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to

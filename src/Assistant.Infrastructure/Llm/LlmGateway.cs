@@ -20,6 +20,7 @@ public class LlmGateway : ILlmGateway
     private readonly IClock _clock;
     private readonly ConcurrentCallGate _concurrencyGate;
     private readonly IBudgetGuard _budget;
+    private readonly IBudgetNoticeSender _budgetNotices;
     private readonly ILogger<LlmGateway> _logger;
 
     public LlmGateway(
@@ -31,6 +32,7 @@ public class LlmGateway : ILlmGateway
         IClock clock,
         ConcurrentCallGate concurrencyGate,
         IBudgetGuard budget,
+        IBudgetNoticeSender budgetNotices,
         ILogger<LlmGateway> logger)
     {
         _config = config;
@@ -41,6 +43,7 @@ public class LlmGateway : ILlmGateway
         _clock = clock;
         _concurrencyGate = concurrencyGate;
         _budget = budget;
+        _budgetNotices = budgetNotices;
         _logger = logger;
     }
 
@@ -101,6 +104,11 @@ public class LlmGateway : ILlmGateway
             // With no budget configured budgetStatus is null and nothing below restricts anything.
             var candidates = _catalog.GetCandidateOrder(request.Tier, request.PreferredModel);
             var budgetStatus = await _budget.EvaluateAsync(cancellationToken);
+            if (budgetStatus is not null)
+            {
+                await _budgetNotices.NotifyAsync(budgetStatus, cancellationToken);
+            }
+
             var filtered = budgetStatus is null ? candidates : ApplyBudgetFilter(candidates, budgetStatus.Overall);
 
             // The earliest moment a budget skip could stop applying (the binding period's reset);

@@ -69,6 +69,17 @@ public class FakeTelegramClient : ITelegramClient
         }
     }
 
+    /// <summary>Clears recorded sent messages/buttons so a test can assert "nothing more was sent"
+    /// after an earlier, expected round of sends.</summary>
+    public void ClearSent()
+    {
+        lock (_lock)
+        {
+            _sentMessages.Clear();
+            _sentButtons.Clear();
+        }
+    }
+
     public void FailGetMeTimes(int times)
     {
         lock (_lock)
