@@ -17,9 +17,13 @@ public record BudgetStatus(BudgetPeriodStatus Daily, BudgetPeriodStatus Monthly)
 {
     public BudgetState Overall => (BudgetState)Math.Max((int)Daily.State, (int)Monthly.State);
 
-    /// <summary>The period whose reset lifts the current restriction: the monthly one whenever it
-    /// is (at least) as severe as the overall state -- a new day would not help then -- otherwise
-    /// the daily one.</summary>
+    /// <summary>The period whose reset lifts the current restriction, by severity alone: the
+    /// monthly one whenever it is (at least) as severe as the overall state -- a new day would not
+    /// help then -- otherwise the daily one. This does NOT know whether any candidate model would
+    /// actually be left once that period resets (e.g. daily resets but the month's own state, still
+    /// in force, filters out everything because no fast-tier model is configured) -- a caller that
+    /// cares about that (the gateway's candidate filtering) must check further, not use this value
+    /// as-is; see <c>LlmGateway.ComputeBudgetResetAt</c>.</summary>
     public BudgetPeriodStatus Binding => Monthly.State >= Overall ? Monthly : Daily;
 }
 

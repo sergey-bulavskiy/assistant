@@ -40,6 +40,13 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                 table: "budget_notices",
                 columns: new[] { "period_kind", "period_start", "threshold" },
                 unique: true);
+
+            // The budget guard's spend query is platform-wide (IgnoreQueryFilters, no FamilyId
+            // predicate) -- the existing (family_id, created_at) composite index doesn't help it.
+            migrationBuilder.CreateIndex(
+                name: "ix_llm_calls_created_at",
+                table: "llm_calls",
+                column: "created_at");
         }
 
         /// <inheritdoc />
@@ -47,6 +54,10 @@ namespace Assistant.Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "budget_notices");
+
+            migrationBuilder.DropIndex(
+                name: "ix_llm_calls_created_at",
+                table: "llm_calls");
 
             migrationBuilder.DropColumn(
                 name: "cost",

@@ -340,6 +340,9 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_llm_calls");
 
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_llm_calls_created_at");
+
                     b.HasIndex("FamilyId", "CreatedAt")
                         .HasDatabaseName("ix_llm_calls_family_id_created_at");
 

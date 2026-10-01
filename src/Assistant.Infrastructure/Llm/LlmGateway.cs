@@ -105,7 +105,7 @@ public class LlmGateway : ILlmGateway
 
             // The earliest moment a budget skip could stop applying (the binding period's reset);
             // set whenever at least one candidate was skipped for budget, filtered out or estimated.
-            DateTimeOffset? budgetResetAt = filtered.Count < candidates.Count ? budgetStatus!.Binding.PeriodEnd : null;
+            DateTimeOffset? budgetResetAt = filtered.Count < candidates.Count ? ComputeBudgetResetAt(candidates, budgetStatus!) : null;
 
             if (filtered.Count == 0)
             {
@@ -135,6 +135,14 @@ public class LlmGateway : ILlmGateway
                 {
                     // Pre-call estimate would push a period's spend above its hard cap: skip this
                     // candidate (no call, no row) and try the next one.
+                    //
+                    // This check is itself a pre-call estimate, not a running total: concurrent
+                    // calls can each pass it before any of their own rows land, the same race the
+                    // rate guard above has. How far spend can overshoot the hard cap this way is
+                    // bounded by LLM_MAX_CONCURRENT_CALLS x this candidate's own estimate -- at most
+                    // that many calls are ever in flight at once, so at most that many can race this
+                    // check before a row exists to make the next one fail it. The hard%'s headroom
+                    // above 100% (e.g. the default 120%) exists to absorb exactly this.
                     if (budgetResetAt is null || exceeded.PeriodEnd < budgetResetAt)
                     {
                         budgetResetAt = exceeded.PeriodEnd;
@@ -157,11 +165,17 @@ public class LlmGateway : ILlmGateway
                 return attempt.Result!;
             }
 
-            // A budget skip is the more actionable reason: it wins over AllModelsUnavailable whenever
-            // at least one candidate was skipped for budget and none answered.
-            return budgetResetAt is { } resetAt
-                ? LlmResult.Refused(LlmRefusalReason.BudgetExhausted, resetAt)
-                : LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, earliestRetry);
+            // A remaining, budget-allowed candidate that is merely unavailable (a limit mark) wins
+            // over a budget skip: it is only temporarily unavailable, so it could still answer once
+            // its own retry time passes, and reporting BudgetExhausted would hide that and (wrongly)
+            // tell the caller only the budget's reset can help. BudgetExhausted is reported only when
+            // the budget filter/estimate removed every candidate that could ever answer this period --
+            // i.e. no remaining candidate's unavailability is the thing actually standing in the way.
+            return earliestRetry is { } retry
+                ? LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, retry)
+                : budgetResetAt is { } resetAt
+                    ? LlmResult.Refused(LlmRefusalReason.BudgetExhausted, resetAt)
+                    : LlmResult.Refused(LlmRefusalReason.AllModelsUnavailable, null);
         }
         finally
         {
@@ -181,6 +195,25 @@ public class LlmGateway : ILlmGateway
         status.Monthly.Spend + estimate > status.Monthly.HardCap ? status.Monthly
         : status.Daily.Spend + estimate > status.Daily.HardCap ? status.Daily
         : null;
+
+    /// <summary>When the initial budget filter removed at least one candidate, the moment that
+    /// stops applying. <see cref="BudgetStatus.Binding"/> only looks at severity: the monthly period
+    /// whenever it is at least as severe as the overall state, otherwise the daily one. That is
+    /// right except in one case -- daily strictly more severe than monthly (daily is "binding") --
+    /// where a day reset only actually helps if the monthly period's own state, applied by itself,
+    /// still leaves a candidate; if it would filter out everything just the same, report the
+    /// month's reset instead of promising relief the day's reset can't deliver.</summary>
+    private DateTimeOffset ComputeBudgetResetAt(IReadOnlyList<ModelCatalogEntry> candidates, BudgetStatus status)
+    {
+        var binding = status.Binding;
+        if (binding.Kind == BudgetNotice.MonthlyPeriod)
+        {
+            return binding.PeriodEnd;
+        }
+
+        var monthAlone = ApplyBudgetFilter(candidates, status.Monthly.State);
+        return monthAlone.Count > 0 ? binding.PeriodEnd : status.Monthly.PeriodEnd;
+    }
 
     /// <summary>Normal/Warn: unchanged. Soft: only LLM_FAST_MODELS entries plus zero-price entries,
     /// in chain order (so a chat's preferred model stays first only if it is allowed); if that
@@ -256,9 +289,21 @@ public class LlmGateway : ILlmGateway
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The CALLER cancelled (e.g. process shutdown), not our own per-call timeout below --
-            // propagate immediately: no Error log, no attempt row, no result to return. The caller's
-            // own cancellation handling is responsible for whatever happens next.
+            // The CALLER cancelled (e.g. process shutdown), not our own per-call timeout below. For a
+            // zero-price entry nothing billable could have happened, so there's nothing to record --
+            // propagate immediately, as before. For a PAID entry the provider may already be doing
+            // billable work that we'll never see the usage for, so the attempt is still charged the
+            // pre-call estimate -- recorded with CancellationToken.None (detaching the row on failure,
+            // same as every other RecordCallAsync call) since the caller's own token is already
+            // cancelled and must not also abort this bookkeeping write. Either way: no Error log, no
+            // result to return, and the caller's own cancellation handling is responsible for whatever
+            // happens next.
+            stopwatch.Stop();
+            if (!LlmCostCalculator.IsZero(price))
+            {
+                await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
+            }
+
             throw;
         }
         catch (OperationCanceledException)
@@ -301,9 +346,24 @@ public class LlmGateway : ILlmGateway
         // answer is still billed -- usage x price when usage came back, otherwise the estimate.
         var inputTokens = response.Usage?.InputTokenCount;
         var outputTokens = response.Usage?.OutputTokenCount;
-        var cost = inputTokens is null && outputTokens is null
-            ? estimate
-            : LlmCostCalculator.Compute(inputTokens ?? 0, outputTokens ?? 0, price);
+        decimal cost;
+        if (inputTokens is null && outputTokens is null)
+        {
+            // Neither side reported: nothing to go on at all, so bill the whole pre-call estimate.
+            cost = estimate;
+        }
+        else
+        {
+            // Partial usage: a missing INPUT count falls back to the same estimated input tokens the
+            // pre-call estimate used (never 0 -- that would understate a real, billable input that
+            // merely wasn't reported back). A missing OUTPUT count is billed as 0, not the configured
+            // max -- an output count only goes missing when there is no output to meter, since the
+            // provider call already succeeded and returned a response.
+            var effectiveInputTokens = inputTokens is { } reportedInputTokens
+                ? (decimal)reportedInputTokens
+                : LlmCostCalculator.EstimatedInputTokens(request.SystemPrompt.Length, InputChars(request));
+            cost = LlmCostCalculator.Compute(effectiveInputTokens, outputTokens ?? 0, price);
+        }
 
         if (string.IsNullOrWhiteSpace(response.Text))
         {
