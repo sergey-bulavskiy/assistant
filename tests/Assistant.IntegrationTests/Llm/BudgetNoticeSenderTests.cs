@@ -5,6 +5,7 @@ using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Shouldly;
@@ -22,37 +23,23 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         public Assistant.Application.Telegram.ITelegramClient Create(string token) => Client;
     }
 
-    /// <summary>Builds a real, independent <see cref="AssistantDbContext"/> per call, against a given
-    /// connection string -- the production shape of <c>IDbContextFactory&lt;AssistantDbContext&gt;</c>,
-    /// minus DI.</summary>
-    private sealed class TestDbContextFactory(string connectionString) : IDbContextFactory<Assistant.Infrastructure.Persistence.AssistantDbContext>
+    /// <summary>A real DI container with its own scoped <c>AssistantDbContext</c> registration against
+    /// a given connection string -- the production shape (every scope created from the returned
+    /// <see cref="IServiceScopeFactory"/> resolves its own, independent context instance), minus
+    /// everything else the real composition root registers.</summary>
+    private static IServiceScopeFactory ScopeFactoryFor(string connectionString)
     {
-        public Assistant.Infrastructure.Persistence.AssistantDbContext CreateDbContext()
-        {
-            var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
-            Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, connectionString);
-            return new Assistant.Infrastructure.Persistence.AssistantDbContext(options.Options);
-        }
-
-        public Task<Assistant.Infrastructure.Persistence.AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(CreateDbContext());
+        var services = new ServiceCollection();
+        services.AddDbContext<Assistant.Infrastructure.Persistence.AssistantDbContext>(options =>
+            Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, connectionString));
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
-    /// <summary>Every context it creates points at an address nothing listens on, with a 1s connect
+    /// <summary>Every scope's context points at an address nothing listens on, with a 1s connect
     /// timeout: any <c>SaveChangesAsync</c> against it fails fast with a connection error -- a
     /// non-unique-violation failure, unlike the dedup race the other tests in this file cover.</summary>
-    private sealed class BadDbContextFactory : IDbContextFactory<Assistant.Infrastructure.Persistence.AssistantDbContext>
-    {
-        public Assistant.Infrastructure.Persistence.AssistantDbContext CreateDbContext()
-        {
-            var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
-            Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, "Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1");
-            return new Assistant.Infrastructure.Persistence.AssistantDbContext(options.Options);
-        }
-
-        public Task<Assistant.Infrastructure.Persistence.AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(CreateDbContext());
-    }
+    private static IServiceScopeFactory BadScopeFactory() =>
+        ScopeFactoryFor("Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1");
 
     private static readonly DateTimeOffset DayStart = new(2026, 10, 15, 0, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset DayEnd = DayStart.AddDays(1);
@@ -68,7 +55,7 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         _clients = new SingleClientFactory();
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var sender = new BudgetNoticeSender(
-            Db, new TestDbContextFactory(ConnectionString), _clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+            Db, ScopeFactoryFor(ConnectionString), _clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
         return (sender, _clients);
     }
 
@@ -188,9 +175,9 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(optionsBuilder, ConnectionString);
         await using var dbB = new Assistant.Infrastructure.Persistence.AssistantDbContext(optionsBuilder.Options);
 
-        var dbFactory = new TestDbContextFactory(ConnectionString);
-        var senderA = new BudgetNoticeSender(Db, dbFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
-        var senderB = new BudgetNoticeSender(dbB, dbFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var scopeFactory = ScopeFactoryFor(ConnectionString);
+        var senderA = new BudgetNoticeSender(Db, scopeFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var senderB = new BudgetNoticeSender(dbB, scopeFactory, clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
 
         await Task.WhenAll(
             senderA.NotifyAsync(status, CancellationToken.None),
@@ -224,7 +211,7 @@ public class BudgetNoticeSenderTests : IntegrationTestBase
         // its own throwaway context, so Db must come out of this completely unaffected.
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var clients = new SingleClientFactory();
-        var sender = new BudgetNoticeSender(Db, new BadDbContextFactory(), clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
+        var sender = new BudgetNoticeSender(Db, BadScopeFactory(), clients, options, new SystemClock(), NullLogger<BudgetNoticeSender>.Instance);
 
         await sender.NotifyAsync(StatusAt(dailySpend: 85m, monthlySpend: 1m), CancellationToken.None);
 

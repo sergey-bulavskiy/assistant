@@ -7,6 +7,7 @@ using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -93,21 +94,17 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         }
     }
 
-    /// <summary>Every context it creates points at an address nothing listens on, with a 1s connect
-    /// timeout: any <c>SaveChangesAsync</c> against it fails fast with a connection error -- a
+    /// <summary>A real DI container whose scoped <c>AssistantDbContext</c> registration points at an
+    /// address nothing listens on, with a 1s connect timeout: any <c>SaveChangesAsync</c> against a
+    /// context resolved from a scope of this factory fails fast with a connection error -- a
     /// non-unique-violation failure, unlike the dedup-insert race <c>BudgetNoticeSenderTests</c>
     /// already covers.</summary>
-    private sealed class BadDbContextFactory : IDbContextFactory<AssistantDbContext>
+    private static IServiceScopeFactory BadScopeFactory()
     {
-        public AssistantDbContext CreateDbContext()
-        {
-            var options = new DbContextOptionsBuilder<AssistantDbContext>();
-            AssistantDbContext.Configure(options, "Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1");
-            return new AssistantDbContext(options.Options);
-        }
-
-        public Task<AssistantDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(CreateDbContext());
+        var services = new ServiceCollection();
+        services.AddDbContext<AssistantDbContext>(options =>
+            AssistantDbContext.Configure(options, "Host=127.0.0.1;Port=1;Database=doesnotexist;Username=x;Password=x;Timeout=1"));
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
     private sealed class SingleClientFactory : Assistant.Infrastructure.Telegram.ITelegramClientFactory
@@ -754,7 +751,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
         // and on the gateway's next call.
         var options = Options.Create(new BotOptions { ManagerToken = "test-manager-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var realSender = new BudgetNoticeSender(
-            Db, new BadDbContextFactory(), new SingleClientFactory(), options, new FixedClock(Now), NullLogger<BudgetNoticeSender>.Instance);
+            Db, BadScopeFactory(), new SingleClientFactory(), options, new FixedClock(Now), NullLogger<BudgetNoticeSender>.Instance);
         await SeedCostAsync(OtherFamily, 79.99m, Now.AddHours(-1));
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer", inputTokens: 1000, outputTokens: 2000); // crosses warn, see above

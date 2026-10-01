@@ -4,6 +4,7 @@ using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -32,18 +33,18 @@ public interface IBudgetNoticeSender
 public class BudgetNoticeSender : IBudgetNoticeSender
 {
     private readonly AssistantDbContext _db;
-    private readonly IDbContextFactory<AssistantDbContext> _dbFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelegramClientFactory _clientFactory;
     private readonly IOptions<BotOptions> _options;
     private readonly IClock _clock;
     private readonly ILogger<BudgetNoticeSender> _logger;
 
     public BudgetNoticeSender(
-        AssistantDbContext db, IDbContextFactory<AssistantDbContext> dbFactory, ITelegramClientFactory clientFactory,
+        AssistantDbContext db, IServiceScopeFactory scopeFactory, ITelegramClientFactory clientFactory,
         IOptions<BotOptions> options, IClock clock, ILogger<BudgetNoticeSender> logger)
     {
         _db = db;
-        _dbFactory = dbFactory;
+        _scopeFactory = scopeFactory;
         _clientFactory = clientFactory;
         _options = options;
         _clock = clock;
@@ -114,16 +115,20 @@ public class BudgetNoticeSender : IBudgetNoticeSender
         _ => string.Empty
     };
 
-    /// <summary>Inserts through a dedicated, short-lived <see cref="AssistantDbContext"/> from
-    /// <see cref="_dbFactory"/> -- never through the request's shared <see cref="_db"/>. A failed
-    /// insert (unique violation or otherwise) must never leave a tracked, half-written entity on
-    /// the shared context: that context is reused by the rest of the request (e.g. the gateway's
-    /// own call-recording SaveChanges), and a stray Added entity there would be re-sent on that next,
-    /// unrelated save. Using a throwaway context sidesteps that entirely -- whatever happens to it,
-    /// it is disposed right after and never touches `_db`'s change tracker.</summary>
+    /// <summary>Inserts through a brand-new DI scope's own <see cref="AssistantDbContext"/> -- never
+    /// through the request's shared <see cref="_db"/>. A failed insert (unique violation or
+    /// otherwise) must never leave a tracked, half-written entity on the shared context: that
+    /// context is reused by the rest of the request (e.g. the gateway's own call-recording
+    /// SaveChanges), and a stray Added entity there would be re-sent on that next, unrelated save.
+    /// Creating a fresh scope sidesteps that entirely -- whatever happens to its context, the whole
+    /// scope (and the context with it) is disposed right after and never touches `_db`'s change
+    /// tracker. The new scope's own <c>ICurrentFamily</c> is never set (stays unscoped/null), which
+    /// is fine here: <c>budget_notices</c> has no family query filter and this insert touches
+    /// nothing else.</summary>
     private async Task<bool> TryInsertNoticeAsync(string periodKind, DateTimeOffset periodStart, int threshold, CancellationToken cancellationToken)
     {
-        await using var insertDb = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var insertDb = scope.ServiceProvider.GetRequiredService<AssistantDbContext>();
         var notice = new BudgetNotice
         {
             PeriodKind = periodKind,

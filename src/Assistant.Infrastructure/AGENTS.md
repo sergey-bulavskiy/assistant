@@ -103,11 +103,13 @@
   `/model <name>` and `chat_settings.preferred_model` both key off it, with no provider prefix
   attached, so a collision between two providers' names would let `/model` silently switch provider.
 - `BudgetNoticeSender`'s dedup insert (the `budget_notices` row whose unique index is the actual
-  dedup) runs through its own `AssistantDbContext`, built from `IDbContextFactory<AssistantDbContext>`,
-  never through the request's shared, scoped context. A failed insert on a *shared* context would
-  leave the entity tracked as `Added`, and the next unrelated `SaveChangesAsync` on that same context
-  (e.g. `LlmGateway`'s own call-recording save) would try to re-insert it. Keep any future DB write
-  inside `BudgetNoticeSender` on this same throwaway-context pattern, not on `_db`.
+  dedup) runs through its own `AssistantDbContext`, resolved from a brand-new DI scope created via
+  `IServiceScopeFactory.CreateAsyncScope()`, never through the request's shared, scoped context. A
+  failed insert on a *shared* context would leave the entity tracked as `Added`, and the next
+  unrelated `SaveChangesAsync` on that same context (e.g. `LlmGateway`'s own call-recording save)
+  would try to re-insert it. The new scope's `ICurrentFamily` is never set, which is fine since
+  `budget_notices` has no family filter. Keep any future DB write inside `BudgetNoticeSender` on
+  this same fresh-scope pattern, not on `_db`.
 - `LlmGateway` sends budget notices (`IBudgetNoticeSender`) only *after* a call's cost is already
   recorded, re-evaluating the budget status at that point -- not with the pre-call status used for
   candidate filtering -- and only outside the concurrency gate (after it is released). The check is
