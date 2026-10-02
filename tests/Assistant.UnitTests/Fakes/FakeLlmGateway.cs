@@ -14,6 +14,9 @@ public class FakeLlmGateway : ILlmGateway
     /// can observe what happens while the model call is in flight.</summary>
     public Task? WaitBeforeAnswering { get; set; }
 
+    /// <summary>When set, CompleteAsync records the request and then throws this.</summary>
+    public Exception? ThrowOnComplete { get; set; }
+
     public List<LlmRequest> Requests { get; } = new();
 
     public LlmRequest? LastRequest => Requests.LastOrDefault();
@@ -25,6 +28,11 @@ public class FakeLlmGateway : ILlmGateway
     public async Task<LlmResult> CompleteAsync(LlmRequest request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        if (ThrowOnComplete is { } exception)
+        {
+            throw exception;
+        }
+
         if (WaitBeforeAnswering is { } wait)
         {
             await wait.WaitAsync(cancellationToken);

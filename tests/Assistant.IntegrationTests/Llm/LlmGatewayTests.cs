@@ -24,7 +24,8 @@ public class LlmGatewayTests : IntegrationTestBase
         IReadOnlyList<ModelCatalogEntry>? models = null,
         int callTimeoutSeconds = 30,
         int maxConcurrentCalls = 4,
-        int modelCooldownMinutes = 15) => new()
+        int modelCooldownMinutes = 15,
+        IReadOnlyList<ModelCatalogEntry>? fastModels = null) => new()
     {
         Models = models ?? new[] { new ModelCatalogEntry(Provider, ModelA), new ModelCatalogEntry(Provider, ModelB) },
         CallsPerMinute = callsPerMinute,
@@ -37,7 +38,7 @@ public class LlmGatewayTests : IntegrationTestBase
         ModelCooldownMinutes = modelCooldownMinutes,
         Prices = new Dictionary<string, ModelPrice>(),
         Budget = null,
-        FastModels = Array.Empty<ModelCatalogEntry>()
+        FastModels = fastModels ?? Array.Empty<ModelCatalogEntry>()
     };
 
     // Budget is always null in this file's configs, so LlmGateway never actually dispatches a
@@ -98,10 +99,11 @@ public class LlmGatewayTests : IntegrationTestBase
             throw new InvalidOperationException("simulated DB failure recording the LLM call attempt.");
     }
 
-    private static LlmRequest MakeRequest(long familyId = 1, string? preferredModel = null) => new(
+    private static LlmRequest MakeRequest(
+        long familyId = 1, string? preferredModel = null, string tier = LlmConfig.SmartTier) => new(
         FamilyId: familyId,
         BotId: 1,
-        Tier: LlmConfig.SmartTier,
+        Tier: tier,
         PreferredModel: preferredModel,
         SystemPrompt: "system",
         Messages: new[] { new LlmMessage(LlmMessageRole.User, "hello") });
@@ -145,6 +147,41 @@ public class LlmGatewayTests : IntegrationTestBase
         rows[0].Outcome.ShouldBe(LlmCallOutcome.Ok);
         rows[0].InputTokens.ShouldBe(10);
         rows[0].OutputTokens.ShouldBe(20);
+    }
+
+    [Fact]
+    public async Task Fast_tier_calls_the_fast_model_first_and_records_the_tier()
+    {
+        var config = MakeConfig(fastModels: new[] { new ModelCatalogEntry(Provider, ModelB) });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("fast answer");
+        var gateway = CreateGateway(config, client);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 31, tier: "fast"), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.ModelName.ShouldBe(ModelB);
+        client.RequestedModelIds.ShouldBe(new[] { ModelB });
+        var row = (await Db.LlmCalls.Where(c => c.FamilyId == 31).ToListAsync()).ShouldHaveSingleItem();
+        row.Tier.ShouldBe("fast");
+        row.Model.ShouldBe(ModelB);
+    }
+
+    [Fact]
+    public async Task Fast_tier_falls_back_to_the_main_chain_when_the_fast_model_is_unavailable()
+    {
+        var config = MakeConfig(fastModels: new[] { new ModelCatalogEntry(Provider, ModelB) });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("chain answer");
+        var availability = new ModelAvailability(new SystemClock());
+        availability.MarkUnavailable(ModelB, DateTimeOffset.UtcNow.AddHours(1));
+        var gateway = CreateGateway(config, client, availability);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 32, tier: "fast"), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.ModelName.ShouldBe(ModelA);
+        client.RequestedModelIds.ShouldBe(new[] { ModelA });
     }
 
     [Fact]

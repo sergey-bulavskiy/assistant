@@ -56,9 +56,22 @@ household member. One health bot tracks exactly one person (its profile, created
 published-guideline default thresholds on its first message). Turn off Group Privacy for it
 (step 5) before adding it to the tracking group or topic.
 
-> **Not ready to rely on yet.** For now it understands only the commands below: it does not record
-> readings from messages, does not check values and sends no alerts. Ordinary messages in its chats
-> are stored and otherwise ignored.
+> **Not ready to rely on yet.** It records readings from ordinary messages and marks each recorded
+> message with ✍, but it does not check values and sends no alerts yet.
+
+Every new ordinary text message in the health bot's chats (at least 3 characters, not only emoji)
+goes to the model once, on the `fast` tier: `LLM_FAST_MODELS` first, then the rest of `LLM_MODELS`.
+The model only turns the message into records (glucose, insulin, meal, symptom, weight, blood
+pressure); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
+Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
+time it cannot place) it asks once, as a reply. If the model is unavailable or its answer is
+unreadable, nothing is recorded and the bot replies "⚠️ Не смог обработать сообщение — ничего не
+записано. …" (at most once per 10 minutes per chat or topic). Edited messages are not read again
+yet: remove a wrong record with `/undo` or `/del` and post it again.
+
+Extraction makes one LLM call per text message in the health bot's chats. These calls count toward
+`LLM_CALLS_PER_DAY` and `LLM_CALLS_PER_MINUTE`, which are per family, per UTC day, and shared with
+the General bot — raise `LLM_CALLS_PER_DAY` accordingly.
 
 | Command | Who | What |
 |---|---|---|
@@ -66,6 +79,9 @@ published-guideline default thresholds on its first message). Turn off Group Pri
 | `/week` | any approved member | Current stage week and day ("3 нед. 2 дн."), counted from the stage start date in the profile's time zone. |
 | `/profile` | any approved member | Stage start date, stage week, time zone, emergency phone, context note, thresholds summary. |
 | `/thresholds` | any approved member | Every safety rule with its values and source: "врач" (entered with `/threshold`) or "не подтверждено врачом" (published-guideline defaults). |
+| `/today` | any approved member | Today's records (the profile's local day), oldest first, each with its number (`#12`). |
+| `/undo` | any approved member | Deletes the records of your latest recorded message in this chat or topic (up to 24 hours old). |
+| `/del` | any approved member | As a reply to a message: deletes the records made from it. `/del 12` deletes record #12. |
 | `/setstart ДД.ММ.ГГГГ` | owners | Sets the stage start date (not in the future, at most 300 days ago). |
 | `/settz Area/City` | owners | Sets the profile's time zone (IANA id such as `Europe/Berlin`; default `UTC`). |
 | `/setphone <text>` | owners | Emergency number text for alerts (default "103 или 112"; up to 100 characters). |
@@ -247,9 +263,10 @@ and empty by default.
    already in flight when the cap is crossed** (so a $2 daily budget with the default hard% can in
    practice reach a bit over $2.40) — size the provider-side cap from step 1 with that real ceiling in
    mind, not the `LLM_BUDGET_*` number alone.
-5. Optional: `LLM_FAST_MODELS` — a cheaper, ordered `provider:model` fallback chain (every entry must
-   already appear in `LLM_MODELS`) used automatically once spend crosses 100% of either period, before
-   the hard cutoff.
+5. Optional: `LLM_FAST_MODELS` — a cheaper, ordered `provider:model` chain (every entry must already
+   appear in `LLM_MODELS`). The health bot's extraction (`fast` tier) tries these first, then the rest
+   of `LLM_MODELS`; without it the `fast` tier uses `LLM_MODELS` as is. The same list is used
+   automatically once spend crosses 100% of either period, before the hard cutoff.
 6. `docker compose -f deploy/docker-compose.yml up -d` (same note as the `claude-cli` section:
    Watchtower alone does not pick up new environment variables).
 
@@ -300,6 +317,9 @@ real bots and a real family.
   the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
   `/week` → "Неделя: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that
   rule as "врач"; `/threshold glucose.any default` restores it.
+- In a private chat with the health bot: "вес 70.5" → ✍ on the message and `/today` shows
+  "вес 70.5 кг"; "сахар 400" → "Не понял «400» — уточните единицы (нужно в ммоль/л)."; `/undo` →
+  "Удалено: …" and the ✍ disappears.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

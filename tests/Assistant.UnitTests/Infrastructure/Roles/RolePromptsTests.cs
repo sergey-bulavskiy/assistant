@@ -1,3 +1,5 @@
+using Assistant.Application.Health;
+using Assistant.Domain.Health;
 using Assistant.Infrastructure.Roles;
 
 namespace Assistant.UnitTests.Infrastructure.Roles;
@@ -12,6 +14,23 @@ public class RolePromptsTests
         prompts.Find("health", "prompt.md").ShouldNotBeNullOrWhiteSpace();
         prompts.Find("health", "extract.md").ShouldNotBeNullOrWhiteSpace();
         prompts.Missing.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Extraction_prompt_describes_the_json_contract()
+    {
+        var prompts = new RolePrompts(typeof(RolePrompts).Assembly);
+
+        var text = prompts.Find("health", "extract.md");
+
+        text.ShouldNotBeNull();
+        text.ShouldContain("\"events\"");
+        text.ShouldContain("\"unclear\"");
+        text.ShouldContain("\"is_question\"");
+        foreach (var value in HealthEventTypes.All.Concat(GlucoseContexts.All).Concat(SymptomCodes.All))
+        {
+            text.ShouldContain(value);
+        }
     }
 
     [Fact]

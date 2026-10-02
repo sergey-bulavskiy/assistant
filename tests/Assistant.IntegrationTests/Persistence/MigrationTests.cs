@@ -119,4 +119,49 @@ public class MigrationTests : IntegrationTestBase
             "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'llm_calls' AND column_name IN ('chat_id', 'topic_id', 'trigger_message_id') AND is_nullable = 'YES'")
             .SingleAsync()).ShouldBe(3);
     }
+
+    [Fact]
+    public async Task Events_table_has_jsonb_payload_flags_default_and_the_partial_index()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'payload' AND data_type = 'jsonb'")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'flags' AND data_type = 'ARRAY' AND column_default LIKE '%{{}}%'")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM pg_indexes WHERE tablename = 'events' AND indexdef LIKE '%WHERE (deleted_at IS NULL)%'")
+            .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_profile_with_events_cannot_be_deleted()
+    {
+        var now = new DateTimeOffset(2030, 2, 7, 10, 0, 0, TimeSpan.Zero);
+        var profile = new HealthProfile { FamilyId = 1, BotId = 10, CreatedAt = now, UpdatedAt = now };
+        Db.HealthProfiles.Add(profile);
+        await Db.SaveChangesAsync();
+        Db.Events.Add(new HealthEvent
+        {
+            FamilyId = 1,
+            ProfileId = profile.Id,
+            Type = "weight",
+            SubjectTag = "health",
+            OccurredAt = now,
+            OccurredAtSource = "message",
+            Payload = "{\"kg\":60}",
+            BotId = 1001,
+            ChatId = -100,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        await Db.SaveChangesAsync();
+
+        // Otherwise EF sees the tracked event and refuses before the database does.
+        Db.ChangeTracker.Clear();
+        var toDelete = await Db.HealthProfiles.SingleAsync();
+        Db.HealthProfiles.Remove(toDelete);
+
+        await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
+    }
 }

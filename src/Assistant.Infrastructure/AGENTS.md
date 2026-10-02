@@ -19,8 +19,8 @@
 - Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
   redelivery, including after an idle offset re-base, must not create duplicates or duplicate
   replies); integration tests in `tests/.../Persistence` cover it.
-- Health tables (`health_profiles`, `safety_rules`) are family-scoped **and fail closed**:
-  `HealthProfileStore` takes `familyId` on every call and throws `InvalidOperationException` when
+- Health tables (`health_profiles`, `safety_rules`, `events`) are family-scoped **and fail closed**:
+  `HealthProfileStore` and `EventStore` take `familyId` on every call and throw `InvalidOperationException` when
   `ICurrentFamily.FamilyId` is unset or another family. Never `IgnoreQueryFilters()` on them, and
   never touch them from a fresh DI scope (`ICurrentFamily` is unset there; the `BudgetNoticeSender`
   fresh-scope pattern works only for the unfiltered `budget_notices`). `safety_rules.profile_id` is
@@ -32,6 +32,12 @@
   The Dockerfile copies `roles/`, and `.dockerignore` (which excludes `*.md`) re-includes
   `roles/**/*.md`; keep both when touching either file. A missing prompt is an Error at startup and
   turns that role's LLM features off, never the app.
+- `events`: soft delete only (`deleted_at`, `delete_reason`); every read filters `deleted_at IS NULL`.
+  `events.profile_id` is a FK with `Restrict` (a profile with events cannot be deleted). `payload` is
+  jsonb holding one of Application's `HealthEventPayloads` records (snake_case), validated by
+  `HealthEventValidator` before saving; Postgres reformats jsonb text, so tests parse it. `bot_id` is
+  the Telegram bot id and `source_message_id` is `messages.id`; `/del` as a reply finds the source
+  through `messages`. Pass only offset-0 `DateTimeOffset` values (Npgsql rejects others).
 
 ## Bot polling (`Bots/`)
 
@@ -97,6 +103,9 @@
 - Groups: bots see ordinary group messages only with privacy mode off or admin rights. Bots
   created through Managed Bots start with privacy mode on (README step 5). Chats can
   migrate (group → supergroup changes the chat id); migrations are recorded in `chat_migrations`.
+- Reactions (`SetReactionAsync`): one `ReactionTypeEmoji`, or an empty list to clear. Bots may use
+  only the emoji Telegram allows (✍ U+270D without a variation selector, and 👍, are allowed); a
+  group can restrict reactions further, so callers fall back and never fail on a reaction.
 
 ## LLM gateway and the Claude Code CLI provider (`Llm/`)
 
@@ -219,6 +228,9 @@
   differently there), then every zero-price entry in chain order. Don't "simplify" this back to
   filtering the chain in place; a multi-entry `LLM_FAST_MODELS` list needs its own order honoured
   independently of where those models happen to sit in the main chain.
+- Tiers: `ModelCatalog.GetCandidateOrder` gives `smart` the `LLM_MODELS` chain and `fast` the
+  `LLM_FAST_MODELS` entries in their own order followed by the remaining `LLM_MODELS` entries, so a
+  `fast` call still works with no fast model configured or all of them out of limits.
 - **Budgets are platform-wide by design, not per-family** — `BudgetGuard`'s spend query and
   `BudgetNoticeSender`'s dedup insert both use `IgnoreQueryFilters()` deliberately, with a comment
   saying so each time. Don't "fix" this to be family-scoped; that would silently defeat the whole

@@ -12,6 +12,12 @@ public class FakeTelegramClient : ITelegramClient
 
     public List<(string CallbackQueryId, string? Text)> AnsweredCallbacks { get; } = new();
 
+    public List<(long ChatId, int MessageId, string? Emoji)> Reactions { get; } = new();
+
+    /// <summary>The first N SetReactionAsync calls throw (and are not recorded); each throw
+    /// decrements it.</summary>
+    public int FailReactionTimes { get; set; }
+
     public bool ThrowOnSend { get; set; }
 
     public bool ThrowOnChatAction { get; set; }
@@ -51,6 +57,18 @@ public class FakeTelegramClient : ITelegramClient
             throw new InvalidOperationException("simulated chat action failure");
         }
 
+        return Task.CompletedTask;
+    }
+
+    public Task SetReactionAsync(long chatId, int messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        if (FailReactionTimes > 0)
+        {
+            FailReactionTimes--;
+            throw new InvalidOperationException("simulated reaction failure");
+        }
+
+        Reactions.Add((chatId, messageId, emoji));
         return Task.CompletedTask;
     }
 

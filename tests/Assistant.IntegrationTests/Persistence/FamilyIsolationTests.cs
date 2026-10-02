@@ -61,6 +61,8 @@ public class FamilyIsolationTests : IAsyncLifetime
 
         db.SafetyRules.Add(new SafetyRule { FamilyId = familyA.Id, ProfileId = profileA.Id, RuleKey = "glucose.any", Source = "guideline_default", UpdatedAt = DateTimeOffset.UtcNow });
         db.SafetyRules.Add(new SafetyRule { FamilyId = familyB.Id, ProfileId = profileB.Id, RuleKey = "glucose.any", Source = "guideline_default", UpdatedAt = DateTimeOffset.UtcNow });
+        db.Events.Add(new HealthEvent { FamilyId = familyA.Id, ProfileId = profileA.Id, Type = "weight", SubjectTag = "health", OccurredAt = DateTimeOffset.UtcNow, OccurredAtSource = "message", Payload = "{\"kg\":60}", BotId = botA.TelegramBotId, ChatId = -100, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        db.Events.Add(new HealthEvent { FamilyId = familyB.Id, ProfileId = profileB.Id, Type = "weight", SubjectTag = "health", OccurredAt = DateTimeOffset.UtcNow, OccurredAtSource = "message", Payload = "{\"kg\":60}", BotId = botB.TelegramBotId, ChatId = -100, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
 
         await db.SaveChangesAsync();
     }
@@ -102,6 +104,7 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.HealthProfiles.CountAsync()).ShouldBe(1);
         (await db.HealthProfiles.SingleAsync()).ContextNote.ShouldBe("family A note");
         (await db.SafetyRules.CountAsync()).ShouldBe(1);
+        (await db.Events.CountAsync()).ShouldBe(1);
     }
 
     [Fact]
@@ -124,6 +127,7 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.HealthProfiles.CountAsync()).ShouldBe(1);
         (await db.HealthProfiles.SingleAsync()).ContextNote.ShouldBe("family B note");
         (await db.SafetyRules.CountAsync()).ShouldBe(1);
+        (await db.Events.CountAsync()).ShouldBe(1);
     }
 
     [Fact]
@@ -138,6 +142,7 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await managerScoped.FamilyMembers.CountAsync()).ShouldBe(2);
         (await managerScoped.Bots.Where(b => b.FamilyId != null).CountAsync()).ShouldBe(2);
         (await managerScoped.HealthProfiles.CountAsync()).ShouldBe(2);
+        (await managerScoped.Events.CountAsync()).ShouldBe(2);
 
         await using var familyAScoped = await OpenScopedAsync(_familyAId);
         (await familyAScoped.Places.CountAsync()).ShouldBe(1);
