@@ -24,6 +24,9 @@ public sealed class PoisonMessageStore : IMessageStore
     public Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken) =>
         _inner.GetLastUpdateIdAsync(botId, cancellationToken);
 
+    public Task<bool> RebaseOffsetIfIdleAsync(long botId, DateTimeOffset idleBefore, CancellationToken cancellationToken) =>
+        _inner.RebaseOffsetIfIdleAsync(botId, idleBefore, cancellationToken);
+
     public Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
         if (_injector.ShouldFail(updateId, message is not null))

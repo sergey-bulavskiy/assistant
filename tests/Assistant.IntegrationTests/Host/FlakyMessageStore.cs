@@ -32,6 +32,9 @@ public sealed class FlakyMessageStore : IMessageStore
     public Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken) =>
         _inner.GetLastUpdateIdAsync(botId, cancellationToken);
 
+    public Task<bool> RebaseOffsetIfIdleAsync(long botId, DateTimeOffset idleBefore, CancellationToken cancellationToken) =>
+        _inner.RebaseOffsetIfIdleAsync(botId, idleBefore, cancellationToken);
+
     public Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken) =>
         _inner.StoreAsync(botId, updateId, message, cancellationToken);
 

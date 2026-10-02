@@ -118,4 +118,72 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
         await coordinator.StopAsync(CancellationToken.None);
         await Should.NotThrowAsync(() => coordinator.StopAsync(CancellationToken.None));
     }
+
+    private AssistantDbContext OpenDb()
+    {
+        var options = new DbContextOptionsBuilder<AssistantDbContext>();
+        AssistantDbContext.Configure(options, _connectionString);
+        return new AssistantDbContext(options.Options);
+    }
+
+    private async Task SetManagerOffsetAsync(long lastUpdateId, DateTimeOffset lastUpdateAt)
+    {
+        await using var db = OpenDb();
+        await db.Bots.IgnoreQueryFilters().Where(b => b.Role == "manager").ExecuteUpdateAsync(s => s
+            .SetProperty(b => b.LastUpdateId, lastUpdateId)
+            .SetProperty(b => b.LastUpdateAt, lastUpdateAt));
+    }
+
+    private long ReadManagerOffset()
+    {
+        using var db = OpenDb();
+        return db.Bots.IgnoreQueryFilters().AsNoTracking().Single(b => b.Role == "manager").LastUpdateId;
+    }
+
+    private static IncomingUpdate PrivateText(long updateId, int messageId) =>
+        new(updateId, new IncomingMessage(
+            ChatId: 111, ChatType: "private", ChatTitle: null, TopicId: null, MessageId: messageId, UserId: 111, Username: "test_user",
+            Text: "hello", Kind: Assistant.Domain.Messages.MessageKind.Text, IsEdit: false,
+            SentAt: DateTimeOffset.UtcNow, EditedAt: null, MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null));
+
+    [Fact]
+    public async Task A_bot_idle_past_the_threshold_rebases_its_offset_and_accepts_a_lower_update_id()
+    {
+        using var factory = new AssistantWebApplicationFactory(_connectionString);
+        var client = factory.CreateClient();
+        await WaitUntilHealthyAsync(client);
+
+        // After a week without updates Telegram picks the next update_id randomly, here below the
+        // stored offset.
+        await SetManagerOffsetAsync(1000, factory.Clock.UtcNow - BotPollingWorker.OffsetRebaseIdleThreshold - TimeSpan.FromHours(1));
+        factory.TelegramClient.EnqueueUpdate(PrivateText(updateId: 50, messageId: 50));
+
+        await WaitForConditionAsync(() => ReadManagerOffset() == 50);
+        // The stored update refreshed the bot's activity, so polling continues from it instead of
+        // re-basing again.
+        await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets[^1] == 51);
+        var firstAt51 = factory.TelegramClient.RequestedOffsets.ToList().IndexOf(51);
+        var pollsBefore = factory.TelegramClient.RequestedOffsets.Count;
+        await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets.Count >= pollsBefore + 5);
+
+        factory.TelegramClient.RequestedOffsets.Skip(firstAt51).ShouldAllBe(offset => offset == 51);
+    }
+
+    [Fact]
+    public async Task A_recently_active_bot_keeps_its_offset_and_never_fetches_older_update_ids()
+    {
+        using var factory = new AssistantWebApplicationFactory(_connectionString);
+        var client = factory.CreateClient();
+        await WaitUntilHealthyAsync(client);
+
+        await SetManagerOffsetAsync(1000, factory.Clock.UtcNow - BotPollingWorker.OffsetRebaseIdleThreshold + TimeSpan.FromHours(1));
+        await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets[^1] == 1001);
+        var pollsBefore = factory.TelegramClient.RequestedOffsets.Count;
+        factory.TelegramClient.EnqueueUpdate(PrivateText(updateId: 50, messageId: 50));
+
+        await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets.Count >= pollsBefore + 5);
+
+        factory.TelegramClient.RequestedOffsets.Skip(pollsBefore).ShouldAllBe(offset => offset == 1001);
+        ReadManagerOffset().ShouldBe(1000);
+    }
 }

@@ -4,6 +4,7 @@ using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Messages;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -220,5 +221,124 @@ public class MessageStoreTests : IntegrationTestBase
 
         using var doc = JsonDocument.Parse(stored.Raw);
         doc.RootElement.GetProperty("text").GetString().ShouldBe(literalText);
+    }
+
+    // --- Idle re-base of the polling offset (Telegram picks a random next update_id after a week
+    // without updates, possibly below the stored last_update_id) ---
+
+    private static readonly DateTimeOffset Now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset IdleBefore = Now - BotPollingWorker.OffsetRebaseIdleThreshold;
+
+    private sealed class FixedClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private MessageStore CreateStoreAt(DateTimeOffset now) => new(Db, new FixedClock(now), NullLogger<MessageStore>.Instance);
+
+    private async Task SeedBotAsync(long lastUpdateId, DateTimeOffset? lastUpdateAt)
+    {
+        Db.Bots.Add(new Bot
+        {
+            TelegramBotId = BotId,
+            Username = "test_bot",
+            Role = "test",
+            Status = BotStatus.Active,
+            LastUpdateId = lastUpdateId,
+            LastUpdateAt = lastUpdateAt,
+            CreatedAt = Now - TimeSpan.FromDays(30),
+        });
+        await Db.SaveChangesAsync();
+        // Each worker call runs in its own scope in production; drop tracked rows so the store reads
+        // what the database holds, including changes made by ExecuteUpdate.
+        Db.ChangeTracker.Clear();
+    }
+
+    private Task<Bot> ReadBotAsync() =>
+        Db.Bots.IgnoreQueryFilters().AsNoTracking().SingleAsync(b => b.TelegramBotId == BotId);
+
+    [Fact]
+    public async Task Idle_bot_is_rebased_and_then_stores_an_update_with_a_lower_update_id()
+    {
+        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: IdleBefore - TimeSpan.FromHours(1));
+        var store = CreateStoreAt(Now);
+
+        var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
+        Db.ChangeTracker.Clear();
+        var result = await store.StoreAsync(BotId, 50, TextMessage(50), CancellationToken.None);
+
+        rebased.ShouldBeTrue();
+        result.Outcome.ShouldBe(StoreOutcome.Stored);
+        (await Db.Messages.CountAsync()).ShouldBe(1);
+        var bot = await ReadBotAsync();
+        bot.LastUpdateId.ShouldBe(50);
+        bot.LastUpdateAt.ShouldBe(Now);
+    }
+
+    [Fact]
+    public async Task Recently_active_bot_is_not_rebased_and_still_skips_an_older_update_id()
+    {
+        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: IdleBefore + TimeSpan.FromHours(1));
+        var store = CreateStoreAt(Now);
+
+        var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
+        Db.ChangeTracker.Clear();
+        var result = await store.StoreAsync(BotId, 50, TextMessage(50), CancellationToken.None);
+
+        rebased.ShouldBeFalse();
+        result.Outcome.ShouldBe(StoreOutcome.AlreadyProcessed);
+        (await Db.Messages.CountAsync()).ShouldBe(0);
+        (await ReadBotAsync()).LastUpdateId.ShouldBe(1000);
+    }
+
+    [Fact]
+    public async Task Bot_with_an_offset_but_no_recorded_update_time_is_rebased()
+    {
+        // Rows from before last_update_at existed: re-basing once is harmless, Telegram keeps
+        // unconfirmed updates only 24h and the worker confirms every stored update on its next poll.
+        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: null);
+
+        var rebased = await CreateStoreAt(Now).RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
+
+        rebased.ShouldBeTrue();
+        (await ReadBotAsync()).LastUpdateId.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Fresh_bot_is_left_alone_and_an_offset_only_update_records_its_time()
+    {
+        await SeedBotAsync(lastUpdateId: 0, lastUpdateAt: null);
+        var store = CreateStoreAt(Now);
+
+        var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
+        var result = await store.StoreAsync(BotId, 7, null, CancellationToken.None);
+
+        rebased.ShouldBeFalse();
+        result.Outcome.ShouldBe(StoreOutcome.OffsetOnly);
+        var bot = await ReadBotAsync();
+        bot.LastUpdateId.ShouldBe(7);
+        bot.LastUpdateAt.ShouldBe(Now);
+    }
+
+    [Fact]
+    public async Task Redelivery_of_a_stored_update_after_a_rebase_does_not_duplicate_the_message()
+    {
+        await SeedBotAsync(lastUpdateId: 0, lastUpdateAt: null);
+        var first = await CreateStoreAt(Now - TimeSpan.FromDays(7)).StoreAsync(BotId, 1000, TextMessage(70), CancellationToken.None);
+        Db.ChangeTracker.Clear();
+        var store = CreateStoreAt(Now);
+
+        var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
+        Db.ChangeTracker.Clear();
+        var redelivered = await store.StoreAsync(BotId, 1000, TextMessage(70), CancellationToken.None);
+
+        first.Outcome.ShouldBe(StoreOutcome.Stored);
+        rebased.ShouldBeTrue();
+        // Past the offset check (offset is 0 now) but caught by the (bot, chat, message id) key:
+        // Duplicate means no reply (ReplyPolicy/GeneralAssistant) and no second row.
+        redelivered.Outcome.ShouldBe(StoreOutcome.Duplicate);
+        redelivered.MessageDbId.ShouldBe(first.MessageDbId);
+        (await Db.Messages.CountAsync()).ShouldBe(1);
+        (await ReadBotAsync()).LastUpdateId.ShouldBe(1000);
     }
 }
