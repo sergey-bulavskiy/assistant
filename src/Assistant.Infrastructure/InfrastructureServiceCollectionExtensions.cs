@@ -40,6 +40,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IMessageStore, MessageStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();
         services.AddScoped<IApprovalService, ApprovalService>();
+        services.AddScoped<IFamilyOwnership, FamilyOwnership>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddScoped<UsageCommandHandler>();
         services.AddScoped<SettingsCommandHandler>();

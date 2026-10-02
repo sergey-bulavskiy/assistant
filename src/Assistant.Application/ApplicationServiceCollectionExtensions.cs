@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health;
 using Assistant.Application.Messages;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,6 +12,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<UpdateHandler>();
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
+        services.AddScoped<IHealthAssistant, HealthAssistant>();
         return services;
     }
 }
