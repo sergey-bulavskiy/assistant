@@ -22,5 +22,13 @@ public class LlmCall
     /// 0/0). Distinct from ReportedCost, the provider's own self-reported, informational figure.</summary>
     public decimal Cost { get; set; }
     public long DurationMs { get; set; }
+
+    /// <summary>Where the call was triggered (Telegram chat id / forum topic id) and the triggering
+    /// message's messages.id. Copied from LlmRequest into every attempt row. TriggerMessageId null
+    /// means the call is not counted by /tokens (rows written before these columns existed, or a
+    /// trigger message that was never stored).</summary>
+    public long? ChatId { get; set; }
+    public int? TopicId { get; set; }
+    public long? TriggerMessageId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

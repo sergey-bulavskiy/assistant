@@ -120,6 +120,28 @@ public class GeneralAssistantTests
     }
 
     [Fact]
+    public async Task Request_carries_chat_topic_and_the_trigger_messages_stored_id()
+    {
+        var result = await HandleAsync(Msg("@test_bot test question", chatType: "supergroup", topicId: 7));
+
+        var request = _gateway.LastRequest.ShouldNotBeNull();
+        request.ChatId.ShouldBe(GroupChatId);
+        request.TopicId.ShouldBe(7);
+        result.MessageDbId.ShouldNotBeNull();
+        request.TriggerMessageId.ShouldBe(result.MessageDbId);
+    }
+
+    [Fact]
+    public async Task Private_request_has_no_topic()
+    {
+        await HandleAsync(Msg("test question"));
+
+        var request = _gateway.LastRequest.ShouldNotBeNull();
+        request.ChatId.ShouldBe(PrivateChatId);
+        request.TopicId.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Group_request_system_prompt_mentions_several_people_and_messages_carry_authors()
     {
         await HandleAsync(Msg("@test_bot test question", chatType: "group", username: "test_user"));

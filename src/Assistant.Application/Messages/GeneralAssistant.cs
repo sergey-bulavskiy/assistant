@@ -211,7 +211,9 @@ public class GeneralAssistant : IGeneralAssistant
             cancellationToken);
 
         var llmMessages = ContextBuilder.Build(history, text, message.Username, isGroup, _config.MaxInputChars);
-        var request = new LlmRequest(familyId, bot.TelegramBotId, LlmConfig.SmartTier, chatSetting.PreferredModel, BuildSystemPrompt(isGroup), llmMessages);
+        var request = new LlmRequest(
+            familyId, bot.TelegramBotId, LlmConfig.SmartTier, chatSetting.PreferredModel, BuildSystemPrompt(isGroup), llmMessages,
+            ChatId: message.ChatId, TopicId: message.TopicId, TriggerMessageId: storeResult.MessageDbId);
 
         LlmResult result;
         using (var typingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))

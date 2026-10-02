@@ -486,7 +486,10 @@ public class LlmGateway : ILlmGateway
             ReportedCost = reportedCost,
             Cost = cost,
             DurationMs = durationMs,
-            CreatedAt = _clock.UtcNow
+            CreatedAt = _clock.UtcNow,
+            ChatId = request.ChatId,
+            TopicId = request.TopicId,
+            TriggerMessageId = request.TriggerMessageId
         };
         _db.LlmCalls.Add(call);
 

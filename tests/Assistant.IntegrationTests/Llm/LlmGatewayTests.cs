@@ -174,6 +174,40 @@ public class LlmGatewayTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Every_attempt_row_carries_the_requests_chat_topic_and_trigger_message()
+    {
+        var config = MakeConfig();
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new ModelLimitReachedException("limit", LlmLimitScope.Model));
+        client.EnqueueResponse("fallback answer");
+        var gateway = CreateGateway(config, client);
+        var request = MakeRequest(familyId: 41) with { ChatId = -100, TopicId = 7, TriggerMessageId = 555 };
+
+        var result = await gateway.CompleteAsync(request, CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        var rows = await Db.LlmCalls.Where(c => c.FamilyId == 41).OrderBy(c => c.Id).ToListAsync();
+        rows.Select(r => r.Outcome).ShouldBe(new[] { LlmCallOutcome.LimitReached, LlmCallOutcome.Ok });
+        rows.ShouldAllBe(r => r.ChatId == -100 && r.TopicId == 7 && r.TriggerMessageId == 555);
+    }
+
+    [Fact]
+    public async Task A_request_without_chat_fields_records_nulls()
+    {
+        var config = MakeConfig();
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("hi there");
+        var gateway = CreateGateway(config, client);
+
+        await gateway.CompleteAsync(MakeRequest(familyId: 42), CancellationToken.None);
+
+        var row = await Db.LlmCalls.SingleAsync(c => c.FamilyId == 42);
+        row.ChatId.ShouldBeNull();
+        row.TopicId.ShouldBeNull();
+        row.TriggerMessageId.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Every_candidate_limited_returns_all_models_unavailable_with_earliest_retry()
     {
         var config = MakeConfig();

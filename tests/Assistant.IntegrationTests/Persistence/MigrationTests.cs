@@ -67,4 +67,12 @@ public class MigrationTests : IntegrationTestBase
             "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'places' AND column_name = 'reply_to_all' AND is_nullable = 'NO' AND column_default = 'false'")
             .SingleAsync()).ShouldBe(1);
     }
+
+    [Fact]
+    public async Task M3c_llm_calls_chat_columns_exist_and_are_nullable()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'llm_calls' AND column_name IN ('chat_id', 'topic_id', 'trigger_message_id') AND is_nullable = 'YES'")
+            .SingleAsync()).ShouldBe(3);
+    }
 }
