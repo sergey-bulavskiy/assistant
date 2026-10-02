@@ -14,7 +14,7 @@ features on top of this pipeline.
 |---|---|---|
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
 | `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
-| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, allow/deny a user still waiting for approval, disable/enable a user, make an approved user an owner. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, turn **reply to all messages** on or off for a General assistant's place ("Отвечать на все: выкл/вкл"), allow/deny a user still waiting for approval, disable/enable a user, make an approved user an owner. A forum topic's place line shows its topic id. |
 | `/usage` | owners, private chat only | Platform-wide spend/state for today and this calendar month (if budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own family. |
 
 **Role bots:**
@@ -33,6 +33,16 @@ of just storing messages.
 - Private chats: replies to every ordinary message. Approved groups/topics: only when addressed
   (mentioned by @username, or replied to) — a plain message in a group it's in is still stored, just
   not answered.
+- **Reply to all:** an owner can switch "Отвечать на все" on for one group or one forum topic in the
+  manager's `/settings`. The assistant then answers every ordinary text message there, not only
+  mentions and replies. Each place has its own switch; a topic does not inherit the whole chat's.
+  Commands, edits and non-text messages are still ignored, and the rate/daily limits and budgets
+  still apply. When such a message can't be answered (limit, budget, models unavailable, an error,
+  or the assistant isn't configured), the bot stays silent instead of posting the refusal;
+  mentioned or replied messages still get the usual refusal text.
+- `/tokens` (any approved member, in any chat or topic with the assistant): answered calls, input
+  and output tokens and the models used in this chat/topic since the last `/new` (or since this
+  feature was installed, if `/new` was never used there). Calls made before that are not counted.
 - `/new` starts a fresh conversation in that chat/topic (earlier messages stop being sent as
   context). `/model` shows the configured models and lets you pin this chat to one (`/model auto`
   returns to the default). `/version` as usual.
@@ -256,6 +266,9 @@ real bots and a real family.
 - `/settings` on the manager bot lists bots/places/users matching reality. Disable a bot → it
   stops replying and storing; Enable → it resumes. Remove a place → a new message from it starts
   a fresh approval. "Сделать владельцем" on a user → they can use `/settings` and get owner DMs.
+- With a General assistant in an approved group: `/settings` → tap "Отвечать на все: выкл" on that
+  group's place → an ordinary message without a mention gets an answer; `/tokens` in the group then
+  shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

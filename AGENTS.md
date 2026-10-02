@@ -43,7 +43,7 @@ command only as an example next to a generic fallback.
 | Path | What | Local guide |
 |---|---|---|
 | `src/Assistant.Domain` | Entities, no dependencies | `src/Assistant.Domain/AGENTS.md` |
-| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing, General assistant (`Messages/GeneralAssistant.cs`); ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, `ILlmGateway`, `IChatSettingsStore`, …) | — |
+| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing, General assistant (`Messages/GeneralAssistant.cs`); ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, `ILlmGateway`, `IChatSettingsStore`, `ILlmUsageQuery`, …) | — |
 | `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption, LLM gateway and `claude -p` provider (`Llm/`) | `src/Assistant.Infrastructure/AGENTS.md` |
 | `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
 | `tests/` | Unit + integration (IntegreSQL) tests; opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |

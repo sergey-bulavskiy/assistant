@@ -72,6 +72,6 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 - CD runs it against the `sha-` image before `latest` is promoted (`.github/AGENTS.md`).
 - One ordered scenario; the first failing step stops the run and names itself. The scenario matches
   the bot's literal Russian texts and button labels: change them together with `ManagerUpdateHandler`,
-  `ApprovalService` and `ReplyPolicy`.
+  `SettingsCommandHandler`, `ApprovalService` and `ReplyPolicy`.
 - One poller per bot token: don't run it locally with the same bots/groups while CD's smoke job runs.
 - Synthetic data only, like every other test; the account and bots are throwaway.

@@ -45,6 +45,17 @@
   a restart, a late tap still resolves correctly but the other owners' DMs keep their buttons.
 - Callback data carries sequential ids (`place_approve:1`), so every callback re-checks that the
   tapping user is an approved owner of the row's family.
+- `ManagerUpdateHandler` dispatches and keeps `/claim`, `/newbot`, `/usage` routing and the
+  approval callbacks (`place_approve`/`place_deny`, `member_allow`/`member_deny`). `/settings` and
+  its callbacks (`bot_*`, `settingsplace_*`, `member_disable`/`member_enable`/`member_makeowner`)
+  live in `SettingsCommandHandler`. A new settings callback must be added to its `CallbackActions`
+  set, or the dispatcher answers "Пока не реализовано". Every owner re-check goes through
+  `ManagerOwnership.IsApprovedOwnerAsync`.
+- The reply-to-all buttons carry the **target** state (`settingsplace_autoreply_on:<id>` /
+  `settingsplace_autoreply_off:<id>`), so two quick taps on one button can't flip it back. The
+  callback also rejects a place whose bot is not `general` (`BotRoles.IsGeneral`, the same rule
+  `UpdateHandler` routes by). `places.reply_to_all` is per row: a topic's row never inherits the
+  chat-wide row's flag.
 
 ## Telegram
 
@@ -187,3 +198,10 @@
   on failure, only the variable name (`$"{variableName} must be an absolute http://, https:// or
   socks5:// proxy URL."`); if you add any logging near proxy handling, log only whether a proxy is
   configured, never its value.
+- `llm_calls.chat_id`/`topic_id`/`trigger_message_id` come from `LlmRequest` and are copied into
+  every attempt row. `trigger_message_id` is the triggering message's `messages.id` (the same id
+  space as the `/new` cutoff in `chat_settings.context_start_message_id`), never the Telegram
+  message id. A null means the row is not counted (rows from before these columns existed, or an
+  unstored trigger). `/tokens` (`LlmUsageQuery`) sums only `Ok` rows after the cutoff, scoped by
+  family. `llm_calls.bot_id` holds the bot's **Telegram** id (as `messages.bot_id` does), not
+  `bots.id`.
