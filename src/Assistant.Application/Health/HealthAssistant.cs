@@ -48,6 +48,10 @@ public class HealthAssistant : IHealthAssistant
     private const string SetPhoneUsageText = "Укажите номер для экстренных случаев: /setphone <текст> (до 100 символов).";
     private const string SetNoteUsageText = "Укажите заметку (до 500 символов): /setnote <текст>; /setnote - удаляет её.";
 
+    private const string ThresholdUsageText =
+        "Формат: /threshold <правило> <поле> <значение> — вводите значения, которые дал врач; " +
+        "/threshold <правило> default — вернуть значения по умолчанию. Правила и поля: /thresholds.";
+
     private readonly IHealthProfileStore _profiles;
     private readonly IFamilyOwnership _ownership;
     private readonly IClock _clock;
@@ -130,6 +134,7 @@ public class HealthAssistant : IHealthAssistant
             case "settz":
             case "setphone":
             case "setnote":
+            case "threshold":
                 await HandleOwnerCommandAsync(command, familyId, profile, telegramClient, message, args, cancellationToken);
                 return;
 
@@ -154,7 +159,8 @@ public class HealthAssistant : IHealthAssistant
             "setstart" => await SetStartAsync(familyId, profile, args, userId, cancellationToken),
             "settz" => await SetTimeZoneAsync(familyId, profile, args, userId, cancellationToken),
             "setphone" => await SetPhoneAsync(familyId, profile, args, userId, cancellationToken),
-            _ => await SetNoteAsync(familyId, profile, args, userId, cancellationToken)
+            "setnote" => await SetNoteAsync(familyId, profile, args, userId, cancellationToken),
+            _ => await SetThresholdAsync(familyId, profile, args, userId, cancellationToken)
         };
         await ReplyAsync(telegramClient, message, reply, cancellationToken);
     }
@@ -251,6 +257,43 @@ public class HealthAssistant : IHealthAssistant
 
         await _profiles.SaveProfileAsync(familyId, profile with { ContextNote = args }, userId, cancellationToken);
         return "Заметка сохранена.";
+    }
+
+    private async Task<string> SetThresholdAsync(long familyId, HealthProfileInfo profile, string? args, long userId, CancellationToken cancellationToken)
+    {
+        var parts = args?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+        if (parts.Length is not (2 or 3))
+        {
+            return ThresholdUsageText;
+        }
+
+        var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
+        var current = rules.FirstOrDefault(r => string.Equals(r.RuleKey, parts[0], StringComparison.OrdinalIgnoreCase));
+        var seed = current is null ? null : SafetyRuleDefaults.Find(current.RuleKey);
+        if (current is null || seed is null)
+        {
+            return $"Нет такого правила: {parts[0]}. Список: /thresholds.";
+        }
+
+        if (parts.Length == 2)
+        {
+            if (!string.Equals(parts[1], "default", StringComparison.OrdinalIgnoreCase))
+            {
+                return ThresholdUsageText;
+            }
+
+            await _profiles.SaveRuleAsync(familyId, profile.Id, seed, userId, cancellationToken);
+            return $"Восстановлены значения по умолчанию: {SafetyRuleText.Format(seed)}";
+        }
+
+        var edit = SafetyRuleEditor.SetField(current, parts[1], parts[2]);
+        if (edit.Rule is null)
+        {
+            return edit.Error ?? ThresholdUsageText;
+        }
+
+        await _profiles.SaveRuleAsync(familyId, profile.Id, edit.Rule, userId, cancellationToken);
+        return $"Сохранено: {SafetyRuleText.Format(edit.Rule)}";
     }
 
     // Same convention as the General assistant: a Telegram reply in groups, a plain message in

@@ -337,4 +337,75 @@ public class HealthAssistantTests
         _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { usage, usage });
         _profiles.Profile.ContextNote.ShouldBeNull();
     }
+
+    private const string ThresholdUsage =
+        "Формат: /threshold <правило> <поле> <значение> — вводите значения, которые дал врач; " +
+        "/threshold <правило> default — вернуть значения по умолчанию. Правила и поля: /thresholds.";
+
+    private SafetyRuleInfo StoredRule(string key) => _profiles.Rules.Single(r => r.RuleKey == key);
+
+    [Fact]
+    public async Task Owner_sets_a_threshold()
+    {
+        await HandleAsync(Msg("/threshold glucose.any low_alert 4.0"));
+
+        SingleReply().ShouldBe("Сохранено: glucose.any: low_urgent 3.0, low_alert 4.0, high_alert 11.0, high_urgent 13.9 — врач");
+        var rule = StoredRule("glucose.any");
+        rule.LowAlert.ShouldBe(4.0m);
+        rule.Source.ShouldBe(SafetyRuleSources.Doctor);
+        _profiles.LastUpdatedByUserId.ShouldBe(111);
+    }
+
+    [Fact]
+    public async Task Owner_restores_the_default()
+    {
+        await HandleAsync(Msg("/threshold glucose.any low_alert 4.0"));
+        _telegram.Sent.Clear();
+
+        await HandleAsync(Msg("/threshold GLUCOSE.ANY default"));
+
+        SingleReply().ShouldBe(
+            "Восстановлены значения по умолчанию: glucose.any: low_urgent 3.0, low_alert 3.9, high_alert 11.0, high_urgent 13.9 — не подтверждено врачом");
+        StoredRule("glucose.any").ShouldBe(SafetyRuleDefaults.Find("glucose.any")!);
+    }
+
+    [Fact]
+    public async Task Unknown_rule_is_named()
+    {
+        await HandleAsync(Msg("/threshold glucose.unknown low_alert 4"));
+
+        SingleReply().ShouldBe("Нет такого правила: glucose.unknown. Список: /thresholds.");
+    }
+
+    [Fact]
+    public async Task Editor_errors_are_replied()
+    {
+        await HandleAsync(Msg("/threshold glucose.any low_alert abc"));
+
+        SingleReply().ShouldBe("Значение: число больше 0 и меньше 1000, не больше двух знаков после запятой.");
+        StoredRule("glucose.any").ShouldBe(SafetyRuleDefaults.Find("glucose.any")!);
+    }
+
+    [Theory]
+    [InlineData("/threshold")]
+    [InlineData("/threshold glucose.any")]
+    [InlineData("/threshold glucose.any low_alert 4 5")]
+    [InlineData("/threshold glucose.any reset")]
+    public async Task Wrong_shape_gets_the_usage(string text)
+    {
+        await HandleAsync(Msg(text));
+
+        SingleReply().ShouldBe(ThresholdUsage);
+        StoredRule("glucose.any").ShouldBe(SafetyRuleDefaults.Find("glucose.any")!);
+    }
+
+    [Fact]
+    public async Task Non_owner_cannot_change_thresholds()
+    {
+        await HandleAsync(Msg("/threshold glucose.any low_alert 4.0", userId: 222));
+
+        SingleReply().ShouldBe(OwnerOnly);
+        StoredRule("glucose.any").ShouldBe(SafetyRuleDefaults.Find("glucose.any")!);
+        _profiles.LastUpdatedByUserId.ShouldBeNull();
+    }
 }

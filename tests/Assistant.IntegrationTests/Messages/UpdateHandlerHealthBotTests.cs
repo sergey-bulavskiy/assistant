@@ -5,6 +5,7 @@ using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
+using Assistant.Domain.Health;
 using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Health;
@@ -147,6 +148,38 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Только владелец семьи может менять профиль.");
         var profile = await Db.HealthProfiles.IgnoreQueryFilters().AsNoTracking().SingleAsync();
         profile.StageStartDate.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Doctor_threshold_is_saved_shown_and_restored()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+
+        await SendAsync(handler, bot, telegram, OwnerId, "/threshold glucose.any low_alert 4.0");
+
+        async Task<SafetyRule> GlucoseAnyAsync() =>
+            await Db.SafetyRules.IgnoreQueryFilters().AsNoTracking().SingleAsync(r => r.RuleKey == "glucose.any");
+
+        var changed = await GlucoseAnyAsync();
+        changed.LowAlert.ShouldBe(4.00m);
+        changed.Source.ShouldBe("doctor");
+        changed.UpdatedByUserId.ShouldBe(OwnerId);
+
+        telegram.ClearSent();
+        await SendAsync(handler, bot, telegram, OwnerId, "/thresholds");
+        var lines = telegram.SentMessages.ShouldHaveSingleItem().Text.Split('\n');
+        lines.ShouldContain("glucose.any: low_urgent 3.0, low_alert 4.0, high_alert 11.0, high_urgent 13.9 — врач");
+        lines.ShouldContain("glucose.fasting: target_high 5.1 — не подтверждено врачом");
+
+        telegram.ClearSent();
+        await SendAsync(handler, bot, telegram, MemberId, "/threshold glucose.any low_alert 5.0");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Только владелец семьи может менять профиль.");
+        (await GlucoseAnyAsync()).LowAlert.ShouldBe(4.00m);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "/threshold glucose.any default");
+        var restored = await GlucoseAnyAsync();
+        restored.LowAlert.ShouldBe(3.90m);
+        restored.Source.ShouldBe("guideline_default");
     }
 
     [Fact]
