@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health;
 using Assistant.Application.Families;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
@@ -25,6 +26,12 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         public FakeTelegramClient Client { get; } = new();
 
         public ITelegramClient Create(string token) => Client;
+    }
+
+    private sealed class NoopHealthAssistant : IHealthAssistant
+    {
+        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class NoopManagerUpdateHandler : IManagerUpdateHandler
@@ -57,7 +64,7 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         var generalAssistant = new GeneralAssistant(
             messageStore, new NullLlmGateway(), new ChatSettingsStore(Db, clock), new LlmUsageQuery(Db), config: null, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
         var handler = new UpdateHandler(
-            messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+            messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), generalAssistant, new NoopHealthAssistant(), options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
 
         await messageStore.EnsureBotStateAsync(new BotIdentity(bot.TelegramBotId, bot.Username), CancellationToken.None);
 

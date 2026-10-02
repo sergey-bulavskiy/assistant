@@ -13,6 +13,7 @@ COPY src/Assistant.Host/Assistant.Host.csproj src/Assistant.Host/
 RUN dotnet restore src/Assistant.Host/Assistant.Host.csproj
 
 COPY src/ src/
+COPY roles/ roles/
 RUN dotnet publish src/Assistant.Host/Assistant.Host.csproj -c Release -o /app/publish --no-restore
 
 FROM ${DOTNET_RUNTIME_IMAGE} AS final
@@ -25,14 +26,14 @@ ENV ASPNETCORE_URLS=http://+:8080
 ENV HOME=/home/app
 ENV CLAUDE_HOME=/home/app/.claude-home
 
-# curl/ca-certificates ONLY (spec §8.10, licence decision C9): the Claude Code CLI is proprietary
+# curl/ca-certificates/tzdata ONLY (spec §8.10, licence decision C9): the Claude Code CLI is proprietary
 # and this image is public, so it is never installed here -- ClaudeCliInstallerHostedService installs
 # it at container startup into $CLAUDE_HOME (aspnet:10.0 does not ship either package by default).
 # Both HOME and CLAUDE_HOME are created and chowned to $APP_UID here, while still root --
 # $CLAUDE_HOME is later replaced by a named volume mount (docker-compose.yml), and Docker copies an
 # existing image directory's ownership into a freshly created empty volume on first mount, so no
 # separate init container/chown step is needed in compose.
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p ${HOME} ${CLAUDE_HOME} && chown -R $APP_UID:$APP_UID ${HOME} ${CLAUDE_HOME}
 

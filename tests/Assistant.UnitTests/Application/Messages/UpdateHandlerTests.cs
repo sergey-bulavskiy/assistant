@@ -1,5 +1,6 @@
 using Assistant.Application.Common;
 using Assistant.Application.Families;
+using Assistant.Application.Health;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -84,6 +85,17 @@ public class UpdateHandlerTests
         }
     }
 
+    private sealed class FakeHealthAssistant : IHealthAssistant
+    {
+        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result)> Calls { get; } = new();
+
+        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+        {
+            Calls.Add((bot, message, storeResult));
+            return Task.CompletedTask;
+        }
+    }
+
     // A non-general role bot: keeps the pre-M3a store-and-acknowledge behaviour.
     private static readonly ReceivingBot RoleBot = new(BotDbId: 1, TelegramBotId: 999, Username: "test_bot", FamilyId: 42, Role: "test");
     private static readonly ReceivingBot GeneralBot = RoleBot with { Role = "general" };
@@ -93,7 +105,7 @@ public class UpdateHandlerTests
         CreateHandler(new FakeGeneralAssistant());
 
     private static (UpdateHandler Handler, FakeMessageStore Store, FakeTelegramClient Telegram, FakeApprovalService Approvals, FakeManagerUpdateHandler Manager) CreateHandler(
-        IGeneralAssistant generalAssistant, FakeMessageStore? messageStore = null)
+        IGeneralAssistant generalAssistant, FakeMessageStore? messageStore = null, IHealthAssistant? healthAssistant = null)
     {
         var store = messageStore ?? new FakeMessageStore();
         var telegram = new FakeTelegramClient();
@@ -103,7 +115,7 @@ public class UpdateHandlerTests
         var options = Options.Create(new BotOptions { ManagerToken = "test-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var clock = new FixedClock(DateTimeOffset.UtcNow);
-        var handler = new UpdateHandler(store, approvals, currentFamily, manager, generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        var handler = new UpdateHandler(store, approvals, currentFamily, manager, generalAssistant, healthAssistant ?? new FakeHealthAssistant(), options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
         return (handler, store, telegram, approvals, manager);
     }
 
@@ -272,6 +284,7 @@ public class UpdateHandlerTests
     [InlineData("test")]
     [InlineData("generalist")]
     [InlineData("cook")]
+    [InlineData("healthcare")]
     public async Task Other_role_bots_keep_the_acknowledgement_and_never_reach_the_general_assistant(string role)
     {
         var general = new FakeGeneralAssistant();
@@ -347,5 +360,50 @@ public class UpdateHandlerTests
         await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(32, Message(userId: 111, chatType: "group")), CancellationToken.None);
 
         approvals.ReplyToAllCalls.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("health")]
+    [InlineData(" Health ")]
+    [InlineData("HEALTH")]
+    public async Task Health_role_bot_messages_are_routed_to_the_health_assistant(string role)
+    {
+        var general = new FakeGeneralAssistant();
+        var health = new FakeHealthAssistant();
+        var (handler, store, telegram, _, _) = CreateHandler(general, healthAssistant: health);
+        var message = Message(userId: 111);
+
+        await handler.HandleAsync(RoleBot with { Role = role }, telegram, new IncomingUpdate(40, message), CancellationToken.None);
+
+        store.Calls.ShouldHaveSingleItem().Message.ShouldBe(message);
+        var call = health.Calls.ShouldHaveSingleItem();
+        call.Message.ShouldBe(message);
+        call.Result.Outcome.ShouldBe(StoreOutcome.Stored);
+        general.Calls.ShouldBeEmpty();
+        telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Health_bot_group_message_never_reads_the_reply_to_all_flag()
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+        approvals.NextReplyToAll = true;
+
+        await handler.HandleAsync(RoleBot with { Role = "health" }, telegram, new IncomingUpdate(41, Message(userId: 111, chatType: "group")), CancellationToken.None);
+
+        approvals.ReplyToAllCalls.ShouldBe(0);
+        health.Calls.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task General_bot_never_reaches_the_health_assistant()
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, _, telegram, _, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+
+        await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(42, Message(userId: 111)), CancellationToken.None);
+
+        health.Calls.ShouldBeEmpty();
     }
 }

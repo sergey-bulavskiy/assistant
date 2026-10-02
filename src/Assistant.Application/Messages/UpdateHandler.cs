@@ -1,5 +1,6 @@
 using Assistant.Application.Common;
 using Assistant.Application.Families;
+using Assistant.Application.Health;
 using Assistant.Application.Manager;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Families;
@@ -16,6 +17,7 @@ public class UpdateHandler
     private readonly ICurrentFamily _currentFamily;
     private readonly IManagerUpdateHandler _managerHandler;
     private readonly IGeneralAssistant _generalAssistant;
+    private readonly IHealthAssistant _healthAssistant;
     private readonly IOptions<BotOptions> _options;
     private readonly BuildInfo _buildInfo;
     private readonly IClock _clock;
@@ -27,6 +29,7 @@ public class UpdateHandler
         ICurrentFamily currentFamily,
         IManagerUpdateHandler managerHandler,
         IGeneralAssistant generalAssistant,
+        IHealthAssistant healthAssistant,
         IOptions<BotOptions> options,
         BuildInfo buildInfo,
         IClock clock,
@@ -37,6 +40,7 @@ public class UpdateHandler
         _currentFamily = currentFamily;
         _managerHandler = managerHandler;
         _generalAssistant = generalAssistant;
+        _healthAssistant = healthAssistant;
         _options = options;
         _buildInfo = buildInfo;
         _clock = clock;
@@ -125,6 +129,13 @@ public class UpdateHandler
         if (BotRoles.IsGeneral(bot.Role))
         {
             await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
+            return;
+        }
+
+        // reply_to_all is never read for the health role (it would answer every message).
+        if (BotRoles.IsHealth(bot.Role))
+        {
+            await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken);
             return;
         }
 

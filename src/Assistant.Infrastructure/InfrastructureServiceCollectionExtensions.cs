@@ -1,5 +1,6 @@
 using Assistant.Application.Common;
 using Assistant.Application.Families;
+using Assistant.Application.Health;
 using Assistant.Application.Llm;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
@@ -7,10 +8,12 @@ using Assistant.Application.Telegram;
 using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Common;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Health;
 using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Llm.ClaudeCli;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Roles;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -37,6 +40,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IMessageStore, MessageStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();
         services.AddScoped<IApprovalService, ApprovalService>();
+        services.AddScoped<IFamilyOwnership, FamilyOwnership>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddScoped<UsageCommandHandler>();
         services.AddScoped<SettingsCommandHandler>();
@@ -45,6 +49,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IChatSettingsStore, ChatSettingsStore>();
         // Always registered (LLM on or off): /tokens only reads llm_calls.
         services.AddScoped<ILlmUsageQuery, LlmUsageQuery>();
+        // Health data: scoped on the request's DI scope only (fails closed without ICurrentFamily).
+        services.AddScoped<IHealthProfileStore, HealthProfileStore>();
+        services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.
         // The app must always start -- parsing/validation never throws and nothing here is

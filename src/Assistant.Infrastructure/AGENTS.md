@@ -19,6 +19,19 @@
 - Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
   redelivery, including after an idle offset re-base, must not create duplicates or duplicate
   replies); integration tests in `tests/.../Persistence` cover it.
+- Health tables (`health_profiles`, `safety_rules`) are family-scoped **and fail closed**:
+  `HealthProfileStore` takes `familyId` on every call and throws `InvalidOperationException` when
+  `ICurrentFamily.FamilyId` is unset or another family. Never `IgnoreQueryFilters()` on them, and
+  never touch them from a fresh DI scope (`ICurrentFamily` is unset there; the `BudgetNoticeSender`
+  fresh-scope pattern works only for the unfiltered `budget_notices`). `safety_rules.profile_id` is
+  the model's first real FK (cascade delete, no navigation properties). A profile is created with its
+  default rules (`SafetyRuleDefaults`) in one transaction.
+- Role prompts: `roles/<role>/*.md` at the repo root are compiled into this assembly as embedded
+  resources named `roles/<dir>/<file>` (`%(RecursiveDir)` gives `\` on Windows; `RolePrompts`
+  normalizes it). The csproj fails the build if `roles/health/prompt.md` or `extract.md` is missing.
+  The Dockerfile copies `roles/`, and `.dockerignore` (which excludes `*.md`) re-includes
+  `roles/**/*.md`; keep both when touching either file. A missing prompt is an Error at startup and
+  turns that role's LLM features off, never the app.
 
 ## Bot polling (`Bots/`)
 
@@ -71,6 +84,9 @@
   callback also rejects a place whose bot is not `general` (`BotRoles.IsGeneral`, the same rule
   `UpdateHandler` routes by). `places.reply_to_all` is per row: a topic's row never inherits the
   chat-wide row's flag.
+- Role-bot owner checks (`IFamilyOwnership` → `FamilyOwnership`) reuse
+  `ManagerOwnership.IsApprovedOwnerAsync`. Removing a bot in `/settings` deletes its places but
+  leaves a health bot's profile and rules (health data is never deleted implicitly).
 
 ## Telegram
 
