@@ -1,3 +1,4 @@
+using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -66,6 +67,49 @@ public class MigrationTests : IntegrationTestBase
         (await Db.Database.SqlQueryRaw<int>(
             "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'places' AND column_name = 'reply_to_all' AND is_nullable = 'NO' AND column_default = 'false'")
             .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Health_tables_exist_with_numeric_8_2_thresholds()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.tables WHERE table_name IN ('health_profiles', 'safety_rules')")
+            .SingleAsync()).ShouldBe(2);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'safety_rules' AND data_type = 'numeric' AND numeric_precision = 8 AND numeric_scale = 2")
+            .SingleAsync()).ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task Safety_rule_is_unique_per_profile_and_key_and_is_deleted_with_its_profile()
+    {
+        var now = new DateTimeOffset(2030, 2, 7, 10, 0, 0, TimeSpan.Zero);
+        var profile = new HealthProfile { FamilyId = 1, BotId = 10, CreatedAt = now, UpdatedAt = now };
+        Db.HealthProfiles.Add(profile);
+        await Db.SaveChangesAsync();
+
+        SafetyRule NewRule() => new()
+        {
+            FamilyId = 1,
+            ProfileId = profile.Id,
+            RuleKey = "glucose.any",
+            Source = "guideline_default",
+            UpdatedAt = now
+        };
+
+        Db.SafetyRules.Add(NewRule());
+        Db.SafetyRules.Add(NewRule());
+        await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
+        Db.ChangeTracker.Clear();
+
+        Db.SafetyRules.Add(NewRule());
+        await Db.SaveChangesAsync();
+
+        var toDelete = await Db.HealthProfiles.SingleAsync();
+        Db.HealthProfiles.Remove(toDelete);
+        await Db.SaveChangesAsync();
+
+        (await Db.SafetyRules.CountAsync()).ShouldBe(0);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using Assistant.Application.Families;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
+using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
@@ -45,6 +46,10 @@ public class AssistantDbContext : DbContext
 
     public DbSet<LlmCall> LlmCalls => Set<LlmCall>();
 
+    public DbSet<HealthProfile> HealthProfiles => Set<HealthProfile>();
+
+    public DbSet<SafetyRule> SafetyRules => Set<SafetyRule>();
+
     // Platform-wide (no FamilyId, no query filter): budgets span every family.
     public DbSet<BudgetNotice> BudgetNotices => Set<BudgetNotice>();
 
@@ -66,6 +71,10 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<Bot>().HasQueryFilter(b => _currentFamily.FamilyId == null || b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<ChatSetting>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<LlmCall>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
+        // Health tables: the same family filter. Their store additionally fails closed when
+        // ICurrentFamily is unset or another family (HealthProfileStore).
+        modelBuilder.Entity<HealthProfile>().HasQueryFilter(p => _currentFamily.FamilyId == null || p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<SafetyRule>().HasQueryFilter(r => _currentFamily.FamilyId == null || r.FamilyId == _currentFamily.FamilyId);
     }
 
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)

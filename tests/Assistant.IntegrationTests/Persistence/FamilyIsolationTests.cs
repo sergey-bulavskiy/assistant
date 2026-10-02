@@ -1,5 +1,6 @@
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
+using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
@@ -53,6 +54,14 @@ public class FamilyIsolationTests : IAsyncLifetime
         db.LlmCalls.Add(new LlmCall { FamilyId = familyA.Id, BotId = botA.Id, Tier = "cheap", Provider = "test", Model = "test model A", Outcome = LlmCallOutcome.Ok, DurationMs = 1, CreatedAt = DateTimeOffset.UtcNow });
         db.LlmCalls.Add(new LlmCall { FamilyId = familyB.Id, BotId = botB.Id, Tier = "cheap", Provider = "test", Model = "test model B", Outcome = LlmCallOutcome.Ok, DurationMs = 1, CreatedAt = DateTimeOffset.UtcNow });
 
+        var profileA = new HealthProfile { FamilyId = familyA.Id, BotId = botA.Id, ContextNote = "family A note", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var profileB = new HealthProfile { FamilyId = familyB.Id, BotId = botB.Id, ContextNote = "family B note", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        db.HealthProfiles.AddRange(profileA, profileB);
+        await db.SaveChangesAsync();
+
+        db.SafetyRules.Add(new SafetyRule { FamilyId = familyA.Id, ProfileId = profileA.Id, RuleKey = "glucose.any", Source = "guideline_default", UpdatedAt = DateTimeOffset.UtcNow });
+        db.SafetyRules.Add(new SafetyRule { FamilyId = familyB.Id, ProfileId = profileB.Id, RuleKey = "glucose.any", Source = "guideline_default", UpdatedAt = DateTimeOffset.UtcNow });
+
         await db.SaveChangesAsync();
     }
 
@@ -90,6 +99,9 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.ChatSettings.SingleAsync()).PreferredModel.ShouldBe("family A model");
         (await db.LlmCalls.CountAsync()).ShouldBe(1);
         (await db.LlmCalls.SingleAsync()).Model.ShouldBe("test model A");
+        (await db.HealthProfiles.CountAsync()).ShouldBe(1);
+        (await db.HealthProfiles.SingleAsync()).ContextNote.ShouldBe("family A note");
+        (await db.SafetyRules.CountAsync()).ShouldBe(1);
     }
 
     [Fact]
@@ -109,6 +121,9 @@ public class FamilyIsolationTests : IAsyncLifetime
         (await db.ChatSettings.SingleAsync()).PreferredModel.ShouldBe("family B model");
         (await db.LlmCalls.CountAsync()).ShouldBe(1);
         (await db.LlmCalls.SingleAsync()).Model.ShouldBe("test model B");
+        (await db.HealthProfiles.CountAsync()).ShouldBe(1);
+        (await db.HealthProfiles.SingleAsync()).ContextNote.ShouldBe("family B note");
+        (await db.SafetyRules.CountAsync()).ShouldBe(1);
     }
 
     [Fact]
@@ -122,6 +137,7 @@ public class FamilyIsolationTests : IAsyncLifetime
 
         (await managerScoped.FamilyMembers.CountAsync()).ShouldBe(2);
         (await managerScoped.Bots.Where(b => b.FamilyId != null).CountAsync()).ShouldBe(2);
+        (await managerScoped.HealthProfiles.CountAsync()).ShouldBe(2);
 
         await using var familyAScoped = await OpenScopedAsync(_familyAId);
         (await familyAScoped.Places.CountAsync()).ShouldBe(1);
