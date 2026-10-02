@@ -16,8 +16,9 @@
   database is needed. Never edit a migration that is already on `main`; add a new one.
 - On a fresh database EF logs an Error about the missing `__EFMigrationsHistory` table. It is
   harmless.
-- Message storage must stay idempotent per Telegram `update_id` (restart + redelivery must not
-  create duplicates or duplicate replies); integration tests in `tests/.../Persistence` cover it.
+- Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
+  redelivery, including after an idle offset re-base, must not create duplicates or duplicate
+  replies); integration tests in `tests/.../Persistence` cover it.
 
 ## Bot polling (`Bots/`)
 
@@ -27,6 +28,15 @@
   a process restart, when a role bot finishes creation or is disabled/enabled/removed in
   `/settings`. Each worker keeps its own per-update failure count and skips poison updates after
   `PoisonUpdateFailureCap` attempts.
+  - Idle re-base: after a week without updates Telegram picks the next `update_id` randomly
+    (Bot API, `Update.update_id`), possibly below `last_update_id`, which `MessageStore.StoreAsync`
+    would confirm and drop forever. `StoreAsync` stamps `bots.last_update_at` whenever it advances
+    the offset (offset-only updates too); before each poll the worker calls
+    `RebaseOffsetIfIdleAsync`, which resets `last_update_id` to 0 when `last_update_at` is older than
+    `BotPollingWorker.OffsetRebaseIdleThreshold` (6 days) or null. The first update stored afterwards
+    re-bases the offset. Telegram never resends confirmed updates, and a redelivered message is caught
+    by the unique (bot, chat, message id) key as `Duplicate` (no reply), so the reset is safe. It
+    also covers a bot that was disabled or the host that was down for that long.
   - N4: a single worker processes its bot's updates sequentially, one at a time. For a General
     assistant bot this means a slow/hung LLM call (up to `LLM_CALL_TIMEOUT_SECONDS`, or ~2x that
     while also waiting for a concurrency slot — see `LlmGateway.CompleteAsync`) delays every other

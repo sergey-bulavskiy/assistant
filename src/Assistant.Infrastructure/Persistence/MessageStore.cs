@@ -46,6 +46,18 @@ public class MessageStore : IMessageStore
         return bot?.LastUpdateId ?? 0;
     }
 
+    public async Task<bool> RebaseOffsetIfIdleAsync(long botId, DateTimeOffset idleBefore, CancellationToken cancellationToken)
+    {
+        // One conditional UPDATE: no read-then-write race with StoreAsync. A row already at 0 is
+        // left alone, so an idle bot's every poll does not rewrite it.
+        var rows = await _db.Bots.IgnoreQueryFilters()
+            .Where(b => b.TelegramBotId == botId
+                && b.LastUpdateId != 0
+                && (b.LastUpdateAt == null || b.LastUpdateAt < idleBefore))
+            .ExecuteUpdateAsync(s => s.SetProperty(b => b.LastUpdateId, 0L), cancellationToken);
+        return rows > 0;
+    }
+
     public async Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
@@ -124,6 +136,7 @@ public class MessageStore : IMessageStore
         }
 
         state.LastUpdateId = updateId;
+        state.LastUpdateAt = now;
         await _db.SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);

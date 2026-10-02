@@ -12,6 +12,11 @@ namespace Assistant.Infrastructure.Bots;
 /// runtime as bots are created/removed, which BackgroundService's fixed lifetime doesn't fit).</summary>
 public class BotPollingWorker
 {
+    /// <summary>A bot with no processed update for this long gets its stored offset reset before the
+    /// next poll (see <see cref="IMessageStore.RebaseOffsetIfIdleAsync"/>). Telegram picks the next
+    /// update_id randomly after "at least a week" without updates, so re-base a day earlier.</summary>
+    public static readonly TimeSpan OffsetRebaseIdleThreshold = TimeSpan.FromDays(6);
+
     private readonly ReceivingBot _bot;
     private readonly ITelegramClient _telegramClient;
     private readonly IReadOnlyList<UpdateKind> _allowedUpdates;
@@ -55,7 +60,7 @@ public class BotPollingWorker
         {
             try
             {
-                var offset = await GetLastUpdateIdAsync(stoppingToken) + 1;
+                var offset = await GetOffsetAsync(stoppingToken);
                 var updates = await _telegramClient.GetUpdatesAsync(offset, _settings.LongPollTimeoutSeconds, _allowedUpdates, stoppingToken);
 
                 foreach (var update in updates)
@@ -159,10 +164,22 @@ public class BotPollingWorker
         }
     }
 
-    private async Task<long> GetLastUpdateIdAsync(CancellationToken cancellationToken)
+    private async Task<long> GetOffsetAsync(CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var messageStore = scope.ServiceProvider.GetRequiredService<IMessageStore>();
-        return await messageStore.GetLastUpdateIdAsync(_bot.TelegramBotId, cancellationToken);
+
+        // After a week without updates Telegram picks the next update_id randomly, possibly below
+        // last_update_id; StoreAsync would then confirm and drop every new update. Re-basing to 0
+        // makes the next poll accept whatever comes (the redelivery case stays idempotent through
+        // the message key). Also covers a bot that was disabled or offline for that long.
+        if (await messageStore.RebaseOffsetIfIdleAsync(_bot.TelegramBotId, _clock.UtcNow - OffsetRebaseIdleThreshold, cancellationToken))
+        {
+            _logger.LogInformation(
+                "bot {TelegramBotId} had no updates for at least {IdleDays} days; polling offset re-based",
+                _bot.TelegramBotId, OffsetRebaseIdleThreshold.TotalDays);
+        }
+
+        return await messageStore.GetLastUpdateIdAsync(_bot.TelegramBotId, cancellationToken) + 1;
     }
 }

@@ -26,6 +26,13 @@ public interface IMessageStore
 
     Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken);
 
+    /// <summary>Resets the bot's stored offset (`last_update_id`) to 0 when no update has advanced
+    /// it since <paramref name="idleBefore"/> (or never recorded when), so the next poll accepts
+    /// whatever update_id Telegram sends: after a week without updates Telegram picks the next
+    /// update_id randomly, possibly below the stored one. The first update stored afterwards
+    /// re-bases the offset. Returns true if the offset was reset.</summary>
+    Task<bool> RebaseOffsetIfIdleAsync(long botId, DateTimeOffset idleBefore, CancellationToken cancellationToken);
+
     Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken);
 
     /// <summary>Stores the General assistant's own reply as a message row (Direction = Out,

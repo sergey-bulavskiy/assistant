@@ -34,6 +34,8 @@ public class FakeMessageStore : IMessageStore
 
     public Task<long> GetLastUpdateIdAsync(long botId, CancellationToken cancellationToken) => Task.FromResult(0L);
 
+    public Task<bool> RebaseOffsetIfIdleAsync(long botId, DateTimeOffset idleBefore, CancellationToken cancellationToken) => Task.FromResult(false);
+
     public Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
         Calls.Add((botId, updateId, message));

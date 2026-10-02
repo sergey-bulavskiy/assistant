@@ -6,6 +6,7 @@ public class FakeTelegramClient : ITelegramClient
 {
     private readonly object _lock = new();
     private readonly List<IncomingUpdate> _updates = new();
+    private readonly List<long> _requestedOffsets = new();
     private readonly List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> _sentMessages = new();
     private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
@@ -28,6 +29,18 @@ public class FakeTelegramClient : ITelegramClient
     /// normal offset filtering — it does not cause an unbounded resend loop.
     /// </summary>
     public bool IgnoreOffset { get; set; }
+
+    /// <summary>The <c>offset</c> of every <see cref="GetUpdatesAsync"/> call, in call order.</summary>
+    public IReadOnlyList<long> RequestedOffsets
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _requestedOffsets.ToArray();
+            }
+        }
+    }
 
     public IReadOnlyList<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> SentMessages
     {
@@ -121,6 +134,8 @@ public class FakeTelegramClient : ITelegramClient
         IncomingUpdate[] result;
         lock (_lock)
         {
+            _requestedOffsets.Add(offset);
+
             if (IgnoreOffset)
             {
                 result = _updates.OrderBy(u => u.UpdateId).ToArray();
