@@ -60,10 +60,10 @@ public class LlmConfig
     public required BudgetConfig? Budget { get; init; }
     public required IReadOnlyList<ModelCatalogEntry> FastModels { get; init; }
 
-    // M3a defines exactly one tier; its chain is LLM_MODELS' own order (spec section 3.1).
+    // The default tier; its chain is LLM_MODELS' own order (spec section 3.1).
     public const string SmartTier = "smart";
 
-    // Spec §4: LLM_FAST_MODELS is the "fast" tier, resolved against the surviving LLM_MODELS catalog.
+    // LLM_FAST_MODELS first (its own order), then the rest of LLM_MODELS (ModelCatalog.GetCandidateOrder).
     public const string FastTier = "fast";
 }
 

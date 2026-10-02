@@ -33,6 +33,11 @@ public interface ITelegramClient
     /// "typing" indicator must never fail or delay the actual reply).</summary>
     Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken);
 
+    /// <summary>Sets this bot's reaction on a message to one emoji, or clears it when
+    /// <paramref name="emoji"/> is null. Telegram allows only some emoji for bots, and a group can
+    /// restrict them further: callers catch failures and never let a reaction fail the update.</summary>
+    Task SetReactionAsync(long chatId, int messageId, string? emoji, CancellationToken cancellationToken);
+
     /// <summary>Sends a message with one inline button per row and returns the sent message's id
     /// (needed later to edit its buttons once an approval is resolved).</summary>
     Task<int> SendTextWithButtonsAsync(

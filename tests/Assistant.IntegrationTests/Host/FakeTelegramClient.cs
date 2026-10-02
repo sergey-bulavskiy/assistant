@@ -11,6 +11,7 @@ public class FakeTelegramClient : ITelegramClient
     private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
     private readonly List<(long ChatId, int? TopicId, string Action)> _chatActionsSent = new();
+    private readonly List<(long ChatId, int MessageId, string? Emoji)> _reactions = new();
     private int _getMeFailuresRemaining;
     private int _nextSentMessageId = 1;
     private readonly BotIdentity _identity = new(999, "test_bot");
@@ -87,6 +88,17 @@ public class FakeTelegramClient : ITelegramClient
         }
     }
 
+    public IReadOnlyList<(long ChatId, int MessageId, string? Emoji)> Reactions
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _reactions.ToArray();
+            }
+        }
+    }
+
     /// <summary>Clears recorded sent messages/buttons so a test can assert "nothing more was sent"
     /// after an earlier, expected round of sends.</summary>
     public void ClearSent()
@@ -95,6 +107,7 @@ public class FakeTelegramClient : ITelegramClient
         {
             _sentMessages.Clear();
             _sentButtons.Clear();
+            _reactions.Clear();
         }
     }
 
@@ -179,6 +192,16 @@ public class FakeTelegramClient : ITelegramClient
         lock (_lock)
         {
             _chatActionsSent.Add((chatId, topicId, action));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task SetReactionAsync(long chatId, int messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _reactions.Add((chatId, messageId, emoji));
         }
 
         return Task.CompletedTask;

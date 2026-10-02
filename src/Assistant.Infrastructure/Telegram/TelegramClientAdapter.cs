@@ -62,6 +62,14 @@ public class TelegramClientAdapter : ITelegramClient
         return _client.SendChatAction(chatId: chatId, action: chatAction, messageThreadId: topicId, cancellationToken: cancellationToken);
     }
 
+    public Task SetReactionAsync(long chatId, int messageId, string? emoji, CancellationToken cancellationToken) =>
+        _client.SetMessageReaction(
+            chatId: chatId,
+            messageId: messageId,
+            // An empty list removes the bot's reaction.
+            reaction: emoji is null ? Array.Empty<ReactionType>() : new ReactionType[] { new ReactionTypeEmoji { Emoji = emoji } },
+            cancellationToken: cancellationToken);
+
     public async Task<int> SendTextWithButtonsAsync(
         long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
     {

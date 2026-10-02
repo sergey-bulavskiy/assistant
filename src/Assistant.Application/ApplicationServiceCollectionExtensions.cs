@@ -13,6 +13,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<UpdateHandler>();
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
         services.AddScoped<IHealthAssistant, HealthAssistant>();
+        services.AddSingleton<FailureNoticeThrottle>();
         return services;
     }
 }

@@ -43,8 +43,8 @@ command only as an example next to a generic fallback.
 | Path | What | Local guide |
 |---|---|---|
 | `src/Assistant.Domain` | Entities, no dependencies | `src/Assistant.Domain/AGENTS.md` |
-| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing, General assistant (`Messages/GeneralAssistant.cs`), health assistant (`Health/`); ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, `ILlmGateway`, `IChatSettingsStore`, `ILlmUsageQuery`, `IHealthProfileStore`, `IFamilyOwnership`, `IRolePrompts`, …) | — |
-| `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption, LLM gateway and `claude -p` provider (`Llm/`), health profile store (`Health/`), role prompt loader (`Roles/`) | `src/Assistant.Infrastructure/AGENTS.md` |
+| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing, General assistant (`Messages/GeneralAssistant.cs`), health assistant (`Health/`); ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, `ILlmGateway`, `IChatSettingsStore`, `ILlmUsageQuery`, `IHealthProfileStore`, `IEventStore`, `IFamilyOwnership`, `IRolePrompts`, …) | — |
+| `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption, LLM gateway and `claude -p` provider (`Llm/`), health profile and event stores (`Health/`), role prompt loader (`Roles/`) | `src/Assistant.Infrastructure/AGENTS.md` |
 | `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
 | `roles/` | Role prompt sources (`roles/<role>/*.md`), generic, embedded into Infrastructure at build time | `src/Assistant.Infrastructure/AGENTS.md` |
 | `tests/` | Unit + integration (IntegreSQL) tests; opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |
@@ -107,7 +107,10 @@ one per stage. Keep command output small: read logs only when something failed.
    that name the changed behaviour or config. Don't leave milestone-specific docs behind once the
    milestone is done. Update `docs/status.md` in `../assistant-specs` after merging.
 4. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
-   about to publish against the privacy rules above.
+   about to publish against the privacy rules above. Every commit on the branch is published and
+   stays reachable on GitHub even after a squash merge, so also read `git log -p main..HEAD`:
+   wording that was added and later removed still leaks. If any commit contains something that
+   must not be public, squash or rewrite the branch **before the first push**.
 5. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
    subagent or a separate session with no stake in the change). Fix or explicitly answer each
    blocking and should-fix finding.
