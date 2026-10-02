@@ -101,9 +101,18 @@ public class LlmWiringTests : IAsyncLifetime
         try
         {
             var factory = new AssistantWebApplicationFactory(_connectionString);
-            var client = factory.CreateClient();
-            await WaitUntilHealthyAsync(client);
-            return factory;
+            try
+            {
+                var client = factory.CreateClient();
+                await WaitUntilHealthyAsync(client);
+                return factory;
+            }
+            catch
+            {
+                // An undisposed host keeps connections open, which would block releasing the test database.
+                factory.Dispose();
+                throw;
+            }
         }
         finally
         {

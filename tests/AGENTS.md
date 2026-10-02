@@ -68,7 +68,7 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 - Pool sizes are IntegreSQL's CPU-derived defaults. If tests stall on checkout or IntegreSQL
   returns 503 (the get-test-database timeout), look for a database that isn't released or a
   connection left open (an undisposed context, host or `NpgsqlConnection`) before raising pool
-  sizes; IntegreSQL logs "DB is still in use, will retry" for such a database.
+  sizes; IntegreSQL keeps retrying the drop of such a database.
 
 ## Smoke test (`Assistant.SmokeTests`)
 
