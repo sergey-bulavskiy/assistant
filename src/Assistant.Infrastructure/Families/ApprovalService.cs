@@ -94,6 +94,9 @@ public class ApprovalService : IApprovalService
         return place.Status;
     }
 
+    public Task<bool> GetPlaceReplyToAllAsync(long placeId, CancellationToken cancellationToken) =>
+        _db.Places.IgnoreQueryFilters().Where(p => p.Id == placeId).Select(p => p.ReplyToAll).SingleAsync(cancellationToken);
+
     public async Task<ApprovalResolution> ResolvePlaceApprovalAsync(long placeId, bool approve, CancellationToken cancellationToken)
     {
         var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == placeId, cancellationToken);

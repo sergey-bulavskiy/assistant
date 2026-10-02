@@ -16,7 +16,8 @@ public class GeneralAssistant : IGeneralAssistant
 
     private const string StartText =
         "Привет! Я отвечаю на вопросы с помощью модели. В личных сообщениях отвечаю на всё; " +
-        "в группах — только если обратиться по имени или ответить на моё сообщение. " +
+        "в группах — только если обратиться по имени или ответить на моё сообщение " +
+        "(владелец может включить ответы на все сообщения группы или темы в /settings бота-менеджера). " +
         "/new — начать разговор заново. /model — выбрать модель. /version — версия.";
 
     private const string NewConversationText = "Начинаем новый разговор.";
@@ -51,7 +52,8 @@ public class GeneralAssistant : IGeneralAssistant
         _logger = logger;
     }
 
-    public async Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+    public async Task HandleAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll = false)
     {
         if (storeResult.Outcome is StoreOutcome.AlreadyProcessed or StoreOutcome.Duplicate or StoreOutcome.OffsetOnly)
         {
@@ -77,12 +79,12 @@ public class GeneralAssistant : IGeneralAssistant
             return;
         }
 
-        if (!IsAddressed(bot, message, text))
+        if (!IsAddressed(bot, message, text, replyToAll, out var onlyByReplyToAll))
         {
             return;
         }
 
-        await AnswerAsync(bot, telegramClient, message, text, familyId, storeResult, cancellationToken);
+        await AnswerAsync(bot, telegramClient, message, text, familyId, storeResult, silentRefusal: onlyByReplyToAll, cancellationToken);
     }
 
     private async Task HandleCommandAsync(
@@ -181,10 +183,17 @@ public class GeneralAssistant : IGeneralAssistant
     }
 
     private async Task AnswerAsync(
-        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, StoreResult storeResult, CancellationToken cancellationToken)
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, StoreResult storeResult,
+        bool silentRefusal, CancellationToken cancellationToken)
     {
         if (_config is null)
         {
+            if (silentRefusal)
+            {
+                LogSilentRefusal(LlmRefusalReason.NotConfigured);
+                return;
+            }
+
             await ReplyAsync(bot, telegramClient, message, NotConfiguredText, cancellationToken);
             return;
         }
@@ -223,11 +232,21 @@ public class GeneralAssistant : IGeneralAssistant
         {
             await ReplyAsync(bot, telegramClient, message, result.Text, cancellationToken, storeAsContext: true);
         }
+        else if (silentRefusal)
+        {
+            // Answered only because of reply_to_all -- a refusal text in reply to every ordinary
+            // group message would be noise.
+            LogSilentRefusal(result.RefusalReason);
+        }
         else
         {
             await ReplyAsync(bot, telegramClient, message, RefusalText(result, _clock.UtcNow), cancellationToken);
         }
     }
+
+    // The refusal type only -- never message or answer text.
+    private void LogSilentRefusal(LlmRefusalReason? reason) =>
+        _logger.LogInformation("reply-to-all message not answered: {RefusalReason}", reason);
 
     private string BuildSystemPrompt(bool isGroup)
     {
@@ -273,8 +292,11 @@ public class GeneralAssistant : IGeneralAssistant
     private static bool IsKnownRetryTime(DateTimeOffset retryAt, DateTimeOffset now) =>
         retryAt - now <= TimeSpan.FromDays(7);
 
-    private static bool IsAddressed(ReceivingBot bot, IncomingMessage message, string text)
+    /// <param name="onlyByReplyToAll">True when the message is answered only because the place has
+    /// reply_to_all on (no mention, not a genuine reply to the bot).</param>
+    private static bool IsAddressed(ReceivingBot bot, IncomingMessage message, string text, bool replyToAll, out bool onlyByReplyToAll)
     {
+        onlyByReplyToAll = false;
         if (message.ChatType == "private")
         {
             return true;
@@ -287,7 +309,13 @@ public class GeneralAssistant : IGeneralAssistant
         var isReplyToTopicRoot = message.TopicId is { } topicId && message.ReplyToMessageId == topicId;
         var isGenuineReplyToBot = message.ReplyToUserId == bot.TelegramBotId && !isReplyToTopicRoot;
 
-        return mentioned || isGenuineReplyToBot;
+        if (mentioned || isGenuineReplyToBot)
+        {
+            return true;
+        }
+
+        onlyByReplyToAll = replyToAll;
+        return replyToAll;
     }
 
     // Spec §8.1: @username followed by end of text or a non-word character (@bot does not match

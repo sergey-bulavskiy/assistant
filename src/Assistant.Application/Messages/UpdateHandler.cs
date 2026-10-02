@@ -85,6 +85,7 @@ public class UpdateHandler
         // private DM to a bot has no separate "place" to approve — approving the user (below)
         // already covers all of that family's bots (§3.4), so private chats skip straight to the
         // user-approval gate instead of also requiring a place approval first.
+        var replyToAll = false;
         if (message.ChatType != "private")
         {
             var placeTitle = message.ChatTitle ?? $"chat {message.ChatId}";
@@ -95,6 +96,12 @@ public class UpdateHandler
                 _logger.LogInformation("ignored message: place not approved ({PlaceStatus})", placeStatus);
                 await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
                 return;
+            }
+
+            // Only the General assistant reads the flag; the row exists and is Approved here.
+            if (BotRoles.IsGeneral(bot.Role))
+            {
+                replyToAll = await _approvals.GetPlaceReplyToAllAsync(placeId, cancellationToken);
             }
         }
 
@@ -115,9 +122,9 @@ public class UpdateHandler
         var result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
         _logger.LogInformation("update {UpdateId} processed with outcome {Outcome}", update.UpdateId, result.Outcome);
 
-        if (IsGeneral(bot))
+        if (BotRoles.IsGeneral(bot.Role))
         {
-            await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken);
+            await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
             return;
         }
 
@@ -136,8 +143,4 @@ public class UpdateHandler
             _logger.LogError("failed to send reply: {ExceptionType}", ex.GetType().Name);
         }
     }
-
-    // Spec 2.1: role `general`, trimmed and case-insensitive (roles are stored as typed to /newbot).
-    private static bool IsGeneral(ReceivingBot bot) =>
-        string.Equals(bot.Role.Trim(), "general", StringComparison.OrdinalIgnoreCase);
 }

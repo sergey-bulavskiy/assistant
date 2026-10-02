@@ -59,4 +59,12 @@ public class MigrationTests : IntegrationTestBase
 
         await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
     }
+
+    [Fact]
+    public async Task M3c_reply_to_all_column_is_not_null_with_default_false()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'places' AND column_name = 'reply_to_all' AND is_nullable = 'NO' AND column_default = 'false'")
+            .SingleAsync()).ShouldBe(1);
+    }
 }

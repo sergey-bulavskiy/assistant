@@ -76,10 +76,11 @@ public class GeneralAssistantTests
 
     /// <summary>Stores the message through the fake store (as UpdateHandler does) and hands it to
     /// the assistant with the real StoreResult.</summary>
-    private async Task<StoreResult> HandleAsync(IncomingMessage message, GeneralAssistant? assistant = null, CancellationToken cancellationToken = default)
+    private async Task<StoreResult> HandleAsync(
+        IncomingMessage message, GeneralAssistant? assistant = null, CancellationToken cancellationToken = default, bool replyToAll = false)
     {
         var result = await _store.StoreAsync(BotTelegramId, _nextUpdateId++, message, CancellationToken.None);
-        await (assistant ?? CreateAssistant()).HandleAsync(Bot, _telegram, message, result, cancellationToken);
+        await (assistant ?? CreateAssistant()).HandleAsync(Bot, _telegram, message, result, cancellationToken, replyToAll);
         return result;
     }
 
@@ -267,6 +268,102 @@ public class GeneralAssistantTests
         await CreateAssistant().HandleAsync(manager, _telegram, message, new StoreResult(StoreOutcome.Stored, 1), CancellationToken.None);
 
         _telegram.Sent.ShouldBeEmpty();
+    }
+
+    // ---- Reply to all (per place) ----------------------------------------------------------
+
+    [Fact]
+    public async Task Group_text_without_mention_is_answered_when_reply_to_all_is_on()
+    {
+        var message = Msg("test question", chatType: "supergroup");
+
+        await HandleAsync(message, replyToAll: true);
+
+        var sent = _telegram.Sent.ShouldHaveSingleItem();
+        sent.Text.ShouldBe("test answer");
+        sent.ReplyToMessageId.ShouldBe(message.MessageId);
+        _store.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe("test answer");
+    }
+
+    [Theory]
+    [InlineData(LlmRefusalReason.RateLimited)]
+    [InlineData(LlmRefusalReason.DailyCapReached)]
+    [InlineData(LlmRefusalReason.AllModelsUnavailable)]
+    [InlineData(LlmRefusalReason.BudgetExhausted)]
+    [InlineData(LlmRefusalReason.Failed)]
+    public async Task Refusal_for_a_message_answered_only_by_reply_to_all_is_silent(LlmRefusalReason reason)
+    {
+        _gateway.NextResult = LlmResult.Refused(reason);
+
+        await HandleAsync(Msg("test question", chatType: "group"), replyToAll: true);
+
+        // The gateway (with its rate/daily/budget guards) still made the decision...
+        _gateway.Requests.ShouldHaveSingleItem();
+        // ...but its refusal is not posted into the group.
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("@test_bot test question", null)]
+    [InlineData("test question", BotTelegramId)]
+    public async Task Refusal_for_a_mentioned_or_replied_message_keeps_its_text_when_reply_to_all_is_on(string text, long? replyToUserId)
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.RateLimited);
+
+        await HandleAsync(
+            Msg(text, chatType: "group", replyToMessageId: replyToUserId is null ? null : 50, replyToUserId: replyToUserId),
+            replyToAll: true);
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Слишком много запросов, подождите минуту.");
+    }
+
+    [Fact]
+    public async Task Llm_off_stays_silent_for_a_message_answered_only_by_reply_to_all()
+    {
+        await HandleAsync(Msg("test question", chatType: "group"), CreateAssistant(llmOff: true), replyToAll: true);
+
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Private_refusal_keeps_its_text_even_when_reply_to_all_is_passed()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+
+        await HandleAsync(Msg("test question"), replyToAll: true);
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Не получилось ответить, попробуйте ещё раз.");
+    }
+
+    [Theory]
+    [InlineData("/frobnicate")]
+    [InlineData("/new@other_bot")]
+    [InlineData("/start")]
+    public async Task Commands_stay_ignored_with_reply_to_all_on(string text)
+    {
+        await HandleAsync(Msg(text, chatType: "group"), replyToAll: true);
+
+        _telegram.Sent.ShouldBeEmpty();
+        _gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Edited_service_and_non_text_messages_stay_ignored_with_reply_to_all_on()
+    {
+        await HandleAsync(Msg("test question", chatType: "group", isEdit: true), replyToAll: true);
+        await HandleAsync(Msg(null, chatType: "group", kind: MessageKind.Service), replyToAll: true);
+        await HandleAsync(Msg("test caption", chatType: "group", kind: MessageKind.Photo), replyToAll: true);
+
+        _gateway.Requests.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Start_text_mentions_reply_to_all_in_the_managers_settings()
+    {
+        await HandleAsync(Msg("/start"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldContain("/settings");
     }
 
     // ---- Commands --------------------------------------------------------------------------

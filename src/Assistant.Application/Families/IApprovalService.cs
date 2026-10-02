@@ -11,6 +11,9 @@ public interface IApprovalService
 
     Task<PlaceStatus> GetPlaceStatusAsync(long placeId, CancellationToken cancellationToken);
 
+    /// <summary>The place row's own reply_to_all flag (for a topic, never the chat-wide row's).</summary>
+    Task<bool> GetPlaceReplyToAllAsync(long placeId, CancellationToken cancellationToken);
+
     Task<long> GetOrCreatePendingFamilyMemberAsync(
         long familyId, long telegramUserId, string displayName, string? username, string requestingBotUsername, CancellationToken cancellationToken);
 
