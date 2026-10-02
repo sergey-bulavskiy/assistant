@@ -451,8 +451,8 @@ public class LlmGatewayTests : IntegrationTestBase
         using var holdingCts = new CancellationTokenSource();
         var holdingCall = holdingGateway.CompleteAsync(MakeRequest(familyId: 24), holdingCts.Token);
 
-        // Give the holding call a moment to actually take the one slot before the second call tries.
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        // Wait until the holding call has actually taken the one slot before the second call tries.
+        await holdingClient.HangStarted.WaitAsync(TimeSpan.FromSeconds(10));
 
         var waitingConfig = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) }, maxConcurrentCalls: 1, callTimeoutSeconds: 1);
         var waitingClient = new ScriptedChatClient();
@@ -521,7 +521,7 @@ public class LlmGatewayTests : IntegrationTestBase
 
         using var cts = new CancellationTokenSource();
         var callTask = gateway.CompleteAsync(MakeRequest(familyId: 26), cts.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        await client.HangStarted.WaitAsync(TimeSpan.FromSeconds(10));
         cts.Cancel();
 
         await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);

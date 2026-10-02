@@ -5,6 +5,8 @@ namespace Assistant.IntegrationTests.Infrastructure;
 
 public abstract class IntegrationTestBase : IAsyncLifetime
 {
+    private TestDatabaseLease? _database;
+
     protected AssistantDbContext Db { get; private set; } = null!;
 
     /// <summary>
@@ -16,15 +18,32 @@ public abstract class IntegrationTestBase : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        ConnectionString = await IntegreSqlPool.CreateTestDatabaseAsync();
+        _database = await IntegreSqlPool.CreateTestDatabaseAsync();
+        ConnectionString = _database.ConnectionString;
 
         var options = new DbContextOptionsBuilder<AssistantDbContext>();
         AssistantDbContext.Configure(options, ConnectionString);
         Db = new AssistantDbContext(options.Options);
     }
 
+    // xUnit calls this after every test, pass or fail. Contexts the test opened on ConnectionString
+    // itself must be disposed by the test (`await using`) — the lease clears the Npgsql pool, but a
+    // connection still checked out would keep IntegreSQL from recreating the database.
     public async Task DisposeAsync()
     {
-        await Db.DisposeAsync();
+        try
+        {
+            if (Db is not null)
+            {
+                await Db.DisposeAsync();
+            }
+        }
+        finally
+        {
+            if (_database is not null)
+            {
+                await _database.DisposeAsync();
+            }
+        }
     }
 }

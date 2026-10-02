@@ -11,13 +11,15 @@ namespace Assistant.IntegrationTests.Persistence;
 
 public class FamilyIsolationTests : IAsyncLifetime
 {
+    private TestDatabaseLease? _database;
     private string _connectionString = string.Empty;
     private long _familyAId;
     private long _familyBId;
 
     public async Task InitializeAsync()
     {
-        _connectionString = await IntegreSqlPool.CreateTestDatabaseAsync();
+        _database = await IntegreSqlPool.CreateTestDatabaseAsync();
+        _connectionString = _database.ConnectionString;
 
         var options = new DbContextOptionsBuilder<Assistant.Infrastructure.Persistence.AssistantDbContext>();
         Assistant.Infrastructure.Persistence.AssistantDbContext.Configure(options, _connectionString);
@@ -54,7 +56,13 @@ public class FamilyIsolationTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    public Task DisposeAsync() => Task.CompletedTask;
+    public async Task DisposeAsync()
+    {
+        if (_database is not null)
+        {
+            await _database.DisposeAsync();
+        }
+    }
 
     private async Task<Assistant.Infrastructure.Persistence.AssistantDbContext> OpenScopedAsync(long familyId)
     {
