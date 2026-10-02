@@ -285,6 +285,137 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         telegram.SentMessages.ShouldContain(m => m.Text.Contains("вызовов"));
     }
 
+    private async Task SetBotRoleAsync(string role)
+    {
+        var bot = await Db.Bots.IgnoreQueryFilters().SingleAsync(b => b.Id == _botId);
+        bot.Role = role;
+        await Db.SaveChangesAsync();
+    }
+
+    private async Task<bool> StoredReplyToAllAsync() =>
+        (await Db.Places.IgnoreQueryFilters().AsNoTracking().SingleAsync(p => p.Id == _placeId)).ReplyToAll;
+
+    private async Task<IReadOnlyList<InlineButton>> PlaceButtonsAsync(ManagerUpdateHandler handler, FakeTelegramClient telegram, long updateId)
+    {
+        await handler.HandleAsync(ManagerBot, telegram, Command(updateId, 111, "/settings"), CancellationToken.None);
+        return telegram.SentButtons.Single(m => m.Text.StartsWith("Место «test chat»")).Buttons;
+    }
+
+    [Fact]
+    public async Task Settings_offers_a_reply_to_all_button_that_mirrors_the_stored_state_for_a_general_bot()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        var buttons = await PlaceButtonsAsync(handler, telegram, 1);
+
+        buttons.Count.ShouldBe(3);
+        buttons[2].Label.ShouldBe("Отвечать на все: выкл");
+        buttons[2].CallbackData.ShouldBe($"settingsplace_autoreply_on:{_placeId}");
+
+        var place = await Db.Places.IgnoreQueryFilters().SingleAsync(p => p.Id == _placeId);
+        place.ReplyToAll = true;
+        await Db.SaveChangesAsync();
+        telegram.ClearSent();
+
+        buttons = await PlaceButtonsAsync(handler, telegram, 2);
+
+        buttons[2].Label.ShouldBe("Отвечать на все: вкл");
+        buttons[2].CallbackData.ShouldBe($"settingsplace_autoreply_off:{_placeId}");
+    }
+
+    [Fact]
+    public async Task Settings_treats_a_role_with_stray_spaces_and_capitals_as_general()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await SetBotRoleAsync(" GENERAL ");
+
+        var buttons = await PlaceButtonsAsync(handler, telegram, 1);
+
+        buttons.ShouldContain(b => b.CallbackData == $"settingsplace_autoreply_on:{_placeId}");
+    }
+
+    [Fact]
+    public async Task Settings_hides_the_reply_to_all_button_when_the_bot_is_not_general()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await SetBotRoleAsync("test");
+
+        var buttons = await PlaceButtonsAsync(handler, telegram, 1);
+
+        buttons.Select(b => b.CallbackData).ShouldBe(new[] { $"settingsplace_disable:{_placeId}", $"settingsplace_remove:{_placeId}" });
+    }
+
+    [Fact]
+    public async Task Settings_adds_the_topic_number_to_a_topic_places_line_only()
+    {
+        var (handler, telegram) = await SetupAsync();
+        Db.Places.Add(new Place { BotId = _botId, ChatId = -100, TopicId = 7, Title = "test chat", Status = PlaceStatus.Approved, CreatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/settings"), CancellationToken.None);
+
+        var lines = telegram.SentButtons.Select(m => m.Text).ToList();
+        lines.ShouldContain("Место «test chat»: активно");
+        lines.ShouldContain("Место «test chat» (тема 7): активно");
+    }
+
+    [Fact]
+    public async Task Owner_can_switch_reply_to_all_on_then_off_and_repeating_a_tap_does_not_flip_it()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 111, $"settingsplace_autoreply_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeTrue();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "Готово: отвечаю на все сообщения.");
+
+        // The same (now stale) button tapped again means the same target state.
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(2, 111, $"settingsplace_autoreply_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeTrue();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(3, 111, $"settingsplace_autoreply_off:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-3" && c.Text == "Готово: отвечаю только на обращения.");
+    }
+
+    [Fact]
+    public async Task Reply_to_all_tap_by_a_non_owner_member_changes_nothing()
+    {
+        var (handler, telegram) = await SetupAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 222, $"settingsplace_autoreply_on:{_placeId}"), CancellationToken.None);
+
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "У вас нет прав.");
+    }
+
+    [Fact]
+    public async Task Reply_to_all_tap_by_the_owner_of_a_different_family_changes_nothing()
+    {
+        var (handler, telegram) = await SetupAsync();
+        var otherFamily = new Family { Name = "other family", CreatedAt = DateTimeOffset.UtcNow };
+        Db.Families.Add(otherFamily);
+        await Db.SaveChangesAsync();
+        Db.FamilyMembers.Add(new FamilyMember { FamilyId = otherFamily.Id, TelegramUserId = 777, DisplayName = "other owner", Status = FamilyMemberStatus.Approved, IsOwner = true, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 777, $"settingsplace_autoreply_on:{_placeId}"), CancellationToken.None);
+
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "У вас нет прав.");
+    }
+
+    [Fact]
+    public async Task Reply_to_all_tap_for_a_non_general_bot_is_refused_even_from_the_owner()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await SetBotRoleAsync("test");
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 111, $"settingsplace_autoreply_on:{_placeId}"), CancellationToken.None);
+
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-1" && c.Text == "Доступно только для бота general.");
+    }
+
     [Fact]
     public async Task Usage_in_a_group_chat_gets_no_reply()
     {

@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
@@ -25,6 +26,8 @@ public class SettingsCommandHandler
         "settingsplace_disable",
         "settingsplace_enable",
         "settingsplace_remove",
+        "settingsplace_autoreply_on",
+        "settingsplace_autoreply_off",
         "member_disable",
         "member_enable",
         "member_makeowner"
@@ -89,9 +92,20 @@ public class SettingsCommandHandler
             var toggleButton = place.Status == PlaceStatus.Disabled
                 ? new InlineButton("Включить", $"settingsplace_enable:{place.Id}")
                 : new InlineButton("Отключить", $"settingsplace_disable:{place.Id}");
+            var buttons = new List<InlineButton> { toggleButton, new InlineButton("Удалить", $"settingsplace_remove:{place.Id}") };
+            // Reply-to-all is a General-assistant feature; the button carries the TARGET state, so
+            // two quick taps on the same button both mean the same thing.
+            if (BotRoles.IsGeneral(bots.Single(b => b.Id == place.BotId).Role))
+            {
+                buttons.Add(place.ReplyToAll
+                    ? new InlineButton("Отвечать на все: вкл", $"settingsplace_autoreply_off:{place.Id}")
+                    : new InlineButton("Отвечать на все: выкл", $"settingsplace_autoreply_on:{place.Id}"));
+            }
+
+            // Topics of one chat share its title; the topic id tells them apart.
+            var topicSuffix = place.TopicId is { } placeTopicId ? $" (тема {placeTopicId})" : string.Empty;
             await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"Место «{place.Title}»: {statusLabel}",
-                new[] { toggleButton, new InlineButton("Удалить", $"settingsplace_remove:{place.Id}") }, cancellationToken);
+                chatId, topicId, $"Место «{place.Title}»{topicSuffix}: {statusLabel}", buttons, cancellationToken);
         }
 
         var members = await _db.FamilyMembers.IgnoreQueryFilters().Where(m => m.FamilyId == familyId).ToListAsync(cancellationToken);
@@ -211,6 +225,33 @@ public class SettingsCommandHandler
                 _db.Places.Remove(place);
                 await _db.SaveChangesAsync(cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Место удалено.", cancellationToken);
+                return;
+            }
+            case "settingsplace_autoreply_on":
+            case "settingsplace_autoreply_off":
+            {
+                var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+                var bot = place is null
+                    ? null
+                    : await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.Id == place.BotId, cancellationToken);
+                if (place is null || bot is null || bot.FamilyId is null || !await ManagerOwnership.IsApprovedOwnerAsync(_db, callback.FromUserId, bot.FamilyId.Value, cancellationToken))
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
+                    return;
+                }
+
+                // Server-side too: callback data is guessable, the button alone proves nothing.
+                if (!BotRoles.IsGeneral(bot.Role))
+                {
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Доступно только для бота general.", cancellationToken);
+                    return;
+                }
+
+                var turnOn = action == "settingsplace_autoreply_on";
+                place.ReplyToAll = turnOn;
+                await _db.SaveChangesAsync(cancellationToken);
+                await telegramClient.AnswerCallbackAsync(
+                    callback.CallbackQueryId, turnOn ? "Готово: отвечаю на все сообщения." : "Готово: отвечаю только на обращения.", cancellationToken);
                 return;
             }
             case "member_disable":
