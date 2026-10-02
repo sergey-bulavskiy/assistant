@@ -111,7 +111,7 @@ public class UsageCommandHandler
 
         var rows = await (
             from c in _db.LlmCalls.IgnoreQueryFilters()
-            join b in _db.Bots.IgnoreQueryFilters() on c.BotId equals b.Id into botJoin
+            join b in _db.Bots.IgnoreQueryFilters() on c.BotId equals b.TelegramBotId into botJoin
             from b in botJoin.DefaultIfEmpty()
             where c.FamilyId == familyId && c.CreatedAt >= periodStart
             select new

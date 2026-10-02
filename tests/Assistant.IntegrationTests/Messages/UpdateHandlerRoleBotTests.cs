@@ -55,7 +55,7 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
         var messageStore = new MessageStore(Db, clock, NullLogger<MessageStore>.Instance);
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var generalAssistant = new GeneralAssistant(
-            messageStore, new NullLlmGateway(), new ChatSettingsStore(Db, clock), config: null, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
+            messageStore, new NullLlmGateway(), new ChatSettingsStore(Db, clock), new LlmUsageQuery(Db), config: null, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
 

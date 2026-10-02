@@ -65,7 +65,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var approvals = new ApprovalService(Db, clients, options, clock);
         return new ManagerUpdateHandler(
             Db, new FixedClaimCode(), new PendingBotCreations(Db, clock), clients, encryptor, coordinator, approvals, clock,
-            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
+            new UsageCommandHandler(Db, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clock, llmConfig: null),
+            new SettingsCommandHandler(Db, coordinator, clock), NullLogger<ManagerUpdateHandler>.Instance);
     }
 
     private static IncomingUpdate ClaimCommand(long updateId, long userId, string? username, string args) =>
@@ -135,7 +136,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var approvalsA = new ApprovalService(dbA, clientsA, botOptionsA, clockA);
         var handlerA = new ManagerUpdateHandler(
             dbA, new FixedClaimCode(), new PendingBotCreations(dbA, clockA), clientsA, encryptorA, coordinatorA, approvalsA, clockA,
-            new UsageCommandHandler(dbA, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockA, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
+            new UsageCommandHandler(dbA, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockA, llmConfig: null),
+            new SettingsCommandHandler(dbA, coordinatorA, clockA), NullLogger<ManagerUpdateHandler>.Instance);
         var telegramA = new FakeTelegramClient();
 
         var optionsB = new DbContextOptionsBuilder<AssistantDbContext>();
@@ -151,7 +153,8 @@ public class ManagerUpdateHandlerClaimTests : IntegrationTestBase
         var approvalsB = new ApprovalService(dbB, clientsB, botOptionsB, clockB);
         var handlerB = new ManagerUpdateHandler(
             dbB, new FixedClaimCode(), new PendingBotCreations(dbB, clockB), clientsB, encryptorB, coordinatorB, approvalsB, clockB,
-            new UsageCommandHandler(dbB, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockB, llmConfig: null), NullLogger<ManagerUpdateHandler>.Instance);
+            new UsageCommandHandler(dbB, new Assistant.Infrastructure.Llm.NullBudgetGuard(), clockB, llmConfig: null),
+            new SettingsCommandHandler(dbB, coordinatorB, clockB), NullLogger<ManagerUpdateHandler>.Instance);
         var telegramB = new FakeTelegramClient();
 
         await Task.WhenAll(

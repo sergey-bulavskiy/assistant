@@ -70,6 +70,7 @@ public class UsageCommandHandlerTests : IntegrationTestBase
         return ownerUserId;
     }
 
+    /// <summary>Returns the bot's Telegram id (what llm_calls.bot_id stores), which differs from bots.id.</summary>
     private async Task<long> SeedBotAsync(long? familyId, string username)
     {
         var bot = new Bot
@@ -79,7 +80,7 @@ public class UsageCommandHandlerTests : IntegrationTestBase
         };
         Db.Bots.Add(bot);
         await Db.SaveChangesAsync();
-        return bot.Id;
+        return bot.TelegramBotId;
     }
 
     private async Task SeedLlmCallAsync(
@@ -316,13 +317,29 @@ public class UsageCommandHandlerTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task A_call_is_attributed_to_the_bot_whose_telegram_id_it_stores_not_to_the_deleted_bot_bucket()
+    {
+        var familyId = await SeedFamilyAsync();
+        var ownerId = await SeedOwnerAsync(familyId);
+        var telegramBotId = await SeedBotAsync(familyId, "test_role_bot");
+        (await Db.Bots.SingleAsync(b => b.Username == "test_role_bot")).Id.ShouldNotBe(telegramBotId);
+        await SeedLlmCallAsync(familyId, telegramBotId, FreeProvider, "sonnet", cost: 0m);
+        var handler = CreateHandler(budget: null);
+
+        var reply = await handler.BuildReplyAsync(ownerId, CancellationToken.None);
+
+        reply.ShouldContain("Бот test_role_bot:");
+        reply.ShouldNotContain("удалённый бот");
+    }
+
+    [Fact]
     public async Task A_deleted_bots_calls_are_still_counted_under_a_generic_deleted_bot_label()
     {
         var familyId = await SeedFamilyAsync();
         var ownerId = await SeedOwnerAsync(familyId);
         var botId = await SeedBotAsync(familyId, "soon_to_be_deleted");
         await SeedLlmCallAsync(familyId, botId, FreeProvider, "sonnet", cost: 0m);
-        Db.Bots.Remove(await Db.Bots.FirstAsync(b => b.Id == botId));
+        Db.Bots.Remove(await Db.Bots.FirstAsync(b => b.TelegramBotId == botId));
         await Db.SaveChangesAsync();
         var handler = CreateHandler(budget: null);
 

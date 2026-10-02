@@ -7,13 +7,19 @@ public enum LlmMessageRole { User, Assistant }
 /// null in private chats where there's nothing to disambiguate.</summary>
 public record LlmMessage(LlmMessageRole Role, string Text, string? Author = null);
 
+/// <summary>ChatId/TopicId/TriggerMessageId: where the call was triggered and the triggering
+/// message's messages.id; the gateway copies them into every llm_calls attempt row. Optional:
+/// TriggerMessageId null means /tokens does not count the call.</summary>
 public record LlmRequest(
     long FamilyId,
     long BotId,
     string Tier,
     string? PreferredModel,
     string SystemPrompt,
-    IReadOnlyList<LlmMessage> Messages);
+    IReadOnlyList<LlmMessage> Messages,
+    long? ChatId = null,
+    int? TopicId = null,
+    long? TriggerMessageId = null);
 
 /// <summary>BudgetExhausted: the platform money budget leaves no callable model; its RetryAt is the
 /// reset of the binding budget period (next UTC day or month).</summary>

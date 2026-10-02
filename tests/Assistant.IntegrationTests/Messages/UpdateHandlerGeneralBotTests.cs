@@ -7,6 +7,7 @@ using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
@@ -99,7 +100,7 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
             FastModels = Array.Empty<ModelCatalogEntry>()
         };
         var generalAssistant = new GeneralAssistant(
-            messageStore, _gateway, new ChatSettingsStore(Db, clock), config, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
+            messageStore, _gateway, new ChatSettingsStore(Db, clock), new LlmUsageQuery(Db), config, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, new CurrentFamily(), new NoopManagerUpdateHandler(), generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
 
@@ -198,5 +199,28 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
         setting.TopicId.ShouldBe(7);
         setting.PreferredModel.ShouldBe("haiku");
         _gateway.Requests.Select(r => r.PreferredModel).ShouldBe(new[] { "haiku", null });
+    }
+
+    [Fact]
+    public async Task Reply_to_all_is_read_from_each_places_own_row_and_a_topic_never_inherits_it()
+    {
+        var (handler, bot, telegram) = await SetupAsync();
+
+        // First messages only create the pending place rows: chat-wide, topic 7, topic 8.
+        await SendAsync(handler, bot, telegram, Text("hello", "supergroup"));
+        await SendAsync(handler, bot, telegram, Text("hello", "supergroup", topicId: 7));
+        await SendAsync(handler, bot, telegram, Text("hello", "supergroup", topicId: 8));
+        await ApproveGroupPlacesAsync();
+        var places = await Db.Places.IgnoreQueryFilters().ToListAsync();
+        places.Single(p => p.TopicId == null).ReplyToAll = true;
+        places.Single(p => p.TopicId == 8).ReplyToAll = true;
+        await Db.SaveChangesAsync();
+
+        await SendAsync(handler, bot, telegram, Text("test chat question", "supergroup"));
+        await SendAsync(handler, bot, telegram, Text("test topic 7 question", "supergroup", topicId: 7));
+        await SendAsync(handler, bot, telegram, Text("test topic 8 question", "supergroup", topicId: 8));
+
+        // Topic 7's own row is off even though the chat-wide row is on.
+        _gateway.Requests.Select(r => r.Messages.Last().Text).ShouldBe(new[] { "test chat question", "test topic 8 question" });
     }
 }

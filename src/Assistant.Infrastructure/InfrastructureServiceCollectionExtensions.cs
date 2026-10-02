@@ -39,9 +39,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddScoped<UsageCommandHandler>();
+        services.AddScoped<SettingsCommandHandler>();
         services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
         services.AddScoped<IPendingBotCreations, PendingBotCreations>();
         services.AddScoped<IChatSettingsStore, ChatSettingsStore>();
+        // Always registered (LLM on or off): /tokens only reads llm_calls.
+        services.AddScoped<ILlmUsageQuery, LlmUsageQuery>();
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.
         // The app must always start -- parsing/validation never throws and nothing here is

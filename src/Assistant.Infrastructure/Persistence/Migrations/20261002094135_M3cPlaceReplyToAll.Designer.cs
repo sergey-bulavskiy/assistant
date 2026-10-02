@@ -3,6 +3,7 @@ using System;
 using Assistant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Assistant.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AssistantDbContext))]
-    partial class AssistantDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261002094135_M3cPlaceReplyToAll")]
+    partial class M3cPlaceReplyToAll
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -282,10 +285,6 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("bot_id");
 
-                    b.Property<long?>("ChatId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("chat_id");
-
                     b.Property<decimal>("Cost")
                         .HasColumnType("numeric(10,4)")
                         .HasColumnName("cost");
@@ -337,14 +336,6 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("tier");
-
-                    b.Property<int?>("TopicId")
-                        .HasColumnType("integer")
-                        .HasColumnName("topic_id");
-
-                    b.Property<long?>("TriggerMessageId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("trigger_message_id");
 
                     b.HasKey("Id")
                         .HasName("pk_llm_calls");

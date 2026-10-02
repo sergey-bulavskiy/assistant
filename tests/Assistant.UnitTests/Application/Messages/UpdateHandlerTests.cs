@@ -22,6 +22,14 @@ public class UpdateHandlerTests
         public long NextMemberId { get; set; } = 1;
         public int PlaceApprovalCalls { get; private set; }
         public string? LastPlaceTitle { get; private set; }
+        public bool NextReplyToAll { get; set; }
+        public int ReplyToAllCalls { get; private set; }
+
+        public Task<bool> GetPlaceReplyToAllAsync(long placeId, CancellationToken cancellationToken)
+        {
+            ReplyToAllCalls++;
+            return Task.FromResult(NextReplyToAll);
+        }
 
         public Task<long> GetOrCreatePendingPlaceAsync(long botDbId, long chatId, int? topicId, string title, CancellationToken cancellationToken)
         {
@@ -66,11 +74,12 @@ public class UpdateHandlerTests
 
     private sealed class FakeGeneralAssistant : IGeneralAssistant
     {
-        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result)> Calls { get; } = new();
+        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result, bool ReplyToAll)> Calls { get; } = new();
 
-        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+        public Task HandleAsync(
+            ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll = false)
         {
-            Calls.Add((bot, message, storeResult));
+            Calls.Add((bot, message, storeResult, replyToAll));
             return Task.CompletedTask;
         }
     }
@@ -292,7 +301,7 @@ public class UpdateHandlerTests
         var store = new FakeMessageStore();
         var gateway = new FakeLlmGateway();
         var assistant = new GeneralAssistant(
-            store, gateway, new FakeChatSettingsStore(), config: null, new FixedClock(DateTimeOffset.UtcNow),
+            store, gateway, new FakeChatSettingsStore(), new FakeLlmUsageQuery(), config: null, new FixedClock(DateTimeOffset.UtcNow),
             new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow), NullLogger<GeneralAssistant>.Instance);
         var (handler, _, telegram, _, _) = CreateHandler(assistant, store);
 
@@ -300,5 +309,43 @@ public class UpdateHandlerTests
 
         telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Ассистент пока не настроен.");
         gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task General_bot_group_message_carries_its_places_reply_to_all_flag(bool flag)
+    {
+        var general = new FakeGeneralAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(general);
+        approvals.NextReplyToAll = flag;
+
+        await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(30, Message(userId: 111, chatType: "group")), CancellationToken.None);
+
+        general.Calls.ShouldHaveSingleItem().ReplyToAll.ShouldBe(flag);
+    }
+
+    [Fact]
+    public async Task Private_message_to_the_general_bot_never_reads_the_flag()
+    {
+        var general = new FakeGeneralAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(general);
+        approvals.NextReplyToAll = true;
+
+        await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(31, Message(userId: 111, chatType: "private")), CancellationToken.None);
+
+        approvals.ReplyToAllCalls.ShouldBe(0);
+        general.Calls.ShouldHaveSingleItem().ReplyToAll.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Other_role_bots_never_read_the_flag()
+    {
+        var (handler, _, telegram, approvals, _) = CreateHandler();
+        approvals.NextReplyToAll = true;
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(32, Message(userId: 111, chatType: "group")), CancellationToken.None);
+
+        approvals.ReplyToAllCalls.ShouldBe(0);
     }
 }
