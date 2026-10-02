@@ -36,11 +36,13 @@ public static class IntegreSqlPool
     /// <summary>
     /// Shared, reusable helper: creates (or reuses) the "assistant schema" IntreSQL template — running
     /// EF Core migrations against it on first use — then checks out a fresh, isolated test database
-    /// from the pool and returns its Npgsql connection string. Independent of <see cref="IntegrationTestBase"/>;
-    /// callers that only need a raw connection string (e.g. host/WebApplicationFactory tests) can call this
-    /// directly instead of spinning up their own containers or copying bootstrap code.
+    /// from the pool. Independent of <see cref="IntegrationTestBase"/>; callers that only need a raw
+    /// connection string (e.g. host/WebApplicationFactory tests) can call this directly instead of
+    /// spinning up their own containers or copying bootstrap code. The caller must dispose the returned
+    /// lease when the test finishes (e.g. from <c>IAsyncLifetime.DisposeAsync</c>), after everything
+    /// using the database has been disposed, so the database is returned to the pool.
     /// </summary>
-    public static async Task<string> CreateTestDatabaseAsync(CancellationToken cancellationToken = default)
+    public static async Task<TestDatabaseLease> CreateTestDatabaseAsync(CancellationToken cancellationToken = default)
     {
         var pool = await GetAsync();
 
@@ -56,9 +58,10 @@ public static class IntegreSqlPool
 
         var gate = TemplateGates.GetOrAdd(hash, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
+        TestDatabaseCheckout checkout;
         try
         {
-            return await pool.Client.GetOrCreateTemplateConnectionStringAsync(
+            checkout = await pool.Client.GetOrCreateTemplateAndCheckoutAsync(
                 hash,
                 async templateConnectionString =>
                 {
@@ -82,6 +85,8 @@ public static class IntegreSqlPool
         {
             gate.Release();
         }
+
+        return new TestDatabaseLease(pool.Client, checkout);
     }
 
     private static async Task<PoolContext> InitializeAsync()
@@ -106,6 +111,13 @@ public static class IntegreSqlPool
             .WithDatabase("assistant_test")
             .WithUsername("postgres")
             .WithPassword("postgres")
+            // Postgres' default of 100 is too few once databases are recycled quickly on a many-core
+            // machine: IntegreSQL opens a connection per concurrent pool task and per recreate
+            // request (it sets no limit, and its pool sizes scale with NumCPU, as does xUnit's
+            // parallelism), on top of the tests' own connections. Seen locally on 32 cores as
+            // intermittent "53300: sorry, too many clients already". Kept in sync with
+            // docker-compose.tests.yml.
+            .WithCommand("-c", "max_connections=500")
             .Build();
         await postgres.StartAsync();
 
@@ -115,24 +127,12 @@ public static class IntegreSqlPool
             .WithEnvironment("INTEGRESQL_PGHOST", "postgres")
             .WithEnvironment("INTEGRESQL_PGUSER", "postgres")
             .WithEnvironment("INTEGRESQL_PGPASSWORD", "postgres")
-            // Defaults are runtime.NumCPU()-derived (see the IntegreSQL README's Configuration
-            // section): on GitHub Actions' 2-core runners that's an initial pool of 2, a max of 8,
-            // and only 2 pool-maintenance tasks running in parallel. With several test collections
-            // (classes) able to run in parallel, each wanting a fresh database per test, a pool
-            // that only ever has 2 warmed up forces most checkouts to wait on synchronous FIFO
-            // recreation — which is exactly what surfaced as intermittent 423/503/500 responses on
-            // CI. Fixed, CPU-independent values give the pool enough headroom to stay ahead of
-            // checkout demand regardless of the runner's core count and regardless of how many
-            // tests the suite grows to: a generous number warmed up immediately after the template
-            // is finalized, a higher ceiling so returned databases have room to be recreated in the
-            // background without blocking new checkouts, and more parallel maintenance tasks
-            // (recreate/create) than the CI default — these are short, mostly I/O-bound
-            // `CREATE/DROP DATABASE ... TEMPLATE` statements, not CPU-bound work, so
-            // oversubscribing the 2 real vCPUs a little lets pool maintenance make forward progress
-            // instead of queuing behind just 2 slots.
-            .WithEnvironment("INTEGRESQL_TEST_INITIAL_POOL_SIZE", "15")
-            .WithEnvironment("INTEGRESQL_TEST_MAX_POOL_SIZE", "30")
-            .WithEnvironment("INTEGRESQL_POOL_MAX_PARALLEL_TASKS", "4")
+            // Pool sizes are left at IntegreSQL's runtime.NumCPU()-derived defaults (README,
+            // Configuration): every test hands its database back on teardown (TestDatabaseLease ->
+            // POST .../recreate), so the pool only needs to cover the tests running at once — and
+            // xUnit's parallelism is NumCPU-derived too. A bigger pool is no substitute for returning
+            // databases: an unreturned one stays dirty until IntegreSQL's FIFO auto-clean manages to
+            // drop it, which Postgres refuses while Npgsql still holds idle connections to it.
             .WithPortBinding(5000, true)
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("http server started"))
             .Build();

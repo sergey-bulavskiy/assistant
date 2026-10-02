@@ -59,11 +59,18 @@ public class ScriptedChatClient : IChatClient
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
         });
 
+    private readonly TaskCompletionSource _hangStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes once a call has reached an <see cref="EnqueueHang"/> step — await it before
+    /// cancelling, rather than a fixed delay, so the cancellation really lands mid-call.</summary>
+    public Task HangStarted => _hangStarted.Task;
+
     /// <summary>Never completes on its own -- only cancellation (the gateway's own timeout or the
     /// caller's token) ends the call.</summary>
     public void EnqueueHang() =>
         _script.Enqueue(async ct =>
         {
+            _hangStarted.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             throw new InvalidOperationException("unreachable: EnqueueHang only ends via cancellation.");
         });

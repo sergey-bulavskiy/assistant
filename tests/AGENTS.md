@@ -46,6 +46,11 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   (`Infrastructure/IntegreSqlPool.cs`). Derive DB tests from `IntegrationTestBase`; host tests use
   `AssistantWebApplicationFactory`, which swaps in a fake Telegram client, a controllable
   `TestClock` and failure injectors. Never point tests at a shared or real database.
+- Every test database must go back to the pool when the test ends. `IntegrationTestBase` does it;
+  a class calling `IntegreSqlPool.CreateTestDatabaseAsync()` directly must dispose the returned
+  `TestDatabaseLease` in its `DisposeAsync`, after disposing every `DbContext`/host factory on it
+  (`await using`/`using`). The lease clears that database's Npgsql pool and asks IntegreSQL to
+  recreate it; a connection still checked out blocks the recreation.
 - By default the pool starts Postgres + IntegreSQL via Testcontainers (Docker required). Fast loop,
   from the repo root:
 
@@ -55,13 +60,15 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   docker compose -f docker-compose.tests.yml down
   ```
 
-- Image versions and IntegreSQL pool settings are duplicated in `IntegreSqlPool.cs` and
+- Image versions, IntegreSQL settings and Postgres `max_connections` are duplicated in `IntegreSqlPool.cs` and
   `docker-compose.tests.yml`; change both together.
 - The template DB is keyed by a hash of the migration ids, so adding a migration rebuilds it
   automatically. `NpgsqlConnection.ClearAllPools()` after migrating the template is required
   (Postgres refuses `CREATE DATABASE ... TEMPLATE` while connections are open) — don't remove it.
-- Intermittent IntegreSQL 423/503/500 on CI usually means pool exhaustion, not a flaky test; read
-  the comments in `IntegreSqlPool.cs` before changing pool sizes.
+- Pool sizes are IntegreSQL's CPU-derived defaults. If tests stall on checkout or IntegreSQL
+  returns 503 (the get-test-database timeout), look for a database that isn't released or a
+  connection left open (an undisposed context, host or `NpgsqlConnection`) before raising pool
+  sizes; IntegreSQL keeps retrying the drop of such a database.
 
 ## Smoke test (`Assistant.SmokeTests`)
 

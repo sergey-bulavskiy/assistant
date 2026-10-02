@@ -27,14 +27,22 @@ namespace Assistant.IntegrationTests.Host;
 [Collection(HostFactoryCollection.Name)]
 public class LlmWiringTests : IAsyncLifetime
 {
+    private TestDatabaseLease? _database;
     private string _connectionString = string.Empty;
 
     public async Task InitializeAsync()
     {
-        _connectionString = await IntegreSqlPool.CreateTestDatabaseAsync();
+        _database = await IntegreSqlPool.CreateTestDatabaseAsync();
+        _connectionString = _database.ConnectionString;
     }
 
-    public Task DisposeAsync() => Task.CompletedTask;
+    public async Task DisposeAsync()
+    {
+        if (_database is not null)
+        {
+            await _database.DisposeAsync();
+        }
+    }
 
     private static async Task WaitUntilHealthyAsync(HttpClient client)
     {
@@ -93,9 +101,18 @@ public class LlmWiringTests : IAsyncLifetime
         try
         {
             var factory = new AssistantWebApplicationFactory(_connectionString);
-            var client = factory.CreateClient();
-            await WaitUntilHealthyAsync(client);
-            return factory;
+            try
+            {
+                var client = factory.CreateClient();
+                await WaitUntilHealthyAsync(client);
+                return factory;
+            }
+            catch
+            {
+                // An undisposed host keeps connections open, which would block releasing the test database.
+                factory.Dispose();
+                throw;
+            }
         }
         finally
         {

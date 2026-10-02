@@ -14,6 +14,9 @@ public sealed record TestDatabase(DatabaseConfig Config);
 
 public sealed record TestResponse(TestDatabase Database, int Id);
 
+/// <summary>A checked-out IntegreSQL test database: its id (needed to hand it back) and connection string.</summary>
+public sealed record TestDatabaseCheckout(string TemplateHash, int Id, string ConnectionString);
+
 public sealed class IntegreSqlClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -48,7 +51,7 @@ public sealed class IntegreSqlClient
         _pgPort = pgPort;
     }
 
-    public async Task<string> GetOrCreateTemplateConnectionStringAsync(
+    public async Task<TestDatabaseCheckout> GetOrCreateTemplateAndCheckoutAsync(
         string hash, Func<string, Task> runMigrations, CancellationToken cancellationToken)
     {
         var delay = InitialRetryDelay;
@@ -91,10 +94,10 @@ public sealed class IntegreSqlClient
             delay = NextDelay(delay);
         }
 
-        return await GetTestConnectionStringAsync(hash, cancellationToken);
+        return await CheckoutTestDatabaseAsync(hash, cancellationToken);
     }
 
-    public async Task<string> GetTestConnectionStringAsync(string hash, CancellationToken cancellationToken)
+    public async Task<TestDatabaseCheckout> CheckoutTestDatabaseAsync(string hash, CancellationToken cancellationToken)
     {
         // When several test classes race to create the same template (same migration hash), the
         // POST above returns 423 Locked to everyone except the one initializing it. Until that
@@ -112,7 +115,7 @@ public sealed class IntegreSqlClient
             {
                 var payload = await response.Content.ReadFromJsonAsync<TestResponse>(JsonOptions, cancellationToken)
                     ?? throw new InvalidOperationException("IntegreSQL returned an empty test database response.");
-                return BuildConnectionString(payload.Database.Config);
+                return new TestDatabaseCheckout(hash, payload.Id, BuildConnectionString(payload.Database.Config));
             }
 
             if (!IsTransient(response.StatusCode) || attempt == MaxAttempts)
@@ -126,6 +129,38 @@ public sealed class IntegreSqlClient
         }
 
         throw new InvalidOperationException("IntegreSQL test database request failed: template never became ready.");
+    }
+
+    /// <summary>
+    /// Hands a used (dirty) test database back to IntegreSQL via <c>POST .../tests/{id}/recreate</c>:
+    /// the server immediately queues it for a background <c>DROP</c> + <c>CREATE DATABASE ... TEMPLATE</c>
+    /// and puts it back into the ready pool once that succeeds (204 is returned right away, before the
+    /// recreation itself runs). Recreate rather than <c>unlock</c>, because unlock returns the database
+    /// as-is and our tests write to it. Callers must close every connection to the database first —
+    /// Postgres refuses to drop a database with open connections, and IntegreSQL then keeps retrying.
+    /// </summary>
+    public async Task RecreateTestDatabaseAsync(string hash, int id, CancellationToken cancellationToken)
+    {
+        var delay = InitialRetryDelay;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            var response = await _http.PostAsync($"api/v1/templates/{hash}/tests/{id}/recreate", content: null, cancellationToken);
+
+            if (response.StatusCode == HttpStatusCode.NoContent)
+            {
+                return;
+            }
+
+            if (!IsTransient(response.StatusCode) || attempt == MaxAttempts)
+            {
+                throw new InvalidOperationException($"IntegreSQL failed to recreate test database {id}: {response.StatusCode}");
+            }
+
+            LogRetry("POST api/v1/templates/{hash}/tests/{id}/recreate", response.StatusCode, attempt, delay);
+            await Task.Delay(delay, cancellationToken);
+            delay = NextDelay(delay);
+        }
     }
 
     private static bool IsTransient(HttpStatusCode statusCode) => Array.IndexOf(TransientStatusCodes, statusCode) >= 0;

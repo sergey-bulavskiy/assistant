@@ -738,7 +738,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
 
         using var cts = new CancellationTokenSource();
         var callTask = gateway.CompleteAsync(MakeRequest(55), cts.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        await client.HangStarted.WaitAsync(TimeSpan.FromSeconds(10));
         cts.Cancel();
 
         await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);
@@ -757,7 +757,7 @@ public class LlmGatewayBudgetTests : IntegrationTestBase
 
         using var cts = new CancellationTokenSource();
         var callTask = gateway.CompleteAsync(MakeRequest(56), cts.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        await client.HangStarted.WaitAsync(TimeSpan.FromSeconds(10));
         cts.Cancel();
 
         await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);
