@@ -4,6 +4,7 @@ using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Messages;
+using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -226,7 +227,7 @@ public class MessageStoreTests : IntegrationTestBase
     // without updates, possibly below the stored last_update_id) ---
 
     private static readonly DateTimeOffset Now = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
-    private static readonly DateTimeOffset IdleBefore = Now - TimeSpan.FromDays(6);
+    private static readonly DateTimeOffset IdleBefore = Now - BotPollingWorker.OffsetRebaseIdleThreshold;
 
     private sealed class FixedClock(DateTimeOffset utcNow) : IClock
     {
@@ -259,7 +260,7 @@ public class MessageStoreTests : IntegrationTestBase
     [Fact]
     public async Task Idle_bot_is_rebased_and_then_stores_an_update_with_a_lower_update_id()
     {
-        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: Now - TimeSpan.FromDays(7));
+        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: IdleBefore - TimeSpan.FromHours(1));
         var store = CreateStoreAt(Now);
 
         var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
@@ -277,7 +278,7 @@ public class MessageStoreTests : IntegrationTestBase
     [Fact]
     public async Task Recently_active_bot_is_not_rebased_and_still_skips_an_older_update_id()
     {
-        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: Now - TimeSpan.FromDays(5));
+        await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: IdleBefore + TimeSpan.FromHours(1));
         var store = CreateStoreAt(Now);
 
         var rebased = await store.RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);
@@ -293,8 +294,8 @@ public class MessageStoreTests : IntegrationTestBase
     [Fact]
     public async Task Bot_with_an_offset_but_no_recorded_update_time_is_rebased()
     {
-        // Rows from before last_update_at existed: re-basing once is harmless, Telegram never
-        // resends updates it has already confirmed.
+        // Rows from before last_update_at existed: re-basing once is harmless, Telegram keeps
+        // unconfirmed updates only 24h and the worker confirms every stored update on its next poll.
         await SeedBotAsync(lastUpdateId: 1000, lastUpdateAt: null);
 
         var rebased = await CreateStoreAt(Now).RebaseOffsetIfIdleAsync(BotId, IdleBefore, CancellationToken.None);

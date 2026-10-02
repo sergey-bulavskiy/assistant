@@ -13,9 +13,12 @@ namespace Assistant.Infrastructure.Bots;
 public class BotPollingWorker
 {
     /// <summary>A bot with no processed update for this long gets its stored offset reset before the
-    /// next poll (see <see cref="IMessageStore.RebaseOffsetIfIdleAsync"/>). Telegram picks the next
-    /// update_id randomly after "at least a week" without updates, so re-base a day earlier.</summary>
-    public static readonly TimeSpan OffsetRebaseIdleThreshold = TimeSpan.FromDays(6);
+    /// next poll (see <see cref="IMessageStore.RebaseOffsetIfIdleAsync"/>). Re-basing is harmless any
+    /// time after ~24h of idleness: Telegram keeps unconfirmed updates only 24h, and the worker's next
+    /// poll confirms every stored update. It must happen well before Telegram's one-week mark, after
+    /// which it picks the next update_id randomly, because last_update_at records when we PROCESSED an
+    /// update (up to 24h after it was created). So: threshold &gt; 24h and threshold + 24h &lt; 7 days.</summary>
+    public static readonly TimeSpan OffsetRebaseIdleThreshold = TimeSpan.FromDays(3);
 
     private readonly ReceivingBot _bot;
     private readonly ITelegramClient _telegramClient;

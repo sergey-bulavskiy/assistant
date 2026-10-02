@@ -33,10 +33,15 @@
     would confirm and drop forever. `StoreAsync` stamps `bots.last_update_at` whenever it advances
     the offset (offset-only updates too); before each poll the worker calls
     `RebaseOffsetIfIdleAsync`, which resets `last_update_id` to 0 when `last_update_at` is older than
-    `BotPollingWorker.OffsetRebaseIdleThreshold` (6 days) or null. The first update stored afterwards
-    re-bases the offset. Telegram never resends confirmed updates, and a redelivered message is caught
-    by the unique (bot, chat, message id) key as `Duplicate` (no reply), so the reset is safe. It
-    also covers a bot that was disabled or the host that was down for that long.
+    `BotPollingWorker.OffsetRebaseIdleThreshold` (3 days) or null. The first update stored afterwards
+    re-bases the offset. Re-basing is safe because Telegram keeps unconfirmed updates only 24h and
+    the worker confirms every stored update on its next poll; a redelivered message is caught
+    by the unique (bot, chat, message id) key as `Duplicate` (no reply). The threshold must satisfy
+    threshold > 24h and threshold + 24h < 7 days (`last_update_at` is when we processed an update,
+    up to 24h after it was created). It also covers a bot that was disabled or the host that was
+    down for that long. Rows that existed before the migration (null `last_update_at`) re-base once
+    right after deploy; at most a batch younger than 24h that was stored but not yet confirmed can
+    be redelivered then (messages dedupe by the unique key; non-message updates may be handled twice).
   - N4: a single worker processes its bot's updates sequentially, one at a time. For a General
     assistant bot this means a slow/hung LLM call (up to `LLM_CALL_TIMEOUT_SECONDS`, or ~2x that
     while also waiting for a concurrency slot — see `LlmGateway.CompleteAsync`) delays every other

@@ -154,6 +154,11 @@ public class BotPollingCoordinatorTests : IAsyncLifetime
         // The stored update refreshed the bot's activity, so polling continues from it instead of
         // re-basing again.
         await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets[^1] == 51);
+        var firstAt51 = factory.TelegramClient.RequestedOffsets.ToList().IndexOf(51);
+        var pollsBefore = factory.TelegramClient.RequestedOffsets.Count;
+        await WaitForConditionAsync(() => factory.TelegramClient.RequestedOffsets.Count >= pollsBefore + 5);
+
+        factory.TelegramClient.RequestedOffsets.Skip(firstAt51).ShouldAllBe(offset => offset == 51);
     }
 
     [Fact]
