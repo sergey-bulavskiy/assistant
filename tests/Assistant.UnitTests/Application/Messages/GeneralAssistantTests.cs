@@ -21,6 +21,7 @@ public class GeneralAssistantTests
     private readonly FakeMessageStore _store = new();
     private readonly FakeLlmGateway _gateway = new();
     private readonly FakeChatSettingsStore _chatSettings = new();
+    private readonly FakeLlmUsageQuery _usageQuery = new();
     private readonly FakeTelegramClient _telegram = new();
     private readonly BuildInfo _buildInfo = new("abcdef1234", null, Now.AddHours(-1));
     private readonly FixedClock _clock = new(Now);
@@ -44,7 +45,7 @@ public class GeneralAssistantTests
     };
 
     private GeneralAssistant CreateAssistant(LlmConfig? config = null, bool llmOff = false) =>
-        new(_store, _gateway, _chatSettings, llmOff ? null : config ?? Config(), _clock, _buildInfo, NullLogger<GeneralAssistant>.Instance);
+        new(_store, _gateway, _chatSettings, _usageQuery, llmOff ? null : config ?? Config(), _clock, _buildInfo, NullLogger<GeneralAssistant>.Instance);
 
     private IncomingMessage Msg(
         string? text,
@@ -452,6 +453,7 @@ public class GeneralAssistantTests
     [InlineData("/start")]
     [InlineData("/new")]
     [InlineData("/model")]
+    [InlineData("/tokens")]
     [InlineData("/version")]
     public async Task Command_replies_are_sent_but_not_stored_as_context(string command)
     {
@@ -603,6 +605,7 @@ public class GeneralAssistantTests
     [InlineData("private", "/frobnicate")]
     [InlineData("group", "/frobnicate")]
     [InlineData("group", "/new@other_bot")]
+    [InlineData("group", "/tokens@other_bot")]
     [InlineData("private", "/model@other_bot haiku")]
     public async Task Unknown_commands_and_commands_for_other_bots_are_silent(string chatType, string text)
     {
@@ -618,6 +621,72 @@ public class GeneralAssistantTests
         await HandleAsync(Msg("/version@test_bot", chatType: "group"));
 
         _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(VersionText.Format(_buildInfo, Now));
+    }
+
+    [Fact]
+    public async Task Tokens_with_no_data_says_so_and_that_only_calls_after_the_update_count()
+    {
+        await HandleAsync(Msg("/tokens"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Пока нет данных. Считаются только вызовы после обновления.");
+        _gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Tokens_without_new_lists_totals_and_models_with_grouped_numbers()
+    {
+        _usageQuery.NextSummary = new LlmUsageSummary(new[]
+        {
+            new LlmModelUsage("haiku", 1, 1000, 50),
+            new LlmModelUsage("sonnet", 2, 12345, 678),
+        });
+
+        await HandleAsync(Msg("/tokens"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(
+            "Расход в этом чате:\nОтветов: 3\nВходящих токенов: 13 345\nИсходящих токенов: 728\nМодели: haiku (1), sonnet (2)");
+        _usageQuery.Calls.ShouldHaveSingleItem().AfterMessageId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Tokens_after_new_counts_from_the_new_commands_own_id()
+    {
+        _usageQuery.NextSummary = new LlmUsageSummary(new[] { new LlmModelUsage("sonnet", 1, 10, 2) });
+        var newResult = await HandleAsync(Msg("/new"));
+
+        await HandleAsync(Msg("/tokens"));
+
+        _usageQuery.Calls.ShouldHaveSingleItem().AfterMessageId.ShouldBe(newResult.MessageDbId);
+        _telegram.Sent.Last().Text.ShouldStartWith("Расход с последнего /new:\n");
+    }
+
+    [Fact]
+    public async Task Tokens_in_a_topic_queries_that_bot_chat_and_topic_and_replies_there()
+    {
+        var message = Msg("/tokens", chatType: "supergroup", topicId: 7);
+
+        await HandleAsync(message);
+
+        _usageQuery.Calls.ShouldHaveSingleItem().ShouldBe((FamilyId, BotTelegramId, GroupChatId, (int?)7, (long?)null));
+        var sent = _telegram.Sent.ShouldHaveSingleItem();
+        sent.TopicId.ShouldBe(7);
+        sent.ReplyToMessageId.ShouldBe(message.MessageId);
+    }
+
+    [Fact]
+    public async Task Tokens_works_with_llm_off()
+    {
+        await HandleAsync(Msg("/tokens"), CreateAssistant(llmOff: true));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Пока нет данных. Считаются только вызовы после обновления.");
+    }
+
+    [Fact]
+    public async Task Start_text_mentions_tokens()
+    {
+        await HandleAsync(Msg("/start"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldContain("/tokens");
     }
 
     // ---- Refusals and LLM off --------------------------------------------------------------

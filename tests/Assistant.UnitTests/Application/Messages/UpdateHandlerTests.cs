@@ -301,7 +301,7 @@ public class UpdateHandlerTests
         var store = new FakeMessageStore();
         var gateway = new FakeLlmGateway();
         var assistant = new GeneralAssistant(
-            store, gateway, new FakeChatSettingsStore(), config: null, new FixedClock(DateTimeOffset.UtcNow),
+            store, gateway, new FakeChatSettingsStore(), new FakeLlmUsageQuery(), config: null, new FixedClock(DateTimeOffset.UtcNow),
             new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow), NullLogger<GeneralAssistant>.Instance);
         var (handler, _, telegram, _, _) = CreateHandler(assistant, store);
 

@@ -18,7 +18,7 @@ public class GeneralAssistant : IGeneralAssistant
         "Привет! Я отвечаю на вопросы с помощью модели. В личных сообщениях отвечаю на всё; " +
         "в группах — только если обратиться по имени или ответить на моё сообщение " +
         "(владелец может включить ответы на все сообщения группы или темы в /settings бота-менеджера). " +
-        "/new — начать разговор заново. /model — выбрать модель. /version — версия.";
+        "/new — начать разговор заново. /model — выбрать модель. /tokens — расход токенов. /version — версия.";
 
     private const string NewConversationText = "Начинаем новый разговор.";
 
@@ -27,6 +27,7 @@ public class GeneralAssistant : IGeneralAssistant
     private readonly IMessageStore _store;
     private readonly ILlmGateway _gateway;
     private readonly IChatSettingsStore _chatSettings;
+    private readonly ILlmUsageQuery _usageQuery;
     private readonly LlmConfig? _config;
     private readonly IClock _clock;
     private readonly BuildInfo _buildInfo;
@@ -38,6 +39,7 @@ public class GeneralAssistant : IGeneralAssistant
         IMessageStore store,
         ILlmGateway gateway,
         IChatSettingsStore chatSettings,
+        ILlmUsageQuery usageQuery,
         LlmConfig? config,
         IClock clock,
         BuildInfo buildInfo,
@@ -46,6 +48,7 @@ public class GeneralAssistant : IGeneralAssistant
         _store = store;
         _gateway = gateway;
         _chatSettings = chatSettings;
+        _usageQuery = usageQuery;
         _config = config;
         _clock = clock;
         _buildInfo = buildInfo;
@@ -116,6 +119,10 @@ public class GeneralAssistant : IGeneralAssistant
                 await HandleModelCommandAsync(bot, telegramClient, message, familyId, cancellationToken);
                 return;
 
+            case "tokens":
+                await HandleTokensCommandAsync(bot, telegramClient, message, familyId, cancellationToken);
+                return;
+
             case "version":
                 await ReplyAsync(bot, telegramClient, message, VersionText.Format(_buildInfo, _clock.UtcNow), cancellationToken);
                 return;
@@ -124,6 +131,33 @@ public class GeneralAssistant : IGeneralAssistant
                 return; // Unknown command (or /start in a group): silent.
         }
     }
+
+    private const string NoUsageText = "Пока нет данных. Считаются только вызовы после обновления.";
+
+    private async Task HandleTokensCommandAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, long familyId, CancellationToken cancellationToken)
+    {
+        var setting = await _chatSettings.GetAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, cancellationToken);
+        var usage = await _usageQuery.GetChatUsageAsync(
+            familyId, bot.TelegramBotId, message.ChatId, message.TopicId, setting.ContextStartMessageId, cancellationToken);
+        await ReplyAsync(bot, telegramClient, message, DescribeUsage(usage, sinceNew: setting.ContextStartMessageId is not null), cancellationToken);
+    }
+
+    private static string DescribeUsage(LlmUsageSummary usage, bool sinceNew)
+    {
+        if (usage.Models.Count == 0)
+        {
+            return NoUsageText;
+        }
+
+        var header = sinceNew ? "Расход с последнего /new:" : "Расход в этом чате:";
+        var models = string.Join(", ", usage.Models.Select(m => $"{m.Model} ({m.Calls})"));
+        return $"{header}\nОтветов: {FormatNumber(usage.Calls)}\nВходящих токенов: {FormatNumber(usage.InputTokens)}\n" +
+               $"Исходящих токенов: {FormatNumber(usage.OutputTokens)}\nМодели: {models}";
+    }
+
+    // 13345 -> "13 345": invariant digits, plain-space thousands separator (no culture surprises).
+    private static string FormatNumber(long value) =>
+        value.ToString("#,0", CultureInfo.InvariantCulture).Replace(',', ' ');
 
     private async Task HandleModelCommandAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, long familyId, CancellationToken cancellationToken)
     {

@@ -7,6 +7,7 @@ using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
 using Assistant.Infrastructure.Families;
+using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Telegram;
 using Assistant.IntegrationTests.Host;
@@ -99,7 +100,7 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
             FastModels = Array.Empty<ModelCatalogEntry>()
         };
         var generalAssistant = new GeneralAssistant(
-            messageStore, _gateway, new ChatSettingsStore(Db, clock), config, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
+            messageStore, _gateway, new ChatSettingsStore(Db, clock), new LlmUsageQuery(Db), config, clock, buildInfo, NullLogger<GeneralAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, new CurrentFamily(), new NoopManagerUpdateHandler(), generalAssistant, options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
 
