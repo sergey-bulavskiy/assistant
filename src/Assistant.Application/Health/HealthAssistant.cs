@@ -27,8 +27,8 @@ public class HealthAssistant : IHealthAssistant
         "Привет! Я веду дневник здоровья одного участника семьи. Пока я понимаю только команды: " +
         "показатели из сообщений ещё не записываю и значения не проверяю. Не полагайтесь на меня, " +
         "если самочувствие вызывает тревогу, — звоните врачу или в скорую. " +
-        "Я никогда не советую лекарства и дозы инсулина.\n" +
-        "/week — текущий срок\n" +
+        "Я никогда не советую лекарства и их дозы.\n" +
+        "/week — текущая неделя\n" +
         "/profile — профиль\n" +
         "/thresholds — пороги\n" +
         "/version — версия\n" +
@@ -115,7 +115,7 @@ public class HealthAssistant : IHealthAssistant
                 return;
 
             case "week":
-                await ReplyAsync(telegramClient, message, $"Срок: {CurrentWeek(profile).Describe()}", cancellationToken);
+                await ReplyAsync(telegramClient, message, $"Неделя: {CurrentWeek(profile).Describe()}", cancellationToken);
                 return;
 
             case "profile":
@@ -180,7 +180,7 @@ public class HealthAssistant : IHealthAssistant
             : profile.ContextNote;
         return "Профиль:\n" +
                $"Начало отсчёта: {start}\n" +
-               $"Срок: {CurrentWeek(profile).Describe()}\n" +
+               $"Неделя: {CurrentWeek(profile).Describe()}\n" +
                $"Часовой пояс: {profile.TimeZone}\n" +
                $"Телефон для экстренных случаев: {profile.EmergencyPhone}\n" +
                $"Заметка: {note}\n" +
@@ -207,7 +207,7 @@ public class HealthAssistant : IHealthAssistant
         }
 
         await _profiles.SaveProfileAsync(familyId, profile with { StageStartDate = start }, userId, cancellationToken);
-        return $"Начало отсчёта: {start.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)}. Срок: {week.Describe()}";
+        return $"Начало отсчёта: {start.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)}. Неделя: {week.Describe()}";
     }
 
     private async Task<string> SetTimeZoneAsync(long familyId, HealthProfileInfo profile, string? args, long userId, CancellationToken cancellationToken)

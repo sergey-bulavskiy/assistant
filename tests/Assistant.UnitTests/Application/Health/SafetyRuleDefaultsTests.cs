@@ -16,11 +16,9 @@ public class SafetyRuleDefaultsTests
             "blood_pressure.systolic",
             "blood_pressure.diastolic",
             "combo.bp_symptoms",
-            "symptom.reduced_movement",
             "symptom.vision_disturbance",
             "symptom.epigastric_pain",
             "symptom.bleeding",
-            "symptom.fluid_leak",
             "symptom.seizure"
         });
     }
@@ -39,11 +37,9 @@ public class SafetyRuleDefaultsTests
     [InlineData("blood_pressure.systolic", null, null, null, 140.0, 160.0, null, null)]
     [InlineData("blood_pressure.diastolic", null, null, null, 90.0, 110.0, null, null)]
     [InlineData("combo.bp_symptoms", null, null, null, null, null, null, 24)]
-    [InlineData("symptom.reduced_movement", null, null, null, null, null, "urgent", null)]
     [InlineData("symptom.vision_disturbance", null, null, null, null, null, "alert", null)]
     [InlineData("symptom.epigastric_pain", null, null, null, null, null, "alert", null)]
     [InlineData("symptom.bleeding", null, null, null, null, null, "urgent", null)]
-    [InlineData("symptom.fluid_leak", null, null, null, null, null, "urgent", null)]
     [InlineData("symptom.seizure", null, null, null, null, null, "urgent", null)]
     public void Values_match_the_published_defaults(
         string key, double? lowUrgent, double? lowAlert, double? targetHigh, double? highAlert, double? highUrgent,

@@ -14,8 +14,8 @@ public class HealthProfileStoreTests : IntegrationTestBase
     {
         "glucose.any", "glucose.fasting", "glucose.after_1h", "glucose.after_2h",
         "blood_pressure.systolic", "blood_pressure.diastolic", "combo.bp_symptoms",
-        "symptom.reduced_movement", "symptom.vision_disturbance", "symptom.epigastric_pain",
-        "symptom.bleeding", "symptom.fluid_leak", "symptom.seizure"
+        "symptom.vision_disturbance", "symptom.epigastric_pain",
+        "symptom.bleeding", "symptom.seizure"
     };
 
     // A fresh request-like scope: its own context and CurrentFamily (left unset when familyId is null).
@@ -60,7 +60,7 @@ public class HealthProfileStoreTests : IntegrationTestBase
         profiles[0].Id.ShouldBe(info.Id);
 
         var rules = await Db.SafetyRules.ToListAsync();
-        rules.Count.ShouldBe(13);
+        rules.Count.ShouldBe(11);
         rules.ShouldAllBe(r => r.FamilyId == 1 && r.ProfileId == info.Id && r.Source == "guideline_default");
         var glucose = rules.Single(r => r.RuleKey == "glucose.any");
         glucose.LowUrgent.ShouldBe(3.0m);
@@ -72,7 +72,7 @@ public class HealthProfileStoreTests : IntegrationTestBase
         var again = await CreateProfileAsync(1, 10);
         again.Id.ShouldBe(info.Id);
         (await Db.HealthProfiles.CountAsync()).ShouldBe(1);
-        (await Db.SafetyRules.CountAsync()).ShouldBe(13);
+        (await Db.SafetyRules.CountAsync()).ShouldBe(11);
     }
 
     [Fact]

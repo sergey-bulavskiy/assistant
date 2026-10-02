@@ -17,11 +17,9 @@ public static class SafetyRuleDefaults
         Rule("blood_pressure.systolic", highAlert: 140m, highUrgent: 160m),
         Rule("blood_pressure.diastolic", highAlert: 90m, highUrgent: 110m),
         Rule("combo.bp_symptoms", windowHours: 24),
-        Rule("symptom.reduced_movement", symptomLevel: SymptomLevels.Urgent),
         Rule("symptom.vision_disturbance", symptomLevel: SymptomLevels.Alert),
         Rule("symptom.epigastric_pain", symptomLevel: SymptomLevels.Alert),
         Rule("symptom.bleeding", symptomLevel: SymptomLevels.Urgent),
-        Rule("symptom.fluid_leak", symptomLevel: SymptomLevels.Urgent),
         Rule("symptom.seizure", symptomLevel: SymptomLevels.Urgent)
     };
 

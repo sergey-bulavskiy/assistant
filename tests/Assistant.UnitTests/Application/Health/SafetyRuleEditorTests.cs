@@ -89,6 +89,47 @@ public class SafetyRuleEditorTests
         bad.Error.ShouldBe("Уровень: alert или urgent.");
     }
 
+    [Theory]
+    [InlineData("glucose.fasting", "target_high", "51")]
+    [InlineData("glucose.any", "high_urgent", "41")]
+    [InlineData("glucose.any", "low_urgent", "0.5")]
+    public void Glucose_values_outside_1_to_40_are_rejected(string key, string field, string value)
+    {
+        var edit = SafetyRuleEditor.SetField(Rule(key), field, value);
+
+        edit.Rule.ShouldBeNull();
+        edit.Error.ShouldBe("Глюкоза: значение от 1 до 40 ммоль/л.");
+    }
+
+    [Fact]
+    public void Glucose_target_5_1_is_accepted()
+    {
+        var edit = SafetyRuleEditor.SetField(Rule("glucose.fasting"), "target_high", "5.1");
+
+        edit.Error.ShouldBeNull();
+        edit.Rule.ShouldNotBeNull().TargetHigh.ShouldBe(5.1m);
+    }
+
+    [Theory]
+    [InlineData("14")]
+    [InlineData("301")]
+    public void Blood_pressure_values_outside_30_to_300_are_rejected(string value)
+    {
+        var edit = SafetyRuleEditor.SetField(Rule("blood_pressure.systolic"), "high_alert", value);
+
+        edit.Rule.ShouldBeNull();
+        edit.Error.ShouldBe("Давление: значение от 30 до 300 мм рт. ст.");
+    }
+
+    [Fact]
+    public void Blood_pressure_value_140_is_accepted()
+    {
+        var edit = SafetyRuleEditor.SetField(Rule("blood_pressure.systolic"), "high_alert", "140");
+
+        edit.Error.ShouldBeNull();
+        edit.Rule.ShouldNotBeNull().HighAlert.ShouldBe(140m);
+    }
+
     [Fact]
     public void Window_hours_is_an_integer_from_1_to_168()
     {

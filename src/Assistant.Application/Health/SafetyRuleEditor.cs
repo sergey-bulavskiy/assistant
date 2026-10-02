@@ -11,6 +11,8 @@ public sealed record SafetyRuleEdit(SafetyRuleInfo? Rule, string? Error);
 public static class SafetyRuleEditor
 {
     public const string ValueErrorText = "Значение: число больше 0 и меньше 1000, не больше двух знаков после запятой.";
+    public const string GlucoseRangeErrorText = "Глюкоза: значение от 1 до 40 ммоль/л.";
+    public const string BloodPressureRangeErrorText = "Давление: значение от 30 до 300 мм рт. ст.";
     public const string OrderErrorText = "Не сохранено: нужно low_urgent ≤ low_alert ≤ target_high ≤ high_alert ≤ high_urgent.";
     public const string LevelErrorText = "Уровень: alert или urgent.";
     public const string WindowErrorText = "Окно: целое число часов от 1 до 168.";
@@ -59,6 +61,12 @@ public static class SafetyRuleEditor
                     return new SafetyRuleEdit(null, ValueErrorText);
                 }
 
+                var rangeError = PlausibleRangeError(current.RuleKey, number);
+                if (rangeError is not null)
+                {
+                    return new SafetyRuleEdit(null, rangeError);
+                }
+
                 updated = name switch
                 {
                     SafetyRuleFields.LowUrgent => current with { LowUrgent = number },
@@ -77,6 +85,23 @@ public static class SafetyRuleEditor
         }
 
         return new SafetyRuleEdit(updated with { Source = SafetyRuleSources.Doctor }, null);
+    }
+
+    // Per-metric plausibility on top of the global bound, keyed off the rule key prefix: a typo such as
+    // 51 for a glucose target is refused. Any other prefix keeps only the global bound.
+    private static string? PlausibleRangeError(string ruleKey, decimal value)
+    {
+        if (ruleKey.StartsWith("glucose.", StringComparison.OrdinalIgnoreCase))
+        {
+            return value is < 1 or > 40 ? GlucoseRangeErrorText : null;
+        }
+
+        if (ruleKey.StartsWith("blood_pressure.", StringComparison.OrdinalIgnoreCase))
+        {
+            return value is < 30 or > 300 ? BloodPressureRangeErrorText : null;
+        }
+
+        return null;
     }
 
     // Within one rule the thresholds must not cross, so a typo such as 1.1 for 11 is refused.

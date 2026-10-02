@@ -17,8 +17,8 @@ public sealed record StageWeekResult(StageWeekStatus Status, int TotalDays)
     public string Describe() => Status switch
     {
         StageWeekStatus.Valid => $"{Weeks} нед. {Days} дн.",
-        StageWeekStatus.NotSet => "не задан (/setstart)",
-        _ => "не определён — проверьте дату (/setstart)"
+        StageWeekStatus.NotSet => "не задана (/setstart)",
+        _ => "не определена — проверьте дату (/setstart)"
     };
 }
 

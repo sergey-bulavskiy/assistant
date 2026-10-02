@@ -298,7 +298,7 @@ real bots and a real family.
   shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
 - `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
   the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
-  `/week` → "Срок: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that
+  `/week` → "Неделя: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that
   rule as "врач"; `/threshold glucose.any default` restores it.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to

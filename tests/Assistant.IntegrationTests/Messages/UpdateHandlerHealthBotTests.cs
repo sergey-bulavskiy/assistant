@@ -112,12 +112,12 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         await SendAsync(handler, bot, telegram, OwnerId, "/week");
         await SendAsync(handler, bot, telegram, OwnerId, "/week");
 
-        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { "Срок: не задан (/setstart)", "Срок: не задан (/setstart)" });
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { "Неделя: не задана (/setstart)", "Неделя: не задана (/setstart)" });
         var profile = await Db.HealthProfiles.IgnoreQueryFilters().SingleAsync();
         profile.BotId.ShouldBe(bot.BotDbId);
         profile.FamilyId.ShouldBe(bot.FamilyId!.Value);
         var rules = await Db.SafetyRules.IgnoreQueryFilters().ToListAsync();
-        rules.Count.ShouldBe(13);
+        rules.Count.ShouldBe(11);
         rules.ShouldAllBe(r => r.FamilyId == bot.FamilyId.Value);
     }
 
@@ -128,14 +128,14 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         await SendAsync(handler, bot, telegram, OwnerId, "/setstart 15.01.2030");
 
-        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Начало отсчёта: 15.01.2030. Срок: 3 нед. 2 дн.");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Начало отсчёта: 15.01.2030. Неделя: 3 нед. 2 дн.");
         var profile = await Db.HealthProfiles.IgnoreQueryFilters().AsNoTracking().SingleAsync();
         profile.StageStartDate.ShouldBe(new DateOnly(2030, 1, 15));
         profile.UpdatedByUserId.ShouldBe(OwnerId);
 
         telegram.ClearSent();
         await SendAsync(handler, bot, telegram, OwnerId, "/week");
-        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Срок: 3 нед. 2 дн.");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Неделя: 3 нед. 2 дн.");
     }
 
     [Fact]
@@ -213,14 +213,14 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         telegram.ClearSent();
         await SendAsync(handler, botB, telegram, OtherOwnerId, "/week");
 
-        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Срок: не задан (/setstart)");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Неделя: не задана (/setstart)");
         var profiles = await Db.HealthProfiles.IgnoreQueryFilters().AsNoTracking().ToListAsync();
         profiles.Count.ShouldBe(2);
         var profileB = profiles.Single(p => p.BotId == botB.BotDbId);
         profileB.FamilyId.ShouldBe(familyB.Id);
         profileB.StageStartDate.ShouldBeNull();
         var rules = await Db.SafetyRules.IgnoreQueryFilters().AsNoTracking().ToListAsync();
-        rules.Count.ShouldBe(26);
+        rules.Count.ShouldBe(22);
         foreach (var rule in rules)
         {
             rule.FamilyId.ShouldBe(profiles.Single(p => p.Id == rule.ProfileId).FamilyId);

@@ -21,8 +21,8 @@ public class SafetyRuleTextTests
     [Fact]
     public void Formats_symptom_and_combo_rules()
     {
-        SafetyRuleText.Format(SafetyRuleDefaults.Find("symptom.reduced_movement")!)
-            .ShouldBe("symptom.reduced_movement: symptom_level urgent — не подтверждено врачом");
+        SafetyRuleText.Format(SafetyRuleDefaults.Find("symptom.bleeding")!)
+            .ShouldBe("symptom.bleeding: symptom_level urgent — не подтверждено врачом");
         SafetyRuleText.Format(SafetyRuleDefaults.Find("combo.bp_symptoms")!)
             .ShouldBe("combo.bp_symptoms: window_hours 24 — не подтверждено врачом");
     }

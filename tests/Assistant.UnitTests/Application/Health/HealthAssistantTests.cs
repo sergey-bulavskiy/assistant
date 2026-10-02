@@ -71,7 +71,7 @@ public class HealthAssistantTests
     {
         await HandleAsync(Msg("/week"));
 
-        SingleReply().ShouldBe("Срок: не задан (/setstart)");
+        SingleReply().ShouldBe("Неделя: не задана (/setstart)");
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class HealthAssistantTests
 
         await HandleAsync(Msg("/week"));
 
-        SingleReply().ShouldBe("Срок: 3 нед. 2 дн.");
+        SingleReply().ShouldBe("Неделя: 3 нед. 2 дн.");
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class HealthAssistantTests
 
         await HandleAsync(Msg("/week"), clock: new FixedClock(DateTimeOffset.Parse("2030-02-07T22:30:00Z")));
 
-        SingleReply().ShouldBe("Срок: 3 нед. 3 дн.");
+        SingleReply().ShouldBe("Неделя: 3 нед. 3 дн.");
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class HealthAssistantTests
 
         await HandleAsync(Msg("/week"));
 
-        SingleReply().ShouldBe("Срок: не определён — проверьте дату (/setstart)");
+        SingleReply().ShouldBe("Неделя: не определена — проверьте дату (/setstart)");
     }
 
     [Fact]
@@ -128,10 +128,10 @@ public class HealthAssistantTests
         await HandleAsync(Msg("/profile"));
 
         SingleReply().ShouldBe(
-            "Профиль:\nНачало отсчёта: не задано (/setstart)\nСрок: не задан (/setstart)\nЧасовой пояс: UTC\n" +
+            "Профиль:\nНачало отсчёта: не задано (/setstart)\nНеделя: не задана (/setstart)\nЧасовой пояс: UTC\n" +
             "Телефон для экстренных случаев: 103 или 112\n" +
             "Заметка: не задана (/setnote) — без неё ответы на вопросы не знают контекста\n" +
-            "Пороги: правил 13, от врача 0 (/thresholds)");
+            "Пороги: правил 11, от врача 0 (/thresholds)");
 
         _telegram.Sent.Clear();
         _profiles.Profile = new HealthProfileInfo(1, new DateOnly(2030, 1, 15), "Europe/Berlin", "112", "test note");
@@ -142,11 +142,11 @@ public class HealthAssistantTests
 
         var lines = SingleReply().Split('\n');
         lines.ShouldContain("Начало отсчёта: 15.01.2030");
-        lines.ShouldContain("Срок: 3 нед. 2 дн.");
+        lines.ShouldContain("Неделя: 3 нед. 2 дн.");
         lines.ShouldContain("Часовой пояс: Europe/Berlin");
         lines.ShouldContain("Телефон для экстренных случаев: 112");
         lines.ShouldContain("Заметка: test note");
-        lines.ShouldContain("Пороги: правил 13, от врача 1 (/thresholds)");
+        lines.ShouldContain("Пороги: правил 11, от врача 1 (/thresholds)");
     }
 
     [Fact]
@@ -159,9 +159,9 @@ public class HealthAssistantTests
         lines[0].ShouldBe("Пороги (глюкоза в ммоль/л, давление в мм рт. ст.):");
         lines.ShouldContain("glucose.any: low_urgent 3.0, low_alert 3.9, high_alert 11.0, high_urgent 13.9 — не подтверждено врачом");
         lines.ShouldContain("blood_pressure.diastolic: high_alert 90, high_urgent 110 — не подтверждено врачом");
-        lines.ShouldContain("symptom.reduced_movement: symptom_level urgent — не подтверждено врачом");
+        lines.ShouldContain("symptom.bleeding: symptom_level urgent — не подтверждено врачом");
         lines.ShouldContain("combo.bp_symptoms: window_hours 24 — не подтверждено врачом");
-        lines.Count(l => l.EndsWith("— не подтверждено врачом")).ShouldBe(13);
+        lines.Count(l => l.EndsWith("— не подтверждено врачом")).ShouldBe(11);
         reply.ShouldEndWith("Вернуть по умолчанию: /threshold <правило> default.");
 
         _telegram.Sent.Clear();
@@ -257,7 +257,7 @@ public class HealthAssistantTests
 
         _profiles.Profile.StageStartDate.ShouldBe(new DateOnly(2030, 1, 15));
         _profiles.LastUpdatedByUserId.ShouldBe(111);
-        SingleReply().ShouldBe("Начало отсчёта: 15.01.2030. Срок: 3 нед. 2 дн.");
+        SingleReply().ShouldBe("Начало отсчёта: 15.01.2030. Неделя: 3 нед. 2 дн.");
 
         await HandleAsync(Msg("/setstart 5.1.2030"));
         _profiles.Profile.StageStartDate.ShouldBe(new DateOnly(2030, 1, 5));
@@ -265,7 +265,7 @@ public class HealthAssistantTests
         _telegram.Sent.Clear();
         await HandleAsync(Msg("/setstart 13.04.2029"));
         _profiles.Profile.StageStartDate.ShouldBe(new DateOnly(2029, 4, 13));
-        SingleReply().ShouldEndWith("Срок: 42 нед. 6 дн.");
+        SingleReply().ShouldEndWith("Неделя: 42 нед. 6 дн.");
     }
 
     [Theory]

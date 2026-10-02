@@ -12,7 +12,7 @@ public class StageWeekTests
         var result = StageWeek.Compute(Today, null);
 
         result.Status.ShouldBe(StageWeekStatus.NotSet);
-        result.Describe().ShouldBe("не задан (/setstart)");
+        result.Describe().ShouldBe("не задана (/setstart)");
     }
 
     [Theory]
@@ -35,6 +35,6 @@ public class StageWeekTests
         var result = StageWeek.Compute(Today, DateOnly.Parse(start));
 
         result.Status.ShouldBe(StageWeekStatus.OutOfRange);
-        result.Describe().ShouldBe("не определён — проверьте дату (/setstart)");
+        result.Describe().ShouldBe("не определена — проверьте дату (/setstart)");
     }
 }
