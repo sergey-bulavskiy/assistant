@@ -28,6 +28,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
     private readonly IApprovalService _approvals;
     private readonly IClock _clock;
     private readonly UsageCommandHandler _usageHandler;
+    private readonly SettingsCommandHandler _settingsHandler;
     private readonly ILogger<ManagerUpdateHandler> _logger;
 
     public ManagerUpdateHandler(
@@ -40,6 +41,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         IApprovalService approvals,
         IClock clock,
         UsageCommandHandler usageHandler,
+        SettingsCommandHandler settingsHandler,
         ILogger<ManagerUpdateHandler> logger)
     {
         _db = db;
@@ -51,6 +53,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         _approvals = approvals;
         _clock = clock;
         _usageHandler = usageHandler;
+        _settingsHandler = settingsHandler;
         _logger = logger;
     }
 
@@ -92,7 +95,7 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
 
         if (command == "settings")
         {
-            await HandleSettingsAsync(chatId, topicId, userId, telegramClient, cancellationToken);
+            await _settingsHandler.HandleSettingsAsync(chatId, topicId, userId, telegramClient, cancellationToken);
             return;
         }
 
@@ -115,90 +118,6 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
         {
             _logger.LogInformation("manager received an unhandled command: {Command}", command);
             await telegramClient.SendTextAsync(chatId, topicId, "Неизвестная команда.", replyToMessageId: null, cancellationToken);
-        }
-    }
-
-    private async Task HandleSettingsAsync(long chatId, int? topicId, long userId, ITelegramClient telegramClient, CancellationToken cancellationToken)
-    {
-        var caller = await _db.FamilyMembers.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(m => m.TelegramUserId == userId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
-        if (caller is null)
-        {
-            await telegramClient.SendTextAsync(chatId, topicId, "Только владелец семьи может использовать /settings.", replyToMessageId: null, cancellationToken);
-            return;
-        }
-
-        var familyId = caller.FamilyId;
-
-        var bots = await _db.Bots.IgnoreQueryFilters().Where(b => b.FamilyId == familyId).ToListAsync(cancellationToken);
-        if (bots.Count == 0)
-        {
-            await telegramClient.SendTextAsync(chatId, topicId, "Боты: нет.", replyToMessageId: null, cancellationToken);
-        }
-        foreach (var bot in bots)
-        {
-            var statusLabel = bot.Status == BotStatus.Active ? "активен" : "отключен";
-            var toggleButton = bot.Status == BotStatus.Active
-                ? new InlineButton("Отключить", $"bot_disable:{bot.Id}")
-                : new InlineButton("Включить", $"bot_enable:{bot.Id}");
-            await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"Бот @{bot.Username} (роль {bot.Role}): {statusLabel}",
-                new[] { toggleButton, new InlineButton("Удалить", $"bot_remove:{bot.Id}") }, cancellationToken);
-        }
-
-        var botIds = bots.Select(b => b.Id).ToList();
-        var places = await _db.Places.IgnoreQueryFilters().Where(p => botIds.Contains(p.BotId)).ToListAsync(cancellationToken);
-        if (places.Count == 0)
-        {
-            await telegramClient.SendTextAsync(chatId, topicId, "Места: нет.", replyToMessageId: null, cancellationToken);
-        }
-        foreach (var place in places)
-        {
-            var statusLabel = place.Status switch
-            {
-                PlaceStatus.Approved => "активно",
-                PlaceStatus.Disabled => "отключено",
-                PlaceStatus.Denied => "отклонено",
-                _ => "ожидает"
-            };
-            var toggleButton = place.Status == PlaceStatus.Disabled
-                ? new InlineButton("Включить", $"settingsplace_enable:{place.Id}")
-                : new InlineButton("Отключить", $"settingsplace_disable:{place.Id}");
-            await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"Место «{place.Title}»: {statusLabel}",
-                new[] { toggleButton, new InlineButton("Удалить", $"settingsplace_remove:{place.Id}") }, cancellationToken);
-        }
-
-        var members = await _db.FamilyMembers.IgnoreQueryFilters().Where(m => m.FamilyId == familyId).ToListAsync(cancellationToken);
-        foreach (var member in members)
-        {
-            var statusLabel = member.Status switch
-            {
-                FamilyMemberStatus.Approved => "активен",
-                FamilyMemberStatus.Denied => "отключен",
-                _ => "ожидает"
-            };
-            // A pending member gets the same Allow/Deny as the approval DM, resolved through the
-            // same path, so the DM's buttons are closed too. Ownership is offered only once
-            // approved, since it grants nothing before that.
-            var buttons = member.Status switch
-            {
-                FamilyMemberStatus.Pending => new[]
-                {
-                    new InlineButton("Разрешить", $"member_allow:{member.Id}"),
-                    new InlineButton("Отклонить", $"member_deny:{member.Id}")
-                },
-                FamilyMemberStatus.Denied => new[] { new InlineButton("Включить", $"member_enable:{member.Id}") },
-                _ when member.IsOwner => new[] { new InlineButton("Отключить", $"member_disable:{member.Id}") },
-                _ => new[]
-                {
-                    new InlineButton("Отключить", $"member_disable:{member.Id}"),
-                    new InlineButton("Сделать владельцем", $"member_makeowner:{member.Id}")
-                }
-            };
-            await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"{member.DisplayName}{(member.IsOwner ? " (владелец)" : string.Empty)}: {statusLabel}",
-                buttons, cancellationToken);
         }
     }
 
@@ -368,134 +287,20 @@ public class ManagerUpdateHandler : IManagerUpdateHandler
                     callback.CallbackQueryId, resolution == ApprovalResolution.Applied ? "Записано." : "Уже решено.", cancellationToken);
                 return;
             }
-            case "bot_disable":
-            case "bot_enable":
-            {
-                var bot = await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
-                // A null FamilyId means this is the manager bot itself — never toggleable via this
-                // family-scoped path, so it is treated the same as "not authorized".
-                if (bot is null || bot.FamilyId is null || !await IsApprovedOwnerAsync(callback.FromUserId, bot.FamilyId.Value, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                bot.Status = parts[0] == "bot_enable" ? BotStatus.Active : BotStatus.Disabled;
-                await _db.SaveChangesAsync(cancellationToken);
-                if (parts[0] == "bot_enable")
-                {
-                    await _coordinator.StartBotAsync(id, cancellationToken);
-                }
-                else
-                {
-                    await _coordinator.StopBotAsync(id);
-                }
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Готово.", cancellationToken);
-                return;
-            }
-            case "bot_remove":
-            {
-                var bot = await _db.Bots.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
-                if (bot is null || bot.FamilyId is null || !await IsApprovedOwnerAsync(callback.FromUserId, bot.FamilyId.Value, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                await _coordinator.StopBotAsync(id);
-                // No FK between places.bot_id and bots.id (family-scoped tables reference their
-                // parent loosely, like FamilyMember does with family_id), so removing the bot alone
-                // would leave its places as permanently orphaned rows — delete them together.
-                var places = await _db.Places.IgnoreQueryFilters().Where(p => p.BotId == id).ToListAsync(cancellationToken);
-                _db.Places.RemoveRange(places);
-                _db.Bots.Remove(bot);
-                await _db.SaveChangesAsync(cancellationToken);
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Бот удалён.", cancellationToken);
-                return;
-            }
-            case "settingsplace_disable":
-            case "settingsplace_enable":
-            {
-                var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
-                var placeFamilyId = place is null
-                    ? null
-                    : await _db.Bots.IgnoreQueryFilters().Where(b => b.Id == place.BotId).Select(b => (long?)b.FamilyId).FirstOrDefaultAsync(cancellationToken);
-                if (place is null || placeFamilyId is null || !await IsApprovedOwnerAsync(callback.FromUserId, placeFamilyId.Value, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                place.Status = parts[0] == "settingsplace_enable" ? PlaceStatus.Approved : PlaceStatus.Disabled;
-                await _db.SaveChangesAsync(cancellationToken);
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Готово.", cancellationToken);
-                return;
-            }
-            case "settingsplace_remove":
-            {
-                var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
-                var placeFamilyId = place is null
-                    ? null
-                    : await _db.Bots.IgnoreQueryFilters().Where(b => b.Id == place.BotId).Select(b => (long?)b.FamilyId).FirstOrDefaultAsync(cancellationToken);
-                if (place is null || placeFamilyId is null || !await IsApprovedOwnerAsync(callback.FromUserId, placeFamilyId.Value, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                _db.Places.Remove(place);
-                await _db.SaveChangesAsync(cancellationToken);
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Место удалено.", cancellationToken);
-                return;
-            }
-            case "member_disable":
-            case "member_enable":
-            {
-                var member = await _db.FamilyMembers.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
-                if (member is null || !await IsApprovedOwnerAsync(callback.FromUserId, member.FamilyId, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                member.Status = parts[0] == "member_enable" ? FamilyMemberStatus.Approved : FamilyMemberStatus.Denied;
-                member.UpdatedAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(cancellationToken);
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Готово.", cancellationToken);
-                return;
-            }
-            case "member_makeowner":
-            {
-                var member = await _db.FamilyMembers.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == id, cancellationToken);
-                if (member is null || !await IsApprovedOwnerAsync(callback.FromUserId, member.FamilyId, cancellationToken))
-                {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "У вас нет прав.", cancellationToken);
-                    return;
-                }
-
-                // Does not check member.Status: a still-Pending/Denied member can be flagged
-                // IsOwner = true here, but that's inert on its own — IsApprovedOwnerAsync (the only
-                // place ownership actually grants anything) separately requires
-                // Status == Approved, so promotion has no effect until the member is also approved.
-                member.IsOwner = true;
-                member.UpdatedAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(cancellationToken);
-                await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Теперь владелец.", cancellationToken);
-                return;
-            }
             default:
+                if (SettingsCommandHandler.HandlesCallback(parts[0]))
+                {
+                    await _settingsHandler.HandleCallbackAsync(callback, parts[0], id, telegramClient, cancellationToken);
+                    return;
+                }
+
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Пока не реализовано", cancellationToken);
                 return;
         }
     }
 
-    // Approval-button taps carry only a guessable sequential id (place_approve:1, member_allow:2, …),
-    // so the button data itself proves nothing about who is tapping. The DM was sent to the owning
-    // family's owners, so resolving it must be gated on the tapping user actually being one of them —
-    // not just an owner of some other family.
-    private async Task<bool> IsApprovedOwnerAsync(long userId, long familyId, CancellationToken cancellationToken) =>
-        await _db.FamilyMembers.IgnoreQueryFilters()
-            .AnyAsync(m => m.TelegramUserId == userId && m.FamilyId == familyId && m.IsOwner && m.Status == FamilyMemberStatus.Approved, cancellationToken);
+    private Task<bool> IsApprovedOwnerAsync(long userId, long familyId, CancellationToken cancellationToken) =>
+        ManagerOwnership.IsApprovedOwnerAsync(_db, userId, familyId, cancellationToken);
 
     private async Task HandleManagedBotCreatedAsync(
         long creatorUserId, long newBotUserId, ITelegramClient telegramClient, CancellationToken cancellationToken)

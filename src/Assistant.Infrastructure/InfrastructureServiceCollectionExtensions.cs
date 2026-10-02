@@ -39,6 +39,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<IManagerUpdateHandler, ManagerUpdateHandler>();
         services.AddScoped<UsageCommandHandler>();
+        services.AddScoped<SettingsCommandHandler>();
         services.AddSingleton<IClaimCodeProvider, ClaimCodeProvider>();
         services.AddScoped<IPendingBotCreations, PendingBotCreations>();
         services.AddScoped<IChatSettingsStore, ChatSettingsStore>();
