@@ -1,5 +1,6 @@
 using Assistant.Application;
 using Assistant.Application.Common;
+using Assistant.Application.Llm;
 using Assistant.Application.Manager;
 using Assistant.Host;
 using Assistant.Infrastructure;
@@ -94,6 +95,13 @@ using (var scope = app.Services.CreateScope())
     {
         app.Logger.LogInformation("LLM disabled");
     }
+}
+
+// Role prompts are embedded at build time. A missing one turns that role's LLM features off (they
+// get null from IRolePrompts.Find), never the app.
+foreach (var missing in app.Services.GetRequiredService<IRolePrompts>().Missing)
+{
+    app.Logger.LogError("Role prompt resource missing: {Resource}", missing);
 }
 
 await app.RunAsync();

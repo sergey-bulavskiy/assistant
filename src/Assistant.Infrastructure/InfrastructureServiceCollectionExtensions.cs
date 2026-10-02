@@ -13,6 +13,7 @@ using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Llm.ClaudeCli;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Roles;
 using Assistant.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -49,6 +50,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ILlmUsageQuery, LlmUsageQuery>();
         // Health data: scoped on the request's DI scope only (fails closed without ICurrentFamily).
         services.AddScoped<IHealthProfileStore, HealthProfileStore>();
+        services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.
         // The app must always start -- parsing/validation never throws and nothing here is

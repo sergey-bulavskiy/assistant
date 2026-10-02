@@ -10,3 +10,5 @@ docs/
 .github/
 .superpowers/
 *.md
+# Role prompts are .md files compiled into the app as embedded resources: keep them.
+!roles/**/*.md

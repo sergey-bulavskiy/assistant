@@ -13,6 +13,7 @@ COPY src/Assistant.Host/Assistant.Host.csproj src/Assistant.Host/
 RUN dotnet restore src/Assistant.Host/Assistant.Host.csproj
 
 COPY src/ src/
+COPY roles/ roles/
 RUN dotnet publish src/Assistant.Host/Assistant.Host.csproj -c Release -o /app/publish --no-restore
 
 FROM ${DOTNET_RUNTIME_IMAGE} AS final
