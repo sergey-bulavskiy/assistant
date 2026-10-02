@@ -2,8 +2,9 @@
 
 A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
 **role bots** for it; role bots quietly record the messages of approved people in approved chats
-into PostgreSQL, and one role bot -- the **General assistant** -- can also answer with a real LLM
-(the Claude Code CLI on a Claude subscription) once configured. Later milestones add more assistant
+into PostgreSQL, one role bot -- the **General assistant** -- can also answer with a real LLM
+(the Claude Code CLI on a Claude subscription) once configured, and a **health** role bot keeps a household member's tracking profile and safety
+thresholds. Later milestones add more assistant
 features on top of this pipeline.
 
 ## What it does
@@ -49,6 +50,32 @@ of just storing messages.
 - Needs `LLM_MODELS` and `CLAUDE_CODE_OAUTH_TOKEN` configured (see "Set up the General assistant"
   below) — without them it replies "Ассистент пока не настроен." and every other bot keeps working
   normally.
+
+**Health assistant** (a role bot created with `/newbot health`): a health tracking assistant for one
+household member. One health bot tracks exactly one person (its profile, created with
+published-guideline default thresholds on its first message). Turn off Group Privacy for it
+(step 5) before adding it to the tracking group or topic.
+
+> **Not ready to rely on yet.** For now it understands only the commands below: it does not record
+> readings from messages, does not check values and sends no alerts. Ordinary messages in its chats
+> are stored and otherwise ignored.
+
+| Command | Who | What |
+|---|---|---|
+| `/start` | anyone, private chat | What the bot does and its commands. |
+| `/week` | any approved member | Current stage week and day ("3 нед. 2 дн."), counted from the stage start date in the profile's time zone. |
+| `/profile` | any approved member | Stage start date, stage week, time zone, emergency phone, context note, thresholds summary. |
+| `/thresholds` | any approved member | Every safety rule with its values and source: "врач" (entered with `/threshold`) or "не подтверждено врачом" (published-guideline defaults). |
+| `/setstart ДД.ММ.ГГГГ` | owners | Sets the stage start date (not in the future, at most 300 days ago). |
+| `/settz Area/City` | owners | Sets the profile's time zone (IANA id such as `Europe/Berlin`; default `UTC`). |
+| `/setphone <text>` | owners | Emergency number text for alerts (default "103 или 112"; up to 100 characters). |
+| `/setnote <text>` | owners | Context note for answering questions (up to 500 characters); `/setnote -` clears it. |
+| `/threshold <rule> <field> <value>` | owners | Sets one value of a rule (only the fields `/thresholds` shows for it); the rule's source becomes "врач". Enter the doctor's values. |
+| `/threshold <rule> default` | owners | Restores that rule's default values. |
+| `/version` | anyone | Running version. |
+
+Other members get "Только владелец семьи может менять профиль." for owner commands. Voice messages
+and photos in a private chat get a note that only text is supported for now.
 
 ## Privacy
 
@@ -269,6 +296,10 @@ real bots and a real family.
 - With a General assistant in an approved group: `/settings` → tap "Отвечать на все: выкл" on that
   group's place → an ordinary message without a mention gets an answer; `/tokens` in the group then
   shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
+- `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
+  the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
+  `/week` → "Срок: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that
+  rule as "врач"; `/threshold glucose.any default` restores it.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.
