@@ -282,7 +282,7 @@ public class GeneralAssistant : IGeneralAssistant
 
     // The refusal type only -- never message or answer text.
     private void LogSilentRefusal(LlmRefusalReason? reason) =>
-        _logger.LogInformation("reply-to-all message not answered: {RefusalReason}", reason);
+        _logger.LogDebug("reply-to-all message not answered: {RefusalReason}", reason);
 
     private string BuildSystemPrompt(bool isGroup)
     {
