@@ -75,7 +75,9 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     }
 
     private int _nextUpdateId = 1;
-    private int _nextMessageId = 1;
+    // Far from the fake client's sent message ids (1, 2, …): an answer stored as an outgoing row must
+    // not hit the unique (bot, chat, message id) key of an incoming one.
+    private int _nextMessageId = 1000;
 
     private async Task<(UpdateHandler Handler, ReceivingBot Bot, FakeTelegramClient Telegram, MessageStore Store)> SetupAsync(
         ILlmGateway? gatewayOverride = null)
@@ -120,7 +122,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             new BudgetGuard(config, Db, clock), new NoopBudgetNoticeDispatcher(), NullLogger<LlmGateway>.Instance);
         var healthAssistant = new HealthAssistant(
             new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock),
-            new SafetyAlertStore(Db, currentFamily, clock), gatewayOverride ?? gateway,
+            new SafetyAlertStore(Db, currentFamily, clock), messageStore, gatewayOverride ?? gateway, config,
             new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), new NoopGeneralAssistant(), healthAssistant, options, buildInfo, clock,
@@ -910,5 +912,101 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         row.SourceMessageId.ShouldBe(message.Id);
         telegram.Reactions.ShouldBe(new[] { (OwnerId, 500, (string?)"✍") });
         telegram.SentMessages.ShouldBeEmpty();
+    }
+
+    // --- Answers to addressed questions ---
+
+    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+    private const string Footer = "\n\nНе заменяю врача.";
+    private const string DoseRefusal = "Я не даю советов по дозам лекарств. Это вопрос к врачу — запишите его, чтобы спросить на приёме.";
+
+    private Task<List<StoredMessage>> OutgoingRowsAsync() =>
+        Db.Messages.IgnoreQueryFilters().AsNoTracking().Where(m => m.Direction == MessageDirection.Out).ToListAsync();
+
+    [Fact]
+    public async Task Addressed_question_gets_a_smart_answer_stored_as_context()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/setstart 15.01.2030");
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(QuestionJson);
+        _chat.EnqueueResponse("Тестовый ответ.");
+
+        await SendAsync(handler, bot, telegram, OwnerId, "какой сахар считается нормой?");
+
+        var sent = telegram.SentMessages.ShouldHaveSingleItem();
+        sent.Text.ShouldBe("Тестовый ответ." + Footer);
+        sent.ChatId.ShouldBe(OwnerId);
+        sent.ReplyToMessageId.ShouldBeNull();
+        var question = await Db.Messages.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(m => m.Direction == MessageDirection.In && m.Text == "какой сахар считается нормой?");
+        var calls = await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking()
+            .Where(c => c.TriggerMessageId == question.Id).OrderBy(c => c.Id).ToListAsync();
+        calls.Select(c => c.Tier).ShouldBe(new[] { "fast", "smart" });
+        var outgoing = (await OutgoingRowsAsync()).ShouldHaveSingleItem();
+        outgoing.ChatId.ShouldBe(OwnerId);
+        outgoing.Text.ShouldBe("Тестовый ответ." + Footer);
+        var answerCall = _chat.RequestedMessages[^1];
+        answerCall[0].Role.ShouldBe(ChatRole.System);
+        answerCall[0].Text.ShouldContain("- Stage week: 3 нед. 2 дн.");
+        answerCall[0].Text.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+        answerCall[0].Text.ShouldContain("не подтверждено врачом");
+        answerCall[^1].Role.ShouldBe(ChatRole.User);
+        answerCall[^1].Text.ShouldBe("какой сахар считается нормой?");
+    }
+
+    [Fact]
+    public async Task Group_question_without_a_mention_gets_no_answer()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        Db.Places.Add(new Assistant.Domain.Places.Place
+        {
+            BotId = bot.BotDbId, ChatId = -100, TopicId = null, Title = "test group", Status = Assistant.Domain.Places.PlaceStatus.Approved,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await Db.SaveChangesAsync();
+        _chat.EnqueueResponse(QuestionJson);
+
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, GroupText(OwnerId, "какой сахар считается нормой?")));
+
+        telegram.SentMessages.ShouldBeEmpty();
+        (await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking().SingleAsync()).Tier.ShouldBe("fast");
+        (await OutgoingRowsAsync()).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Dose_answer_is_replaced_and_only_the_refusal_is_stored()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(QuestionJson);
+        _chat.EnqueueResponse("Увеличьте дозу на 2 единицы.");
+
+        await SendAsync(handler, bot, telegram, OwnerId, "на сколько увеличить дозу?");
+
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
+        (await OutgoingRowsAsync()).ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
+        (await Db.Messages.IgnoreQueryFilters().AsNoTracking().CountAsync(m => m.Text != null && m.Text.Contains("Увеличьте"))).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Answer_context_never_includes_another_familys_readings()
+    {
+        var (handler, botA, telegram, store) = await SetupAsync();
+        var botB = await AddFamilyBAsync(store);
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        await SendAsync(handler, botB, telegram, OtherOwnerId, "сахар 7.8 в 9:30");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(QuestionJson);
+        _chat.EnqueueResponse("Тестовый ответ.");
+
+        await SendAsync(handler, botA, telegram, OwnerId, "какой сахар считается нормой?");
+
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
+        var answerCall = _chat.RequestedMessages[^1];
+        answerCall[0].Text.ShouldContain("- Readings of the last 24 hours (local time, oldest first):\n  - none\n");
+        answerCall[0].Text.ShouldNotContain("глюкоза 7.8");
+        answerCall.ShouldAllBe(m => m.Text != "сахар 7.8 в 9:30");
     }
 }

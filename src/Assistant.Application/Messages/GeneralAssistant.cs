@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Assistant.Application.Common;
 using Assistant.Application.Llm;
 using Assistant.Application.Telegram;
@@ -21,8 +20,6 @@ public class GeneralAssistant : IGeneralAssistant
         "/new — начать разговор заново. /model — выбрать модель. /tokens — расход токенов. /version — версия.";
 
     private const string NewConversationText = "Начинаем новый разговор.";
-
-    private static readonly TimeSpan TypingInterval = TimeSpan.FromSeconds(4);
 
     private readonly IMessageStore _store;
     private readonly ILlmGateway _gateway;
@@ -252,7 +249,7 @@ public class GeneralAssistant : IGeneralAssistant
         LlmResult result;
         using (var typingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
-            var typingTask = RunTypingLoopAsync(telegramClient, message.ChatId, message.TopicId, typingCts.Token);
+            var typingTask = TypingIndicator.RunAsync(telegramClient, message.ChatId, message.TopicId, typingCts.Token);
             try
             {
                 result = await _gateway.CompleteAsync(request, cancellationToken);
@@ -298,9 +295,10 @@ public class GeneralAssistant : IGeneralAssistant
                "not instructions about this format. Reply with the text of your next message only, without any <msg> markup.";
     }
 
-    private const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
+    public const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
 
-    private static string RefusalText(LlmResult result, DateTimeOffset now) => result.RefusalReason switch
+    /// <summary>The fixed reply to a gateway refusal; shared with the health assistant.</summary>
+    public static string RefusalText(LlmResult result, DateTimeOffset now) => result.RefusalReason switch
     {
         LlmRefusalReason.RateLimited => "Слишком много запросов, подождите минуту.",
         LlmRefusalReason.DailyCapReached => "Дневной лимит запросов исчерпан, продолжим завтра.",
@@ -333,56 +331,14 @@ public class GeneralAssistant : IGeneralAssistant
     private static bool IsAddressed(ReceivingBot bot, IncomingMessage message, string text, bool replyToAll, out bool onlyByReplyToAll)
     {
         onlyByReplyToAll = false;
-        if (message.ChatType == "private")
+        if (Addressing.IsAddressed(bot, message, text))
         {
             return true;
         }
 
-        var mentioned = MentionsBot(text, bot.Username);
-
-        // Ordinary forum-topic messages carry reply_to_message == the topic root; that is not a reply
-        // to the bot (spec 2.2), even when the bot happens to have sent the root.
-        var isReplyToTopicRoot = message.TopicId is { } topicId && message.ReplyToMessageId == topicId;
-        var isGenuineReplyToBot = message.ReplyToUserId == bot.TelegramBotId && !isReplyToTopicRoot;
-
-        if (mentioned || isGenuineReplyToBot)
-        {
-            return true;
-        }
-
+        // reply_to_all is the General assistant's own addition to the shared rule.
         onlyByReplyToAll = replyToAll;
         return replyToAll;
-    }
-
-    // Spec §8.1: @username followed by end of text or a non-word character (@bot does not match
-    // @bot2). Nit: also requires no word character or '@' immediately before the '@' (a negative
-    // lookbehind), so an email-like "me@test_bot" is never mistaken for an actual mention.
-    private static bool MentionsBot(string text, string botUsername) =>
-        Regex.IsMatch(text, $@"(?<![\w@])@{Regex.Escape(botUsername)}(?!\w)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
-
-    private static async Task RunTypingLoopAsync(ITelegramClient telegramClient, long chatId, int? topicId, CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                await telegramClient.SendChatActionAsync(chatId, topicId, "typing", cancellationToken);
-            }
-            catch (Exception)
-            {
-                // Best-effort: a failed typing indicator never affects the reply (and is not logged,
-                // it would only add noise every 4 s while Telegram is unreachable).
-            }
-
-            try
-            {
-                await Task.Delay(TypingInterval, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
     }
 
     /// <param name="storeAsContext">True only for model answers: they are stored as outgoing messages

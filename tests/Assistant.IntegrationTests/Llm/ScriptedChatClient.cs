@@ -12,6 +12,9 @@ public class ScriptedChatClient : IChatClient
 
     public List<string?> RequestedModelIds { get; } = new();
 
+    /// <summary>The messages of every call, in order (system prompt first).</summary>
+    public List<List<ChatMessage>> RequestedMessages { get; } = new();
+
     public void EnqueueResponse(string text, int inputTokens = 1, int outputTokens = 1) =>
         _script.Enqueue(_ => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text))
         {
@@ -77,6 +80,7 @@ public class ScriptedChatClient : IChatClient
 
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
+        RequestedMessages.Add(messages.ToList());
         RequestedModelIds.Add(options?.ModelId);
         if (_script.Count == 0)
         {

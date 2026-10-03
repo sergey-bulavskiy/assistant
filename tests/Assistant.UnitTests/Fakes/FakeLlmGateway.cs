@@ -17,6 +17,12 @@ public class FakeLlmGateway : ILlmGateway
     /// <summary>When set, CompleteAsync records the request and then throws this.</summary>
     public Exception? ThrowOnComplete { get; set; }
 
+    /// <summary>Results returned one per call, in order; NextResult once it is empty.</summary>
+    public Queue<LlmResult> Results { get; } = new();
+
+    /// <summary>1-based call number → exception thrown by that call after it is recorded.</summary>
+    public Dictionary<int, Exception> ThrowOnCall { get; } = new();
+
     public List<LlmRequest> Requests { get; } = new();
 
     public LlmRequest? LastRequest => Requests.LastOrDefault();
@@ -28,6 +34,11 @@ public class FakeLlmGateway : ILlmGateway
     public async Task<LlmResult> CompleteAsync(LlmRequest request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
+        if (ThrowOnCall.TryGetValue(Requests.Count, out var callException))
+        {
+            throw callException;
+        }
+
         if (ThrowOnComplete is { } exception)
         {
             throw exception;
@@ -38,6 +49,6 @@ public class FakeLlmGateway : ILlmGateway
             await wait.WaitAsync(cancellationToken);
         }
 
-        return NextResult;
+        return Results.Count > 0 ? Results.Dequeue() : NextResult;
     }
 }

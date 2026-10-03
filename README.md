@@ -99,9 +99,28 @@ gets the fixed alert followed by "Ничего не записано — пов�
 that is not plausible (e.g. "сахар 250", most likely another unit) gets the clarification; neither
 is throttled. Readings written any other way get only the failure notice when extraction failed.
 
+**Questions.** The bot answers a question only when it is addressed: in a private chat every message
+is, in a group or topic only a message that mentions the bot (`@username`) or replies to one of its
+messages (the place's "reply to all" setting is ignored for this bot). The extraction call tells
+whether a message is a question; a message the bot recorded as a reading, or that got a clarification
+or a quick-scan reply, is never also answered (a message that is both a reading and a question gets
+only the reaction or the clarification). If extraction fails on an addressed question, only the
+failure notice is sent, no answer. The answer is a second model call on the `smart` tier
+(`LLM_MODELS` order) with the profile's context: the stage week, the context note (`/setnote`), the
+thresholds with their source and the readings of the last 24 hours, plus the last few messages of the
+chat. Answers never contain dose advice: besides the instruction in the prompt, a fixed filter in
+code replaces any answer that looks like dose advice with "Я не даю советов по дозам лекарств. Это
+вопрос к врачу — …". The filter is conservative and may over-refuse a harmless answer: it also
+refuses a number with a dose unit next to a time of day, and any answer with letters other than Latin
+or Cyrillic (answers are asked for in Russian, or in English for an English question). Every answer
+ends with "Не заменяю врача." When the model is unavailable the bot replies with the General
+assistant's short notices ("Слишком много запросов, подождите минуту.", …). Answers are kept as
+conversation context; alerts and other fixed texts are not.
+
 Extraction makes one LLM call per text message in the health bot's chats. These calls count toward
 `LLM_CALLS_PER_DAY` and `LLM_CALLS_PER_MINUTE`, which are per family, per UTC day, and shared with
-the General bot — raise `LLM_CALLS_PER_DAY` accordingly.
+the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question makes one more call
+(`smart` tier) that counts the same way.
 
 | Command | Who | What |
 |---|---|---|
@@ -359,6 +378,11 @@ real bots and a real family.
   `/today` shows only "вес 71.5 кг"; edit it to "просто текст" → the ✍ disappears and `/today` says
   "Сегодня записей нет.". "сахар 5.5", edited to "сахар 2.5" → the 🚨 alert once; edit it again to
   "Сахар 2.5" → no second alert.
+- In a private chat with the health bot (stage start set, one reading posted): "какой сахар считается
+  нормой натощак?" → an answer that can refer to the stage week or the thresholds, ending with "Не
+  заменяю врача."; "на сколько единиц увеличить дозу?" → "Я не даю советов по дозам лекарств. …"
+  followed by "Не заменяю врача.". In the tracking group the same question without a mention → no
+  answer; with `@<health bot username>` → an answer as a reply.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

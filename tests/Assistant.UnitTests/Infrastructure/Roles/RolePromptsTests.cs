@@ -17,6 +17,25 @@ public class RolePromptsTests
     }
 
     [Fact]
+    public void Answer_prompt_is_written_and_forbids_doses()
+    {
+        var prompts = new RolePrompts(typeof(RolePrompts).Assembly);
+
+        var text = prompts.Find("health", "prompt.md");
+
+        text.ShouldNotBeNull();
+        text.ShouldNotContain("Placeholder");
+        text.ShouldContain("household member");
+        text.ShouldContain("dose");
+        text.ShouldContain("Answer only in Russian, or in English when the question is in English");
+        text.ShouldNotContain("language of the question");
+        text.ShouldContain("doctor");
+        text.ShouldContain("не подтверждено врачом");
+        text.ShouldContain("<msg");
+        text.ShouldContain(DoseAdviceFilter.RefusalText);
+    }
+
+    [Fact]
     public void Extraction_prompt_describes_the_json_contract()
     {
         var prompts = new RolePrompts(typeof(RolePrompts).Assembly);
