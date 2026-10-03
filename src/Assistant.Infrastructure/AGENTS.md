@@ -19,8 +19,8 @@
 - Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
   redelivery, including after an idle offset re-base, must not create duplicates or duplicate
   replies); integration tests in `tests/.../Persistence` cover it.
-- Health tables (`health_profiles`, `safety_rules`, `events`, `safety_alerts`) are family-scoped **and fail closed**:
-  `HealthProfileStore`, `EventStore` and `SafetyAlertStore` take `familyId` on every call and throw `InvalidOperationException` when
+- Health tables (`health_profiles`, `safety_rules`, `events`, `safety_alerts`, `pending_records`) are family-scoped **and fail closed**:
+  `HealthProfileStore`, `EventStore`, `SafetyAlertStore` and `PendingRecordStore` take `familyId` on every call and throw `InvalidOperationException` when
   `ICurrentFamily.FamilyId` is unset or another family. Never `IgnoreQueryFilters()` on them, and
   never touch them from a fresh DI scope (`ICurrentFamily` is unset there; the `BudgetNoticeSender`
   fresh-scope pattern works only for the unfiltered `budget_notices`). `safety_rules.profile_id` is
@@ -48,6 +48,16 @@
   informational only, alerts are decided by the `safety_alerts` claims. `/undo` targets the message
   with the highest source message id (not the newest `occurred_at`). Soft-deleted rows are never
   matched on edit, so editing an undone or deleted message records its readings again as new rows.
+- `pending_records` holds values that are waiting for a Да/Нет tap (the health bot's "ask before
+  recording" flow). Like `events`, its payload is a jsonb array of `NewHealthEvent`s kept as a JSON
+  **string**, because Postgres otherwise reformats a stored jsonb object and the string form is what
+  survives unchanged. A row leaves the `pending` status exactly once: `TryResolveAsync` runs a
+  conditional `ExecuteUpdate … WHERE status = 'pending'` inside a transaction, and only when that
+  update actually changes the row does it go on to run the caller's work — for Да, that means calling
+  `EventStore.AddAsync` on the very same scoped context, so the insert lands in the same transaction
+  as the status change. Any failure rolls both back together and the row is left `pending`. Never
+  delete a `pending_records` row directly, and never change its status anywhere outside
+  `TryResolveAsync`.
 
 ## Bot polling (`Bots/`)
 
@@ -77,8 +87,12 @@
     update waiting behind it in that same chat's worker, including unrelated chats of the same bot.
     This is by design in M3a, not a bug to "fix" by making the worker concurrent — that would need
     its own design pass (ordering guarantees, per-chat isolation) out of scope here.
-- Allowed updates differ per bot: the manager gets messages, callback queries and `managed_bot`
-  events; role bots get messages and `my_chat_member` (added to / removed from a chat).
+- Allowed updates differ per bot (`BotPollingCoordinator.AllowedUpdates`): the manager gets messages,
+  callback queries and `managed_bot` events; role bots get messages, callback queries (used by the
+  health bot's Да/Нет buttons; every other role answers a tap with no text) and `my_chat_member`
+  (added to / removed from a chat). A role bot's tap is re-checked in `UpdateHandler` through the
+  read-only `IApprovalService.FindFamilyMemberStatusAsync`/`FindPlaceStatusAsync` methods; never
+  reuse the `GetOrCreate…` methods for a tap, since those create rows and DM the owners.
 
 ## Manager bot and approvals (`Manager/`, `Families/`)
 

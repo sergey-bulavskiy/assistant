@@ -22,6 +22,7 @@ public class HealthAssistantTests
     private readonly FakeTelegramClient _telegram = new();
     private readonly FakeEventStore _events = new();
     private readonly FakeSafetyAlertStore _alerts = new();
+    private readonly FakePendingRecordStore _pending = new();
     private readonly FakeMessageStore _messages = new();
     private readonly FakeLlmGateway _gateway = new() { NextResult = LlmResult.Answered(NoEventsJson, "haiku") };
     private readonly FakeRolePrompts _prompts = new();
@@ -58,7 +59,7 @@ public class HealthAssistantTests
     };
 
     private HealthAssistant CreateAssistant(IClock? clock = null, bool llmOff = false) =>
-        new(_profiles, _ownership, _events, _alerts, _messages, _gateway, llmOff ? null : Config(), _prompts, _throttle, _hints,
+        new(_profiles, _ownership, _events, _alerts, _pending, _messages, _gateway, llmOff ? null : Config(), _prompts, _throttle, _hints,
             clock ?? new FixedClock(Now), new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log);
 
     private IncomingMessage Msg(
@@ -1899,8 +1900,9 @@ public class HealthAssistantTests
         _telegram.Sent.ShouldBeEmpty();
     }
 
-    private static string ReadingAndQuestionJson(double glucose, string unclear = "") =>
-        "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":" +
+    // The model marks the reading itself as reported ("record"); missing intents are tested below.
+    private static string ReadingAndQuestionJson(double glucose, string unclear = "", string intent = "record") =>
+        "{\"events\":[{\"type\":\"glucose\",\"intent\":\"" + intent + "\",\"day\":0,\"time\":null,\"value\":" +
         glucose.ToString(System.Globalization.CultureInfo.InvariantCulture) +
         ",\"unit\":\"mmol/L\",\"context\":\"fasting\"}],\"unclear\":[" + unclear + "],\"is_question\":true}";
 
@@ -2219,6 +2221,480 @@ public class HealthAssistantTests
         _telegram.Sent.ShouldHaveSingleItem();
         _log.Entries.ShouldAllBe(e => !e.Message.Contains("секретный"));
         _log.Entries.ShouldContain(e => e.Message.Contains("Answer answered for message 1"));
+    }
+
+    // --- Ask before recording: the model's intent per value ---
+
+    private const string AskGlucose10 = "Записать глюкоза 10.0 ммоль/л?";
+
+    private static string IntentJson(bool isQuestion, params (string Intent, double Value)[] values) =>
+        "{\"events\":[" + string.Join(",", values.Select(v =>
+            "{\"type\":\"glucose\",\"intent\":\"" + v.Intent + "\",\"day\":0,\"time\":null,\"value\":" +
+            v.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"unit\":null,\"context\":null}")) +
+        "],\"unclear\":[],\"is_question\":" + (isQuestion ? "true" : "false") + "}";
+
+    private void ExtractThenAnswer(string extractionJson)
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered(extractionJson, "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("Тестовый ответ.", "sonnet"));
+    }
+
+    [Fact]
+    public async Task A_question_only_value_in_an_unaddressed_message_is_neither_saved_nor_asked_about()
+    {
+        Answer(IntentJson(true, ("question_only", 10)));
+
+        await HandleAsync(Msg("а 10 — это много?", "group", topicId: 7));
+
+        _events.Added.ShouldBeEmpty();
+        _pending.Added.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_addressed_question_only_value_is_answered_without_buttons()
+    {
+        ExtractThenAnswer(IntentJson(true, ("question_only", 10)));
+
+        await HandleAsync(Msg("а 10 — это много?"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "Тестовый ответ." + Footer });
+        _telegram.ButtonMessages.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_unsure_value_waits_for_Da_or_Net_under_one_reply_with_buttons()
+    {
+        Answer(IntentJson(true, ("unsure", 10)));
+        var message = Msg("сахар 10 - высокий?", "group", topicId: 7);
+
+        await HandleAsync(message);
+
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        var (familyId, profileId, record) = _pending.Added.ShouldHaveSingleItem();
+        familyId.ShouldBe(42);
+        profileId.ShouldBe(1);
+        record.SourceMessageId.ShouldBe(1);
+        record.BotId.ShouldBe(999);
+        record.ChatId.ShouldBe(-100);
+        record.TopicId.ShouldBe(7);
+        record.TelegramMessageId.ShouldBe(message.MessageId);
+        record.RequestedByUserId.ShouldBe(111);
+        record.AlertedRuleKeys.ShouldBeEmpty();
+        record.Events.ShouldHaveSingleItem().Type.ShouldBe("glucose");
+        var prompt = _telegram.ButtonMessages.ShouldHaveSingleItem();
+        prompt.ChatId.ShouldBe(-100);
+        prompt.TopicId.ShouldBe(7);
+        prompt.Text.ShouldBe(AskGlucose10);
+        prompt.ReplyToMessageId.ShouldBe(message.MessageId);
+        prompt.Buttons.ShouldBe(new[] { new InlineButton("Да", "rec_yes:1"), new InlineButton("Нет", "rec_no:1") });
+        _pending.Rows[1].PromptMessageId.ShouldBe(prompt.MessageId);
+    }
+
+    [Fact]
+    public async Task An_addressed_unsure_question_is_answered_before_the_buttons()
+    {
+        ExtractThenAnswer(IntentJson(true, ("unsure", 10)));
+
+        await HandleAsync(Msg("сахар 10 - высокий?"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "Тестовый ответ." + Footer, AskGlucose10 });
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_missing_intent_is_unsure_in_a_question_and_record_otherwise(bool isQuestion)
+    {
+        Answer("{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":10,\"unit\":null,\"context\":null}],\"unclear\":[]," +
+               "\"is_question\":" + (isQuestion ? "true" : "false") + "}");
+
+        await HandleAsync(Msg("сахар 10", "group", topicId: 7));
+
+        _pending.Added.Count.ShouldBe(isQuestion ? 1 : 0);
+        _events.Added.Count.ShouldBe(isQuestion ? 0 : 1);
+    }
+
+    [Fact]
+    public async Task A_mixed_message_records_one_value_and_answers_about_the_other()
+    {
+        ExtractThenAnswer(IntentJson(true, ("record", 5.2), ("question_only", 9.0)));
+        var message = Msg("натощак 5.2, а 9 после еды — это нормально?");
+
+        await HandleAsync(message);
+
+        var saved = _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem();
+        saved.PayloadJson.ShouldContain("5.2");
+        _telegram.Reactions.ShouldBe(new[] { (111L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "Тестовый ответ." + Footer });
+        _pending.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_clarification_wins_over_the_buttons()
+    {
+        Answer("{\"events\":[{\"type\":\"glucose\",\"intent\":\"unsure\",\"day\":0,\"time\":null,\"value\":10,\"unit\":null,\"context\":null}]," +
+               "\"unclear\":[{\"fragment\":\"18\",\"reason\":\"type\"}],\"is_question\":true}");
+
+        await HandleAsync(Msg("сахар 10 - высокий? а утром 18"));
+
+        SingleReply().ShouldBe("Не понял «18» — уточните что это за показатель.");
+        _pending.Added.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_edit_records_an_unsure_value_without_asking()
+    {
+        Answer(IntentJson(true, ("unsure", 10)));
+
+        await HandleAsync(Edit("сахар 10 - высокий?"), StoreOutcome.Updated);
+
+        _events.Replaced.ShouldHaveSingleItem().Events.ShouldHaveSingleItem();
+        _pending.Added.ShouldBeEmpty();
+        _telegram.ButtonMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_dangerous_value_in_a_question_alerts_at_once_and_is_still_answered()
+    {
+        ExtractThenAnswer(IntentJson(true, ("question_only", 2.5)));
+
+        await HandleAsync(Msg("а если сахар 2.5, что делать?"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer });
+        _alerts.Claims.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+        _pending.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_dangerous_unsure_value_alerts_first_and_its_rule_is_kept_with_the_question()
+    {
+        ExtractThenAnswer(IntentJson(true, ("unsure", 2.5)));
+
+        await HandleAsync(Msg("сахар 2.5 - это опасно?"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer, "Записать глюкоза 2.5 ммоль/л?" });
+        _pending.Added.ShouldHaveSingleItem().Record.AlertedRuleKeys.ShouldBe(new[] { "glucose.any" });
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    // --- Да / Нет taps ---
+
+    private async Task<(IncomingMessage Message, int PromptId)> AskInGroupAsync(double value = 10)
+    {
+        Answer(IntentJson(true, ("unsure", value)));
+        var message = Msg("сахар " + value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " - высокий?", "group", topicId: 7);
+        await HandleAsync(message);
+        var promptId = _telegram.ButtonMessages.ShouldHaveSingleItem().MessageId;
+        _telegram.Sent.Clear();
+        return (message, promptId);
+    }
+
+    private static CallbackQueryInfo Tap(string data, int promptId, long userId = 222, long chatId = -100) =>
+        new("cbq-" + data, userId, data, chatId, promptId, 7, "supergroup");
+
+    private Task TapAsync(CallbackQueryInfo tap, IClock? clock = null) =>
+        CreateAssistant(clock).HandleCallbackAsync(Bot, _telegram, tap, CancellationToken.None);
+
+    [Fact]
+    public async Task Da_saves_the_values_for_the_original_sender_and_marks_the_message()
+    {
+        var (message, promptId) = await AskInGroupAsync();
+
+        await TapAsync(Tap("rec_yes:1", promptId, userId: 222));
+
+        var added = _events.Added.ShouldHaveSingleItem();
+        added.Source.ShouldBe(new HealthEventSource(1, 999, -100, 7, 111));
+        added.Events.ShouldHaveSingleItem().PayloadJson.ShouldContain("10");
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Записано: глюкоза 10.0 ммоль/л.") });
+        _telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-rec_yes:1", (string?)null) });
+        _pending.Rows[1].Status.ShouldBe("accepted");
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_second_tap_changes_nothing()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+
+        await TapAsync(Tap("rec_yes:1", promptId));
+        await TapAsync(Tap("rec_yes:1", promptId));
+        await TapAsync(Tap("rec_no:1", promptId));
+
+        _events.Added.ShouldHaveSingleItem();
+        _telegram.TextEdits.ShouldHaveSingleItem();
+        _telegram.AnsweredCallbacks.Select(a => a.Text).ShouldBe(new[] { null, "Уже решено.", "Уже решено." });
+    }
+
+    [Fact]
+    public async Task Net_stores_nothing()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+
+        await TapAsync(Tap("rec_no:1", promptId));
+
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Не записано.") });
+        _pending.Rows[1].Status.ShouldBe("declined");
+        _telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-rec_no:1", (string?)null) });
+    }
+
+    [Fact]
+    public async Task A_tap_after_24_hours_expires_the_question()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+
+        await TapAsync(Tap("rec_yes:1", promptId), new FixedClock(Now.AddHours(24).AddMinutes(1)));
+
+        _events.Added.ShouldBeEmpty();
+        _pending.Rows[1].Status.ShouldBe("expired");
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Время вышло — напишите значение ещё раз.") });
+    }
+
+    [Fact]
+    public async Task Da_does_not_repeat_an_alert_sent_while_asking()
+    {
+        var (_, promptId) = await AskInGroupAsync(2.5);
+
+        await TapAsync(Tap("rec_yes:1", promptId));
+
+        _events.Added.ShouldHaveSingleItem();
+        _alerts.Claims.ShouldHaveSingleItem().Alert.RuleKey.ShouldBe("glucose.any");
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_save_on_Da_keeps_the_question_open()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+        _events.ThrowOnAdd = new InvalidOperationException("simulated");
+
+        await TapAsync(Tap("rec_yes:1", promptId));
+
+        _telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-rec_yes:1", (string?)"Не получилось записать — нажмите ещё раз.") });
+        _pending.Rows[1].Status.ShouldBe("pending");
+        _telegram.TextEdits.ShouldBeEmpty();
+
+        _events.ThrowOnAdd = null;
+        await TapAsync(Tap("rec_yes:1", promptId));
+        _events.Added.ShouldHaveSingleItem();
+        _pending.Rows[1].Status.ShouldBe("accepted");
+    }
+
+    [Fact]
+    public async Task Unknown_data_and_other_rows_are_answered_without_changes()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+
+        await TapAsync(Tap("place_approve:1", promptId));
+        await TapAsync(Tap("rec_yes:99", promptId));
+        await TapAsync(Tap("rec_yes:1", promptId, chatId: -200));
+
+        _telegram.AnsweredCallbacks.Select(a => a.Text).ShouldBe(new[] { null, "Уже решено.", "Уже решено." });
+        _events.Added.ShouldBeEmpty();
+        _pending.Rows[1].Status.ShouldBe("pending");
+    }
+
+    [Fact]
+    public async Task An_edit_of_the_original_message_expires_its_question()
+    {
+        var (message, promptId) = await AskInGroupAsync();
+        Answer(IntentJson(false, ("record", 10)));
+
+        await HandleAsync(message with { IsEdit = true, EditedAt = Now, Text = "сахар 10" }, StoreOutcome.Updated);
+
+        _pending.Rows[1].Status.ShouldBe("expired");
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Время вышло — напишите значение ещё раз.") });
+        _events.Replaced.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task An_edit_of_a_dangerous_asked_value_does_not_repeat_the_alert_sent_while_asking()
+    {
+        // "сахар 2.5" asked with its fixed alert already sent (AskInGroupAsync below); the edit re-reads
+        // the same value as a plain record (edits never ask) and must not alert for glucose.any again.
+        Answer(IntentJson(true, ("unsure", 2.5)));
+        var message = Msg("сахар 2.5 - высокий?", "group", topicId: 7);
+        await HandleAsync(message);
+        _pending.Added.ShouldHaveSingleItem().Record.AlertedRuleKeys.ShouldBe(new[] { "glucose.any" });
+
+        Answer(IntentJson(false, ("record", 2.5)));
+        await HandleAsync(message with { IsEdit = true, EditedAt = Now, Text = "сахар 2.5" }, StoreOutcome.Updated);
+
+        _pending.Rows[1].Status.ShouldBe("expired");
+        _events.Replaced.ShouldHaveSingleItem();
+        _telegram.Sent.Count(s => s.Text == UrgentLow25).ShouldBe(1);
+    }
+
+    // --- Free-text undo ---
+
+    private const string UndoJson = "{\"events\":[],\"unclear\":[],\"is_question\":false,\"undo\":true}";
+
+    private static readonly DeletedEvents DeletedGlucose78 = new(
+        new[] { new HealthEventInfo(12, "glucose", Now, "{\"value\":7.8,\"context\":\"other\"}", 5) }, new[] { new MessageRef(-100, 50) });
+
+    [Fact]
+    public async Task Free_text_undo_as_a_reply_removes_the_records_of_that_message()
+    {
+        _events.NextDeleted = DeletedGlucose78;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("удали это", "group", topicId: 7, replyToMessageId: 50, replyToUserId: 111));
+
+        var call = _events.DeleteCalls.ShouldHaveSingleItem();
+        call.Kind.ShouldBe("message");
+        call.TelegramMessageId.ShouldBe(50);
+        call.ChatId.ShouldBe(-100);
+        call.Reason.ShouldBe("undo");
+        _telegram.Reactions.ShouldBe(new[] { (-100L, 50, (string?)null) });
+        SingleReply().ShouldBe("Удалено: #12 глюкоза 7.8 ммоль/л.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_without_a_reply_removes_the_senders_latest_record()
+    {
+        _events.LatestSourceMessageId = 5;
+        _events.NextDeleted = DeletedGlucose78;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("удали последнюю запись"));
+
+        var call = _events.DeleteCalls.ShouldHaveSingleItem();
+        call.Kind.ShouldBe("latest");
+        call.UserId.ShouldBe(111);
+        call.ChatId.ShouldBe(111);
+        call.CreatedAfter.ShouldBe(Now.AddHours(-24));
+        call.Reason.ShouldBe("undo");
+        SingleReply().ShouldBe("Удалено: #12 глюкоза 7.8 ммоль/л.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_declines_the_senders_newer_open_question_instead_of_a_record()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+        _events.LatestSourceMessageId = null;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("@test_health_bot нет, я только спросил", "group", topicId: 7), messageDbId: 2);
+
+        _pending.Rows[1].Status.ShouldBe("declined");
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Не записано.") });
+        _events.DeleteCalls.ShouldBeEmpty();
+        SingleReply().ShouldBe("Не записано.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_keeps_an_older_question_and_removes_the_newer_record()
+    {
+        await AskInGroupAsync();
+        _events.LatestSourceMessageId = 5;
+        _events.NextDeleted = DeletedGlucose78;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("@test_health_bot удали это", "group", topicId: 7), messageDbId: 6);
+
+        _pending.Rows[1].Status.ShouldBe("pending");
+        _events.DeleteCalls.ShouldHaveSingleItem().Kind.ShouldBe("latest");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_as_a_reply_to_the_question_declines_it()
+    {
+        var (_, promptId) = await AskInGroupAsync();
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("не записывай", "group", topicId: 7, replyToMessageId: promptId, replyToUserId: 999), messageDbId: 2);
+
+        _pending.Rows[1].Status.ShouldBe("declined");
+        _telegram.TextEdits.ShouldBe(new[] { (-100L, promptId, "Не записано.") });
+        SingleReply().ShouldBe("Не записано.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_in_an_unaddressed_message_that_is_not_a_reply_does_nothing()
+    {
+        _events.LatestSourceMessageId = 5;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("удали это", "group", topicId: 7));
+
+        _events.DeleteCalls.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Free_text_undo_from_an_anonymous_sender_gets_the_hint()
+    {
+        _events.LatestSourceMessageId = 5;
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("@test_health_bot удали это", "group", topicId: 7) with { UserId = null });
+
+        _events.DeleteCalls.ShouldBeEmpty();
+        SingleReply().ShouldBe("Не могу определить автора — ответьте на сообщение командой /del.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_with_nothing_to_remove_says_so()
+    {
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("удали это"));
+
+        _events.DeleteCalls.ShouldBeEmpty();
+        SingleReply().ShouldBe("Нечего отменять.");
+    }
+
+    [Fact]
+    public async Task An_undo_flag_next_to_a_valid_value_is_ignored()
+    {
+        Answer("{\"events\":[{\"type\":\"glucose\",\"intent\":\"record\",\"day\":0,\"time\":null,\"value\":6,\"unit\":null,\"context\":null}]," +
+               "\"unclear\":[],\"is_question\":false,\"undo\":true}");
+
+        await HandleAsync(Msg("не то, сахар 6"));
+
+        _events.Added.ShouldHaveSingleItem();
+        _events.DeleteCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_undo_flagged_message_with_a_dangerous_quick_scan_reading_still_alerts()
+    {
+        // The model found nothing to record (undo, no events), but the text itself still holds a
+        // dangerous quick-scan reading it missed: the alert must go out, and the undo is still handled.
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("не записывай, сахар 2.5"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "Нечего отменять.", UrgentLow25 + NotRecorded });
+        _events.Added.ShouldBeEmpty();
+        _events.DeleteCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_reply_target_undo_older_than_the_undo_window_deletes_nothing()
+    {
+        // The reply target is outside the /undo window (simulated by the fake returning no events for
+        // that cutoff, as the real store's CreatedAt filter would); unlike /del, this must not fall back
+        // to deleting anything else either.
+        Answer(UndoJson);
+
+        await HandleAsync(Msg("удали это", "group", topicId: 7, replyToMessageId: 50, replyToUserId: 111));
+
+        var call = _events.DeleteCalls.ShouldHaveSingleItem();
+        call.Kind.ShouldBe("message");
+        call.TelegramMessageId.ShouldBe(50);
+        call.CreatedAfter.ShouldBe(Now.AddHours(-24));
+        _events.LatestSourceMessageId.ShouldBeNull();
+        SingleReply().ShouldBe("Нечего отменять.");
     }
 
     private sealed class CapturingLogger : ILogger<HealthAssistant>

@@ -10,6 +10,9 @@ public static class HealthEventText
     public static string Line(HealthEventInfo e, TimeZoneInfo zone) =>
         $"#{e.Id.ToString(CultureInfo.InvariantCulture)} {TimeZoneInfo.ConvertTime(e.OccurredAt, zone).ToString("HH:mm", CultureInfo.InvariantCulture)} {Describe(e)}";
 
+    /// <summary>A validated event that is not saved yet (e.g. waiting for Да/Нет).</summary>
+    public static string Describe(NewHealthEvent e) => Describe(new HealthEventInfo(0, e.Type, e.OccurredAt, e.PayloadJson, null));
+
     public static string Describe(HealthEventInfo e) => e.Type switch
     {
         HealthEventTypes.Glucose => HealthEventPayloads.TryDeserialize<GlucosePayload>(e.PayloadJson) is { } g ? Glucose(g) : e.Type,

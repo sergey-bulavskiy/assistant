@@ -71,7 +71,7 @@ public class SettingsCommandHandler
                 : new InlineButton("Включить", $"bot_enable:{bot.Id}");
             await telegramClient.SendTextWithButtonsAsync(
                 chatId, topicId, $"Бот @{bot.Username} (роль {bot.Role}): {statusLabel}",
-                new[] { toggleButton, new InlineButton("Удалить", $"bot_remove:{bot.Id}") }, cancellationToken);
+                new[] { toggleButton, new InlineButton("Удалить", $"bot_remove:{bot.Id}") }, replyToMessageId: null, cancellationToken);
         }
 
         var botIds = bots.Select(b => b.Id).ToList();
@@ -105,7 +105,7 @@ public class SettingsCommandHandler
             // Topics of one chat share its title; the topic id tells them apart.
             var topicSuffix = place.TopicId is { } placeTopicId ? $" (тема {placeTopicId})" : string.Empty;
             await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"Место «{place.Title}»{topicSuffix}: {statusLabel}", buttons, cancellationToken);
+                chatId, topicId, $"Место «{place.Title}»{topicSuffix}: {statusLabel}", buttons, replyToMessageId: null, cancellationToken);
         }
 
         var members = await _db.FamilyMembers.IgnoreQueryFilters().Where(m => m.FamilyId == familyId).ToListAsync(cancellationToken);
@@ -137,7 +137,7 @@ public class SettingsCommandHandler
             };
             await telegramClient.SendTextWithButtonsAsync(
                 chatId, topicId, $"{member.DisplayName}{(member.IsOwner ? " (владелец)" : string.Empty)}: {statusLabel}",
-                buttons, cancellationToken);
+                buttons, replyToMessageId: null, cancellationToken);
         }
     }
 

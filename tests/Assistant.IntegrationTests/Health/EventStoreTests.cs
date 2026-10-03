@@ -400,6 +400,27 @@ public class EventStoreTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task DeleteBySourceTelegramMessage_ignores_events_created_before_the_cutoff()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var (oldContext, oldStore) = OpenScope(1, new FixedClock { UtcNow = DateTimeOffset.Parse("2030-02-06T09:00:00Z") });
+        await using (oldContext)
+        {
+            await oldStore.AddAsync(1, profile.Id, Source(m1), new[] { Weight() }, CancellationToken.None);
+        }
+
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            var result = await store.DeleteBySourceTelegramMessageAsync(
+                1, profile.Id, 1001, -100, 1, "undo", CancellationToken.None, DateTimeOffset.Parse("2030-02-06T10:00:00Z"));
+
+            result.Events.ShouldBeEmpty();
+        }
+    }
+
+    [Fact]
     public async Task DeleteById_reports_the_message_only_when_its_last_event_is_gone()
     {
         var profile = await AddProfileAsync(1, 10);

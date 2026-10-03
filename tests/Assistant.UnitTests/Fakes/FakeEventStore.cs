@@ -83,6 +83,14 @@ public class FakeEventStore : IEventStore
         return Task.FromResult<IReadOnlyList<HealthEventInfo>>(ActiveEvents.ToList());
     }
 
+    /// <summary>Returned by FindLatestSourceMessageOfUserAsync.</summary>
+    public long? LatestSourceMessageId { get; set; }
+
+    public Task<long?> FindLatestSourceMessageOfUserAsync(
+        long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(LatestSourceMessageId);
+
     public Task<DeletedEvents> DeleteLatestOfUserAsync(
         long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter, string reason,
         CancellationToken cancellationToken)
@@ -92,9 +100,10 @@ public class FakeEventStore : IEventStore
     }
 
     public Task<DeletedEvents> DeleteBySourceTelegramMessageAsync(
-        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken)
+        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken,
+        DateTimeOffset? createdAfter = null)
     {
-        DeleteCalls.Add(new DeleteCall("message", familyId, profileId, botId, chatId, null, null, null, telegramMessageId, null, reason));
+        DeleteCalls.Add(new DeleteCall("message", familyId, profileId, botId, chatId, null, null, createdAfter, telegramMessageId, null, reason));
         return Task.FromResult(NextDeleted);
     }
 

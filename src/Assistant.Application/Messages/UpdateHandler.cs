@@ -12,6 +12,8 @@ namespace Assistant.Application.Messages;
 
 public class UpdateHandler
 {
+    public const string NoRightsText = "У вас нет прав.";
+
     private readonly IMessageStore _store;
     private readonly IApprovalService _approvals;
     private readonly ICurrentFamily _currentFamily;
@@ -68,12 +70,19 @@ public class UpdateHandler
             return;
         }
 
-        if (update.MembershipChange is not null || update.CallbackQuery is not null || update.Message is null)
+        // A button tap: handled first, then the offset advances (a failure retries the update).
+        if (update.CallbackQuery is { } callback)
+        {
+            await HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+            await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
+            return;
+        }
+
+        if (update.MembershipChange is not null || update.Message is null)
         {
             // "removed from chat" needs no action beyond advancing the offset; role bots never
-            // receive callback queries (their allowed-update list in BotPollingCoordinator has no
-            // CallbackQuery) or managed_bot/other non-message updates in practice, but handle them
-            // the same inert way defensively.
+            // receive managed_bot or other non-message updates in practice, but handle them the
+            // same inert way defensively.
             await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
             return;
         }
@@ -152,6 +161,46 @@ public class UpdateHandler
         catch (Exception ex)
         {
             _logger.LogError("failed to send reply: {ExceptionType}", ex.GetType().Name);
+        }
+    }
+
+    // Role-bot button taps. Only the health bot has buttons; any other role answers the callback with
+    // no text so the client stops spinning. Every tap re-checks the database and creates nothing: the
+    // tapping user must be an approved member of the bot's family (any member, not only owners), and
+    // outside private chats the place (chat/topic) must be approved.
+    private async Task HandleCallbackAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, CancellationToken cancellationToken)
+    {
+        if (!BotRoles.IsHealth(bot.Role) || bot.FamilyId is not { } familyId)
+        {
+            await AnswerCallbackAsync(telegramClient, callback, null, cancellationToken);
+            return;
+        }
+
+        var memberStatus = await _approvals.FindFamilyMemberStatusAsync(familyId, callback.FromUserId, cancellationToken);
+        var placeApproved = callback.MessageChatType == "private"
+            || await _approvals.FindPlaceStatusAsync(bot.BotDbId, callback.MessageChatId, callback.MessageTopicId, cancellationToken)
+                == PlaceStatus.Approved;
+        if (memberStatus != FamilyMemberStatus.Approved || !placeApproved)
+        {
+            _logger.LogInformation("callback refused: member {MemberStatus}, place approved {PlaceApproved}", memberStatus, placeApproved);
+            await AnswerCallbackAsync(telegramClient, callback, NoRightsText, cancellationToken);
+            return;
+        }
+
+        await _healthAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+    }
+
+    private async Task AnswerCallbackAsync(
+        ITelegramClient telegramClient, CallbackQueryInfo callback, string? text, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, text, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("failed to answer a callback: {ExceptionType}", ex.GetType().Name);
         }
     }
 }

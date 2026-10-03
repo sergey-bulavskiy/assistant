@@ -47,6 +47,13 @@ public interface IEventStore
     Task<IReadOnlyList<HealthEventInfo>> GetActiveAsync(
         long familyId, long profileId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken);
 
+    /// <summary>The source message (messages.id) that /undo would delete now: the highest one among
+    /// this user's active events in this bot/chat/topic created at or after createdAfter; null when
+    /// there is none. Reads only.</summary>
+    Task<long?> FindLatestSourceMessageOfUserAsync(
+        long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter,
+        CancellationToken cancellationToken);
+
     /// <summary>/undo: among this user's active events in this bot/chat/topic created at or after
     /// createdAfter, takes the newest source message (highest messages.id) and deletes all of its
     /// active events.</summary>
@@ -54,9 +61,12 @@ public interface IEventStore
         long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter, string reason,
         CancellationToken cancellationToken);
 
-    /// <summary>/del as a reply: deletes the active events read from that Telegram message.</summary>
+    /// <summary>/del as a reply: deletes the active events read from that Telegram message. createdAfter,
+    /// when given, limits this to events created at or after it (the free-text undo's /undo window);
+    /// /del itself passes null, with no age limit.</summary>
     Task<DeletedEvents> DeleteBySourceTelegramMessageAsync(
-        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken);
+        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken,
+        DateTimeOffset? createdAfter = null);
 
     /// <summary>/del 123: deletes that event if it is active and belongs to this family and profile.</summary>
     Task<DeletedEvents> DeleteByIdAsync(long familyId, long profileId, long eventId, string reason, CancellationToken cancellationToken);

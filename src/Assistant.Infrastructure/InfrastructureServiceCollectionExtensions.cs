@@ -53,6 +53,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IHealthProfileStore, HealthProfileStore>();
         services.AddScoped<IEventStore, EventStore>();
         services.AddScoped<ISafetyAlertStore, SafetyAlertStore>();
+        services.AddScoped<IPendingRecordStore, PendingRecordStore>();
         services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.

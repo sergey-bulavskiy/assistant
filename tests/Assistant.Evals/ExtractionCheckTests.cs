@@ -129,6 +129,54 @@ public class ExtractionCheckTests
         ShouldFailWith(unexpectedAlert, "missing event");
     }
 
+    [Fact]
+    public void Intent_is_checked_only_when_stated()
+    {
+        var stated = Case("""{"events":[{"type":"glucose","value":5.4,"intent":"question_only"}],"unclear":[]}""");
+        var notStated = Case("""{"events":[{"type":"glucose","value":5.4}],"unclear":[]}""");
+        var questionOnly = Glucose("5.4").Replace("\"type\":\"glucose\"", "\"type\":\"glucose\",\"intent\":\"question_only\"");
+        var record = Glucose("5.4").Replace("\"type\":\"glucose\"", "\"type\":\"glucose\",\"intent\":\"record\"");
+
+        ShouldPass(Check(stated, questionOnly));
+        ShouldFailWith(Check(stated, record), "missing event");
+        ShouldPass(Check(notStated, record));
+        ShouldPass(Check(notStated, questionOnly));
+    }
+
+    [Fact]
+    public void A_missing_intent_counts_as_unsure_in_a_question_and_as_record_otherwise()
+    {
+        var unsure = Case("""{"events":[{"type":"glucose","value":5.4,"intent":"unsure"}],"unclear":[]}""");
+        var record = Case("""{"events":[{"type":"glucose","value":5.4,"intent":"record"}],"unclear":[]}""");
+        var question = Glucose("5.4").Replace("\"is_question\":false", "\"is_question\":true");
+
+        ShouldPass(Check(unsure, question));
+        ShouldPass(Check(record, Glucose("5.4")));
+        ShouldFailWith(Check(record, question), "missing event");
+    }
+
+    [Fact]
+    public void Undo_is_checked_only_when_stated()
+    {
+        var stated = Case("""{"events":[],"unclear":[],"undo":true}""");
+        var notStated = Case("""{"events":[],"unclear":[]}""");
+
+        ShouldPass(Check(stated, """{"events":[],"unclear":[],"undo":true}"""));
+        ShouldFailWith(Check(stated, """{"events":[],"unclear":[]}"""), "undo: expected True, got False");
+        ShouldPass(Check(notStated, """{"events":[],"unclear":[],"undo":true}"""));
+    }
+
+    [Fact]
+    public void A_question_only_value_still_counts_for_the_alert()
+    {
+        var c = Case(
+            """{"events":[{"type":"glucose","value":2.5,"intent":"question_only"}],"unclear":[],"alert":{"rule_key":"glucose.any","level":"urgent"}}""",
+            critical: true);
+        var answer = Glucose("2.5", "null").Replace("\"type\":\"glucose\"", "\"type\":\"glucose\",\"intent\":\"question_only\"");
+
+        ShouldPass(Check(c, answer));
+    }
+
     [Theory]
     [InlineData("не JSON")]
     [InlineData("")]
@@ -143,6 +191,8 @@ public class ExtractionCheckTests
     [InlineData("""{"id":"t1","now":"2030-02-07T09:00","time_zone":"Nowhere/Nothing","text":"x","critical":false,"expected":{"events":[],"unclear":[]}}""")]
     [InlineData("""{"id":"t1","now":"2030-02-07T09:00","time_zone":"UTC","text":"x","critical":false,"expected":{"events":[{"value":5}],"unclear":[]}}""")]
     [InlineData("""{"id":"t1","now":"2030-02-07T09:00","time_zone":"UTC","text":"x","critical":false,"expected":{"events":[],"unclear":[1]}}""")]
+    [InlineData("""{"id":"t1","now":"2030-02-07T09:00","time_zone":"UTC","text":"x","critical":false,"expected":{"events":[{"type":"glucose","intent":"maybe"}],"unclear":[]}}""")]
+    [InlineData("""{"id":"t1","now":"2030-02-07T09:00","time_zone":"UTC","text":"x","critical":false,"expected":{"events":[],"unclear":[],"undo":"yes"}}""")]
     [InlineData("{")]
     public void Parse_rejects_bad_cases(string line)
     {

@@ -152,6 +152,12 @@ public class BotPollingCoordinator : IHostedService
         handle.Cts.Dispose();
     }
 
+    /// <summary>The manager gets messages, button taps and managed_bot events; role bots get messages,
+    /// button taps (the health bot's confirmation buttons) and my_chat_member.</summary>
+    public static IReadOnlyList<UpdateKind> AllowedUpdates(bool isManager) => isManager
+        ? new[] { UpdateKind.Message, UpdateKind.EditedMessage, UpdateKind.CallbackQuery, UpdateKind.ManagedBot }
+        : new[] { UpdateKind.Message, UpdateKind.EditedMessage, UpdateKind.CallbackQuery, UpdateKind.MyChatMember };
+
     private WorkerHandle StartWorker(Bot bot)
     {
         var token = bot.FamilyId is null
@@ -160,9 +166,7 @@ public class BotPollingCoordinator : IHostedService
 
         var client = _clientFactory.Create(token);
         var receivingBot = new ReceivingBot(bot.Id, bot.TelegramBotId, bot.Username, bot.FamilyId, bot.Role);
-        var allowedUpdates = bot.FamilyId is null
-            ? new[] { UpdateKind.Message, UpdateKind.EditedMessage, UpdateKind.CallbackQuery, UpdateKind.ManagedBot }
-            : new[] { UpdateKind.Message, UpdateKind.EditedMessage, UpdateKind.MyChatMember };
+        var allowedUpdates = AllowedUpdates(isManager: bot.FamilyId is null);
 
         var logger = _loggerFactory.CreateLogger<BotPollingWorker>();
         var worker = new BotPollingWorker(receivingBot, client, allowedUpdates, _scopeFactory, _settings, _pollingHealth, _clock, logger, token);

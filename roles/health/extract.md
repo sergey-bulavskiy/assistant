@@ -18,20 +18,31 @@ allowed values.
 
 Answer with exactly this shape:
 
-{"events": [...], "unclear": [...], "is_question": false}
+{"events": [...], "unclear": [...], "is_question": false, "undo": false}
 
-- "events": one object per reading the message states, in the order written. Several readings in
-  one message are several events.
+- "events": one object per value the message names, in the order written: a reading the person
+  reports, and also a number that is only part of a question (its "intent" says which). Several
+  values in one message are several events.
 - "unclear": things that look like a reading but cannot be recorded as written, each
   {"fragment": "<the exact words or number from the message>", "reason": "<reason>"}, where the
   reason is "unit" (the unit is missing, unknown or not allowed), "value" (the number is missing or
   makes no sense), "time" (the time cannot be placed) or "type" (it is not clear what was measured).
 - "is_question": true when the message asks the assistant something or asks it to do something,
   otherwise false.
-- Nothing to record: {"events": [], "unclear": [], "is_question": false}.
+- "undo": true when the message asks to remove a recording or not to keep it ("удали это", "не
+  записывай", "нет, я только спросил"), otherwise false. Never say which record; that is decided
+  elsewhere.
+- Nothing to record: {"events": [], "unclear": [], "is_question": false, "undo": false}.
 
 Every event has:
 - "type": one of the allowed event types.
+- "intent": what the person means by this value:
+  - "record": they report a value they measured, noticed or took ("сахар 5.6 натощак").
+  - "question_only": the number is only part of a question or a hypothetical ("а 10 — это много?",
+    "какой должен быть сахар, 5 нормально?").
+  - "unsure": it could be either ("сахар 10 - высокий?" may report a measurement or only ask).
+  Decide from the whole message. A value reported together with a question about it is usually
+  "unsure"; use "record" only when the message clearly reports it.
 - "day": 0 for the day the message was sent, -1 for the day before, and so on; never above 0 and
   never below -30.
 - "time": the local clock time "HH:mm" when the reading was taken, only if the message states it
@@ -76,8 +87,9 @@ Symptom codes:
 - Record only what the message states. Never invent, estimate or complete a reading that is not
   written.
 - A negation is not an event: "голова не болит" records nothing.
-- A plan, a wish or a question is not an event: "надо будет померить сахар" and "какой должен быть
-  сахар?" record nothing; the question sets "is_question" to true.
+- A plan or a wish is not an event: "надо будет померить сахар" records nothing.
+- A question without a number records nothing: "какой должен быть сахар?" gives no event and sets
+  "is_question" to true. A number inside a question is an event with its "intent".
 - A number whose meaning is not clear goes to "unclear" with reason "type", never into an event.
 - Copy numbers as written. Do not round, do not convert units, do not correct values that look
   unusual.
@@ -86,25 +98,37 @@ Symptom codes:
 ## Examples (invented)
 
 Message: "сахар 7.8 через час после обеда, съела гречку"
-Answer: {"events": [{"type": "glucose", "day": 0, "time": null, "value": 7.8, "unit": null, "context": "after_meal_1h"}, {"type": "meal", "day": 0, "time": null, "meal_kind": "lunch", "description": "гречка"}], "unclear": [], "is_question": false}
+Answer: {"events": [{"type": "glucose", "intent": "record", "day": 0, "time": null, "value": 7.8, "unit": null, "context": "after_meal_1h"}, {"type": "meal", "intent": "record", "day": 0, "time": null, "meal_kind": "lunch", "description": "гречка"}], "unclear": [], "is_question": false, "undo": false}
 
 Message: "вчера в 22:00 давление 128 на 84, пульс 76"
-Answer: {"events": [{"type": "blood_pressure", "day": -1, "time": "22:00", "systolic": 128, "diastolic": 84, "pulse": 76}], "unclear": [], "is_question": false}
+Answer: {"events": [{"type": "blood_pressure", "intent": "record", "day": -1, "time": "22:00", "systolic": 128, "diastolic": 84, "pulse": 76}], "unclear": [], "is_question": false, "undo": false}
 
 Message: "в 7 утра натощак 5,4 ммоль/л, вес 64.5"
-Answer: {"events": [{"type": "glucose", "day": 0, "time": "07:00", "value": 5.4, "unit": "mmol/L", "context": "fasting"}, {"type": "weight", "day": 0, "time": null, "kg": 64.5}], "unclear": [], "is_question": false}
+Answer: {"events": [{"type": "glucose", "intent": "record", "day": 0, "time": "07:00", "value": 5.4, "unit": "mmol/L", "context": "fasting"}, {"type": "weight", "intent": "record", "day": 0, "time": null, "kg": 64.5}], "unclear": [], "is_question": false, "undo": false}
 
 Message: "укол 6 единиц короткого перед ужином"
-Answer: {"events": [{"type": "insulin", "day": 0, "time": null, "units": 6, "kind": "short", "name": null}], "unclear": [], "is_question": false}
+Answer: {"events": [{"type": "insulin", "intent": "record", "day": 0, "time": null, "units": 6, "kind": "short", "name": null}], "unclear": [], "is_question": false, "undo": false}
 
 Message: "сахар 110 мг/дл"
-Answer: {"events": [{"type": "glucose", "day": 0, "time": null, "value": 110, "unit": "mg/dL", "context": null}], "unclear": [], "is_question": false}
+Answer: {"events": [{"type": "glucose", "intent": "record", "day": 0, "time": null, "value": 110, "unit": "mg/dL", "context": null}], "unclear": [], "is_question": false, "undo": false}
 
 Message: "утром было 18"
-Answer: {"events": [], "unclear": [{"fragment": "18", "reason": "type"}], "is_question": false}
+Answer: {"events": [], "unclear": [{"fragment": "18", "reason": "type"}], "is_question": false, "undo": false}
 
 Message: "голова не болит, всё хорошо"
-Answer: {"events": [], "unclear": [], "is_question": false}
+Answer: {"events": [], "unclear": [], "is_question": false, "undo": false}
 
 Message: "какой сахар считается нормой натощак?"
-Answer: {"events": [], "unclear": [], "is_question": true}
+Answer: {"events": [], "unclear": [], "is_question": true, "undo": false}
+
+Message: "а сахар 10 через час после еды — это много?"
+Answer: {"events": [{"type": "glucose", "intent": "question_only", "day": 0, "time": null, "value": 10, "unit": null, "context": "after_meal_1h"}], "unclear": [], "is_question": true, "undo": false}
+
+Message: "сахар 10 - высокий?"
+Answer: {"events": [{"type": "glucose", "intent": "unsure", "day": 0, "time": null, "value": 10, "unit": null, "context": null}], "unclear": [], "is_question": true, "undo": false}
+
+Message: "натощак сахар был 5.2, а 9 после еды — это нормально?"
+Answer: {"events": [{"type": "glucose", "intent": "record", "day": 0, "time": null, "value": 5.2, "unit": null, "context": "fasting"}, {"type": "glucose", "intent": "question_only", "day": 0, "time": null, "value": 9, "unit": null, "context": "other"}], "unclear": [], "is_question": true, "undo": false}
+
+Message: "нет, я только спросил, не записывай"
+Answer: {"events": [], "unclear": [], "is_question": false, "undo": true}

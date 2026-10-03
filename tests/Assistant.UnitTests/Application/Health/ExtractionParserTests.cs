@@ -127,4 +127,35 @@ public class ExtractionParserTests
     {
         ExtractionParser.Parse(text).ShouldBeNull();
     }
+
+    [Fact]
+    public void Reads_each_events_intent()
+    {
+        var output = ExtractionParser.Parse(
+            """{"events":[{"type":"glucose","value":5.0,"intent":"record"},{"type":"glucose","value":9.0,"intent":" Question_Only "},{"type":"weight","kg":70,"intent":"UNSURE"}],"unclear":[],"is_question":true}""");
+
+        output.ShouldNotBeNull();
+        output.Events.Select(e => e.Intent).ShouldBe(new[] { "record", "question_only", "unsure" });
+    }
+
+    [Theory]
+    [InlineData(true, "unsure")]
+    [InlineData(false, "record")]
+    public void A_missing_or_unknown_intent_follows_is_question(bool isQuestion, string expected)
+    {
+        var flag = isQuestion ? "true" : "false";
+
+        var output = ExtractionParser.Parse(
+            $$"""{"events":[{"type":"glucose","value":5.0},{"type":"glucose","value":6.0,"intent":"maybe"}],"unclear":[],"is_question":{{flag}}}""");
+
+        output.ShouldNotBeNull();
+        output.Events.Select(e => e.Intent).ShouldBe(new[] { expected, expected });
+    }
+
+    [Fact]
+    public void Reads_undo_and_defaults_it_to_false()
+    {
+        ExtractionParser.Parse("""{"events":[],"unclear":[],"is_question":false,"undo":true}""")!.Undo.ShouldBeTrue();
+        ExtractionParser.Parse("""{"events":[],"unclear":[],"is_question":false}""")!.Undo.ShouldBeFalse();
+    }
 }

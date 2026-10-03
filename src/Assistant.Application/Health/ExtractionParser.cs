@@ -8,7 +8,8 @@ namespace Assistant.Application.Health;
 /// <summary>Pure, strict parser of the extraction answer (roles/health/extract.md contract). Takes
 /// the text from the first '{' to the last '}' (drops a code fence or prose around it). Numbers may
 /// be JSON numbers or strings with a comma or dot. Unknown fields are dropped; an event of an
-/// unknown type becomes an unclear item with reason "type". Anything else that does not fit returns null (invalid_output).</summary>
+/// unknown type becomes an unclear item with reason "type". Every event's intent is resolved
+/// (ExtractionIntents.Resolve); "undo" defaults to false. Anything else that does not fit returns null (invalid_output).</summary>
 public static class ExtractionParser
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -48,9 +49,10 @@ public static class ExtractionParser
             return null;
         }
 
+        var isQuestion = dto.IsQuestion ?? false;
         var typed = (dto.Events ?? new List<ExtractedEvent?>())
             .OfType<ExtractedEvent>()
-            .Select(e => e with { Type = e.Type?.Trim().ToLowerInvariant() })
+            .Select(e => e with { Type = e.Type?.Trim().ToLowerInvariant(), Intent = ExtractionIntents.Resolve(e.Intent, isQuestion) })
             .ToArray();
         var events = typed.Where(e => e.Type is not null && HealthEventTypes.All.Contains(e.Type)).ToArray();
 
@@ -59,7 +61,7 @@ public static class ExtractionParser
             .Concat(typed.Where(e => e.Type is null || !HealthEventTypes.All.Contains(e.Type))
                 .Select(_ => new ExtractedUnclear { Fragment = null, Reason = UnclearReasons.Type }))
             .ToArray();
-        return new ExtractionOutput(events, unclear, dto.IsQuestion ?? false);
+        return new ExtractionOutput(events, unclear, isQuestion, dto.Undo ?? false);
     }
 
     private sealed class OutputDto
@@ -67,6 +69,7 @@ public static class ExtractionParser
         public List<ExtractedEvent?>? Events { get; set; }
         public List<ExtractedUnclear?>? Unclear { get; set; }
         public bool? IsQuestion { get; set; }
+        public bool? Undo { get; set; }
     }
 
     /// <summary>Accepts 7.8, "7.8" and "7,8"; a string that is not a number becomes null.</summary>

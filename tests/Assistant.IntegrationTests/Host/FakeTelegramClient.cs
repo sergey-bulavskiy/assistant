@@ -9,6 +9,8 @@ public class FakeTelegramClient : ITelegramClient
     private readonly List<long> _requestedOffsets = new();
     private readonly List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> _sentMessages = new();
     private readonly List<(string Text, IReadOnlyList<InlineButton> Buttons)> _sentButtons = new();
+    private readonly List<(long ChatId, int? TopicId, string Text, IReadOnlyList<InlineButton> Buttons, int? ReplyToMessageId, int MessageId)> _buttonMessages = new();
+    private readonly List<(long ChatId, int MessageId, string Text)> _textEdits = new();
     private readonly List<(string CallbackQueryId, string? Text)> _answeredCallbacks = new();
     private readonly List<(long ChatId, int? TopicId, string Action)> _chatActionsSent = new();
     private readonly List<(long ChatId, int MessageId, string? Emoji)> _reactions = new();
@@ -66,6 +68,29 @@ public class FakeTelegramClient : ITelegramClient
         }
     }
 
+    /// <summary>Every message sent with <see cref="SendTextWithButtonsAsync"/>, with the id it got.</summary>
+    public IReadOnlyList<(long ChatId, int? TopicId, string Text, IReadOnlyList<InlineButton> Buttons, int? ReplyToMessageId, int MessageId)> ButtonMessages
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _buttonMessages.ToArray();
+            }
+        }
+    }
+
+    public IReadOnlyList<(long ChatId, int MessageId, string Text)> TextEdits
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _textEdits.ToArray();
+            }
+        }
+    }
+
     public IReadOnlyList<(string CallbackQueryId, string? Text)> AnsweredCallbacks
     {
         get
@@ -107,7 +132,10 @@ public class FakeTelegramClient : ITelegramClient
         {
             _sentMessages.Clear();
             _sentButtons.Clear();
+            _buttonMessages.Clear();
+            _textEdits.Clear();
             _reactions.Clear();
+            _answeredCallbacks.Clear();
         }
     }
 
@@ -208,20 +236,30 @@ public class FakeTelegramClient : ITelegramClient
     }
 
     public Task<int> SendTextWithButtonsAsync(
-        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, int? replyToMessageId, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
-            _sentMessages.Add((chatId, topicId, text, null));
+            var messageId = _nextSentMessageId++;
+            _sentMessages.Add((chatId, topicId, text, replyToMessageId));
             _sentButtons.Add((text, buttons));
-            return Task.FromResult(_nextSentMessageId++);
+            _buttonMessages.Add((chatId, topicId, text, buttons, replyToMessageId, messageId));
+            return Task.FromResult(messageId);
         }
     }
 
     public Task EditMessageButtonsAsync(long chatId, int messageId, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            _textEdits.Add((chatId, messageId, text));
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task AnswerCallbackAsync(string callbackQueryId, string? text, CancellationToken cancellationToken)
     {

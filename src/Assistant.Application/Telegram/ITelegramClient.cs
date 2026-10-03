@@ -38,13 +38,15 @@ public interface ITelegramClient
     /// restrict them further: callers catch failures and never let a reaction fail the update.</summary>
     Task SetReactionAsync(long chatId, int messageId, string? emoji, CancellationToken cancellationToken);
 
-    /// <summary>Sends a message with one inline button per row and returns the sent message's id
-    /// (needed later to edit its buttons once an approval is resolved).</summary>
+    /// <summary>Sends a message with inline buttons and returns the sent message's id (needed later to
+    /// edit its buttons once an approval is resolved). <paramref name="replyToMessageId"/>, when given,
+    /// makes it a Telegram reply to that message.</summary>
     Task<int> SendTextWithButtonsAsync(
-        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken);
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, int? replyToMessageId, CancellationToken cancellationToken);
 
     Task EditMessageButtonsAsync(long chatId, int messageId, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken);
 
+    /// <summary>Replaces a message's text; its inline buttons are removed.</summary>
     Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken);
 
     Task AnswerCallbackAsync(string callbackQueryId, string? text, CancellationToken cancellationToken);

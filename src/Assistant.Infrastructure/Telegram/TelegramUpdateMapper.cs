@@ -38,14 +38,7 @@ public static class TelegramUpdateMapper
 
         var isEdit = update.EditedMessage is not null;
         var kind = MapKind(tgMessage);
-        var chatType = tgMessage.Chat.Type switch
-        {
-            ChatType.Private => "private",
-            ChatType.Group => "group",
-            ChatType.Supergroup => "supergroup",
-            ChatType.Channel => "channel",
-            _ => "unknown"
-        };
+        var chatType = MapChatType(tgMessage.Chat.Type);
 
         var topicId = tgMessage.IsTopicMessage ? tgMessage.MessageThreadId : null;
         var text = TextSanitizer.SanitizeText(tgMessage.Text ?? tgMessage.Caption);
@@ -80,7 +73,18 @@ public static class TelegramUpdateMapper
         FromUserId: callbackQuery.From.Id,
         Data: callbackQuery.Data ?? string.Empty,
         MessageChatId: callbackQuery.Message?.Chat.Id ?? 0,
-        MessageId: callbackQuery.Message?.Id ?? 0);
+        MessageId: callbackQuery.Message?.Id ?? 0,
+        MessageTopicId: callbackQuery.Message is { IsTopicMessage: true } buttonMessage ? buttonMessage.MessageThreadId : null,
+        MessageChatType: callbackQuery.Message is { } message ? MapChatType(message.Chat.Type) : null);
+
+    private static string MapChatType(ChatType type) => type switch
+    {
+        ChatType.Private => "private",
+        ChatType.Group => "group",
+        ChatType.Supergroup => "supergroup",
+        ChatType.Channel => "channel",
+        _ => "unknown"
+    };
 
     private static BotMembershipChange MapMembershipChange(ChatMemberUpdated update)
     {

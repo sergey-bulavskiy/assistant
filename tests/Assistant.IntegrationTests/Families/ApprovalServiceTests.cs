@@ -140,4 +140,25 @@ public class ApprovalServiceTests : IntegrationTestBase
         results[0].ShouldBe(results[1]);
         (await Db.Places.CountAsync(p => p.BotId == _botId && p.ChatId == -100)).ShouldBe(1);
     }
+
+    [Fact]
+    public async Task Find_methods_read_a_status_without_creating_rows_or_sending_anything()
+    {
+        var (service, clients) = await SetupAsync();
+        Db.Places.Add(new Place { BotId = _botId, ChatId = -100, TopicId = 7, Title = "test chat", Status = PlaceStatus.Approved, CreatedAt = DateTimeOffset.UtcNow });
+        Db.FamilyMembers.Add(new FamilyMember { FamilyId = _familyId, TelegramUserId = 333, DisplayName = "member three", Status = FamilyMemberStatus.Denied, IsOwner = false, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow });
+        await Db.SaveChangesAsync();
+
+        (await service.FindPlaceStatusAsync(_botId, -100, 7, CancellationToken.None)).ShouldBe(PlaceStatus.Approved);
+        (await service.FindPlaceStatusAsync(_botId, -100, null, CancellationToken.None)).ShouldBeNull();
+        (await service.FindPlaceStatusAsync(_botId, -100, 8, CancellationToken.None)).ShouldBeNull();
+        (await service.FindFamilyMemberStatusAsync(_familyId, 111, CancellationToken.None)).ShouldBe(FamilyMemberStatus.Approved);
+        (await service.FindFamilyMemberStatusAsync(_familyId, 333, CancellationToken.None)).ShouldBe(FamilyMemberStatus.Denied);
+        (await service.FindFamilyMemberStatusAsync(_familyId, 444, CancellationToken.None)).ShouldBeNull();
+        (await service.FindFamilyMemberStatusAsync(_familyId + 1, 111, CancellationToken.None)).ShouldBeNull();
+
+        (await Db.Places.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        (await Db.FamilyMembers.IgnoreQueryFilters().CountAsync()).ShouldBe(3);
+        clients.Client.SentMessages.ShouldBeEmpty();
+    }
 }

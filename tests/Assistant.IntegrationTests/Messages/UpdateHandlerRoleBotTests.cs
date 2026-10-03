@@ -32,6 +32,9 @@ public class UpdateHandlerRoleBotTests : IntegrationTestBase
     {
         public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        public Task HandleCallbackAsync(ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class NoopManagerUpdateHandler : IManagerUpdateHandler
