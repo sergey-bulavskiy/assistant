@@ -52,6 +52,8 @@ public class AssistantDbContext : DbContext
 
     public DbSet<HealthEvent> Events => Set<HealthEvent>();
 
+    public DbSet<SafetyAlert> SafetyAlerts => Set<SafetyAlert>();
+
     // Platform-wide (no FamilyId, no query filter): budgets span every family.
     public DbSet<BudgetNotice> BudgetNotices => Set<BudgetNotice>();
 
@@ -78,6 +80,7 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<HealthProfile>().HasQueryFilter(p => _currentFamily.FamilyId == null || p.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<SafetyRule>().HasQueryFilter(r => _currentFamily.FamilyId == null || r.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<HealthEvent>().HasQueryFilter(e => _currentFamily.FamilyId == null || e.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<SafetyAlert>().HasQueryFilter(a => _currentFamily.FamilyId == null || a.FamilyId == _currentFamily.FamilyId);
     }
 
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)

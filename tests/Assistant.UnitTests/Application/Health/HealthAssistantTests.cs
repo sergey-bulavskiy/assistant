@@ -6,7 +6,7 @@ using Assistant.Application.Telegram;
 using Assistant.Domain.Health;
 using Assistant.Domain.Messages;
 using Assistant.UnitTests.Fakes;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Assistant.UnitTests.Application.Health;
 
@@ -21,9 +21,11 @@ public class HealthAssistantTests
     private readonly FakeFamilyOwnership _ownership = new();
     private readonly FakeTelegramClient _telegram = new();
     private readonly FakeEventStore _events = new();
+    private readonly FakeSafetyAlertStore _alerts = new();
     private readonly FakeLlmGateway _gateway = new() { NextResult = LlmResult.Answered(NoEventsJson, "haiku") };
     private readonly FakeRolePrompts _prompts = new();
     private readonly FailureNoticeThrottle _throttle = new();
+    private readonly CapturingLogger _log = new();
     private int _nextMessageId = 100;
 
     private const string NoEventsJson = "{\"events\":[],\"unclear\":[],\"is_question\":false}";
@@ -38,8 +40,8 @@ public class HealthAssistantTests
     }
 
     private HealthAssistant CreateAssistant(IClock? clock = null) =>
-        new(_profiles, _ownership, _events, _gateway, _prompts, _throttle, clock ?? new FixedClock(Now),
-            new BuildInfo("abcdef1234", null, Now.AddHours(-1)), NullLogger<HealthAssistant>.Instance);
+        new(_profiles, _ownership, _events, _alerts, _gateway, _prompts, _throttle, clock ?? new FixedClock(Now),
+            new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log);
 
     private IncomingMessage Msg(
         string? text, string chatType = "private", long userId = 111, int? topicId = null, MessageKind kind = MessageKind.Text,
@@ -200,10 +202,16 @@ public class HealthAssistantTests
         await HandleAsync(Msg("/start"));
 
         var reply = SingleReply();
-        foreach (var expected in new[] { "/today", "/undo", "/del", "/week", "/profile", "/thresholds", "/setstart", "/threshold", "не проверяю", "не советую лекарства" })
+        foreach (var expected in new[]
+                 {
+                     "/today", "/undo", "/del", "/week", "/profile", "/thresholds", "/setstart", "/threshold", "не заменяю врача",
+                     "не подтверждено врачом", "не советую лекарства"
+                 })
         {
             reply.ShouldContain(expected);
         }
+
+        reply.ShouldNotContain("не проверяю");
 
         _telegram.Sent.Clear();
         await HandleAsync(Msg("/start", "group"));
@@ -833,5 +841,614 @@ public class HealthAssistantTests
         _telegram.Sent.Count.ShouldBe(3);
         _telegram.Sent.ShouldAllBe(s => s.Text == ExtractionReplies.FailureNotice);
         _telegram.Sent.Select(s => s.TopicId).ShouldBe(new int?[] { 7, 8, 7 });
+    }
+
+    // --- Safety rules and alerts ---
+
+    private const string UrgentLow25 =
+        "\U0001F6A8 Глюкоза: 2.5. Это может быть опасно. Срочно свяжитесь с врачом или вызовите скорую (103 или 112). " +
+        "Порог 3.0 — не подтверждено врачом. Действуйте по плану врача.";
+
+    private const string DoctorLow395 =
+        "⚠️ Глюкоза: 3.95 — ниже порога 4.0 (порог от врача). Свяжитесь с врачом. " +
+        "Если самочувствие ухудшается — вызовите скорую (103 или 112). Действуйте по плану врача.";
+
+    private const string UrgentSystolic165 =
+        "\U0001F6A8 Верхнее давление: 165. Это может быть опасно. Срочно свяжитесь с врачом или вызовите скорую (103 или 112). " +
+        "Порог 160 — не подтверждено врачом.";
+
+    private const string SystolicAlert150 =
+        "⚠️ Верхнее давление: 150 — выше порога 140 (не подтверждено врачом). Свяжитесь с врачом. " +
+        "Если самочувствие ухудшается — вызовите скорую (103 или 112).";
+
+    private const string Combo15095 =
+        "\U0001F6A8 Давление 150/95 вместе с симптомом «головная боль». Это может быть опасно. " +
+        "Срочно свяжитесь с врачом или вызовите скорую (103 или 112). (не подтверждено врачом)";
+
+    private const string GlucoseEventJson =
+        "{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":2.5,\"unit\":\"mmol/L\",\"context\":\"other\"}";
+
+    private const string Pressure15095EventJson = "{\"type\":\"blood_pressure\",\"day\":0,\"time\":null,\"systolic\":150,\"diastolic\":95}";
+
+    private const string HeadacheEventJson = "{\"type\":\"symptom\",\"day\":0,\"time\":null,\"code\":\"headache\",\"text\":\"болит голова\"}";
+
+    private static string GlucoseAnswer(string value, string context = "other", string time = "null", int day = 0) =>
+        $"{{\"events\":[{{\"type\":\"glucose\",\"day\":{day},\"time\":{time},\"value\":{value},\"unit\":\"mmol/L\",\"context\":\"{context}\"}}]," +
+        "\"unclear\":[],\"is_question\":false}";
+
+    private static string EventsAnswer(params string[] events) =>
+        $"{{\"events\":[{string.Join(",", events)}],\"unclear\":[],\"is_question\":false}}";
+
+    private void ReplaceRule(string key, SafetyRuleInfo? rule)
+    {
+        var index = _profiles.Rules.FindIndex(r => r.RuleKey == key);
+        if (rule is null)
+        {
+            _profiles.Rules.RemoveAt(index);
+        }
+        else
+        {
+            _profiles.Rules[index] = rule;
+        }
+    }
+
+    private IReadOnlyList<string>? SingleAddedFlags() =>
+        _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem().Flags;
+
+    [Fact]
+    public async Task Dangerous_reading_is_recorded_marked_and_alerted()
+    {
+        Answer(GlucoseAnswer("2.5"));
+        var message = Msg("сахар 2.5", "group", topicId: 7);
+        // The claim must happen after the reaction and before the alert is sent.
+        (int Reactions, int Sent)? atClaim = null;
+        _alerts.OnClaim = () => atClaim = (_telegram.Reactions.Count, _telegram.Sent.Count);
+
+        await HandleAsync(message);
+
+        SingleAddedFlags().ShouldNotBeNull().ShouldBeEmpty();
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, UrgentLow25, (int?)message.MessageId) });
+        var claim = _alerts.Claims.ShouldHaveSingleItem();
+        claim.FamilyId.ShouldBe(42);
+        claim.Alert.ShouldBe(new NewSafetyAlert(1, "glucose.any", "urgent", 3.0m, "guideline_default", -100, 7));
+        atClaim.ShouldBe((1, 0));
+    }
+
+    [Fact]
+    public async Task Out_of_target_is_only_a_flag()
+    {
+        Answer(GlucoseAt930Json);
+
+        await HandleAsync(Msg("сахар 7.8 в 9:30"));
+
+        SingleAddedFlags().ShouldBe(new[] { "out_of_target" });
+        _telegram.Sent.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Doctor_threshold_gives_the_doctor_label()
+    {
+        ReplaceRule("glucose.any", SafetyRuleDefaults.Find("glucose.any")! with { LowAlert = 4.0m, Source = "doctor" });
+        Answer(GlucoseAnswer("3.95"));
+
+        await HandleAsync(Msg("сахар 3.95"));
+
+        SingleReply().ShouldBe(DoctorLow395);
+        var claim = _alerts.Claims.ShouldHaveSingleItem().Alert;
+        claim.Threshold.ShouldBe(4.0m);
+        claim.ThresholdSource.ShouldBe("doctor");
+        claim.Level.ShouldBe("alert");
+    }
+
+    [Fact]
+    public async Task A_rule_the_family_does_not_have_never_fires()
+    {
+        ReplaceRule("glucose.any", null);
+        Answer(GlucoseAnswer("2.5"));
+        var message = Msg("сахар 2.5");
+
+        await HandleAsync(message);
+
+        _events.Added.ShouldHaveSingleItem();
+        _telegram.Reactions.ShouldBe(new[] { (111L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_already_claimed_alert_is_not_sent_again()
+    {
+        _alerts.ClaimResult = false;
+        Answer(GlucoseAnswer("2.5"));
+
+        await HandleAsync(Msg("сахар 2.5"));
+
+        _alerts.Claims.ShouldHaveSingleItem();
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldHaveSingleItem().Emoji.ShouldBe(WritingHand);
+    }
+
+    [Fact]
+    public async Task A_failed_claim_still_sends_the_alert()
+    {
+        _alerts.ThrowOnClaim = true;
+        Answer(GlucoseAnswer("2.5"));
+
+        await Should.NotThrowAsync(() => HandleAsync(Msg("сахар 2.5")));
+
+        SingleReply().ShouldBe(UrgentLow25);
+        _alerts.Claims.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task The_alert_comes_before_the_clarification()
+    {
+        Answer($"{{\"events\":[{GlucoseEventJson}],\"unclear\":[{{\"fragment\":\"18\",\"reason\":\"unit\"}}],\"is_question\":false}}");
+
+        await HandleAsync(Msg("сахар 2.5 и 18"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Не понял «18» — уточните единицы (нужно в ммоль/л)." });
+    }
+
+    [Fact]
+    public async Task Each_dangerous_reading_gets_its_own_alert()
+    {
+        Answer(EventsAnswer(GlucoseEventJson, "{\"type\":\"blood_pressure\",\"day\":0,\"time\":null,\"systolic\":165,\"diastolic\":100}"));
+
+        await HandleAsync(Msg("сахар 2.5, давление 165/100"));
+
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, UrgentSystolic165 });
+        _alerts.Claims.Select(c => (c.Alert.EventId, c.Alert.RuleKey))
+            .ShouldBe(new[] { (1L, "glucose.any"), (2L, "blood_pressure.systolic") });
+    }
+
+    [Fact]
+    public async Task An_old_reading_is_flagged_and_not_alerted()
+    {
+        // The day before at 09:00 UTC: 25 hours old.
+        Answer(GlucoseAnswer("2.5", time: "\"09:00\"", day: -1));
+        var message = Msg("вчера в 9 сахар 2.5");
+
+        await HandleAsync(message);
+
+        SingleAddedFlags().ShouldBe(new[] { "old_value_not_alerted" });
+        _telegram.Sent.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBe(new[] { (111L, message.MessageId, (string?)WritingHand) });
+    }
+
+    [Fact]
+    public async Task The_combination_uses_earlier_readings_from_the_store()
+    {
+        _events.ActiveEvents.Add(new HealthEventInfo(50, "blood_pressure", Now.AddHours(-3), "{\"systolic\":150,\"diastolic\":95,\"pulse\":null}", 7));
+        Answer(EventsAnswer(HeadacheEventJson));
+
+        var message = Msg("болит голова");
+
+        await HandleAsync(message);
+
+        // A Telegram reply even in a private chat.
+        _telegram.Sent.ShouldHaveSingleItem().ShouldBe((111L, (int?)null, Combo15095, (int?)message.MessageId));
+        _alerts.Claims.ShouldHaveSingleItem().Alert
+            .ShouldBe(new NewSafetyAlert(1, "combo.bp_symptoms", "urgent", null, "guideline_default", 111, null));
+        _events.LastRange.ShouldBe((42L, 1L, Now.AddHours(-24), Now.AddHours(24).AddSeconds(1)));
+    }
+
+    [Fact]
+    public async Task Pressure_and_symptom_in_one_message_alert_once()
+    {
+        Answer(EventsAnswer(Pressure15095EventJson, HeadacheEventJson));
+
+        await HandleAsync(Msg("давление 150/95, болит голова"));
+
+        SingleReply().ShouldBe(Combo15095);
+        var claim = _alerts.Claims.ShouldHaveSingleItem().Alert;
+        claim.EventId.ShouldBe(1);
+        claim.RuleKey.ShouldBe("combo.bp_symptoms");
+    }
+
+    [Fact]
+    public async Task Without_the_combination_rule_no_earlier_readings_are_read()
+    {
+        ReplaceRule("combo.bp_symptoms", null);
+        Answer(EventsAnswer(Pressure15095EventJson));
+
+        await HandleAsync(Msg("давление 150/95"));
+
+        SingleReply().ShouldBe(SystolicAlert150);
+        _events.LastRange.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Insulin_entries_are_never_checked()
+    {
+        Answer("{\"events\":[{\"type\":\"insulin\",\"day\":0,\"time\":null,\"kind\":\"short\",\"units\":40}],\"unclear\":[],\"is_question\":false}");
+
+        await HandleAsync(Msg("инсулин 40"));
+
+        SingleAddedFlags().ShouldNotBeNull().ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_alert_send_does_not_fail_the_update()
+    {
+        _telegram.ThrowOnSend = true;
+        Answer(GlucoseAnswer("2.5"));
+
+        await Should.NotThrowAsync(() => HandleAsync(Msg("сахар 2.5")));
+
+        _events.Added.ShouldHaveSingleItem();
+        _alerts.Claims.ShouldHaveSingleItem();
+        _telegram.Reactions.ShouldHaveSingleItem().Emoji.ShouldBe(WritingHand);
+        // Tried twice, then an Error with the rule key and the message id only.
+        _log.Entries.Count(e => e.Message.StartsWith("failed to send health reply", StringComparison.Ordinal)).ShouldBe(2);
+        _log.Entries.ShouldContain((LogLevel.Error, "Safety alert glucose.any for message 1 could not be sent"));
+    }
+
+    [Fact]
+    public async Task A_failed_alert_send_is_retried_once()
+    {
+        _telegram.ThrowOnSendNumber = 1;
+        Answer(GlucoseAnswer("2.5"));
+        var message = Msg("сахар 2.5");
+
+        await HandleAsync(message);
+
+        _telegram.Sent.ShouldBe(new[] { (111L, (int?)null, UrgentLow25, (int?)message.MessageId) });
+        _alerts.Claims.ShouldHaveSingleItem();
+        _log.Entries.ShouldNotContain(e => e.Message.Contains("could not be sent", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_store_failure_with_a_dangerous_value_sends_the_alert_as_not_recorded()
+    {
+        _events.ThrowOnAdd = new InvalidOperationException("simulated");
+        Answer(GlucoseAnswer("2.5"));
+        var message = Msg("сахар 2.5", "group");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(message));
+
+        _telegram.Sent.ShouldBe(new[]
+        {
+            (-100L, (int?)null, UrgentLow25 + "\nНичего не записано — повторите сообщение позже.", (int?)message.MessageId)
+        });
+        _alerts.Claims.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Rules_failure_with_a_reading_in_the_text_always_gets_the_notice()
+    {
+        _profiles.ThrowOnGetRules = true;
+        Answer(GlucoseAnswer("5.0"));
+        var first = Msg("сахар 5.0", "group", topicId: 7);
+        var second = Msg("сахар 5.0", "group", topicId: 7);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(first));
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(second));
+
+        _telegram.Sent.ShouldBe(new[]
+        {
+            (-100L, (int?)7, ExtractionReplies.FailureNotice, (int?)first.MessageId),
+            (-100L, (int?)7, ExtractionReplies.FailureNotice, (int?)second.MessageId)
+        });
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Rules_failure_without_a_reading_in_the_text_keeps_the_throttled_notice()
+    {
+        _profiles.ThrowOnGetRules = true;
+        Answer(EventsAnswer("{\"type\":\"weight\",\"day\":0,\"time\":null,\"kg\":64.5}"));
+
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(Msg("вес 64.5", "group", topicId: 7)));
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(Msg("вес 64.5", "group", topicId: 7)));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(ExtractionReplies.FailureNotice);
+    }
+
+    // --- Quick scan when extraction fails ---
+
+    private const string NotRecorded = "\nНичего не записано — повторите сообщение позже.";
+
+    private void ShouldHaveSentOnlyTheQuickScanAlert(IncomingMessage message, string alert)
+    {
+        _telegram.Sent.ShouldHaveSingleItem().ShouldBe((message.ChatId, message.TopicId, alert + NotRecorded, (int?)message.MessageId));
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(LlmRefusalReason.NotConfigured)]
+    [InlineData(LlmRefusalReason.RateLimited)]
+    [InlineData(LlmRefusalReason.DailyCapReached)]
+    [InlineData(LlmRefusalReason.AllModelsUnavailable)]
+    [InlineData(LlmRefusalReason.Failed)]
+    [InlineData(LlmRefusalReason.BudgetExhausted)]
+    public async Task Quick_scan_alerts_when_the_model_refuses(LlmRefusalReason reason)
+    {
+        _gateway.NextResult = LlmResult.Refused(reason);
+        var message = Msg("сахар 2.5", "group", topicId: 7);
+
+        await HandleAsync(message);
+
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, UrgentLow25 + NotRecorded, (int?)message.MessageId) });
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Quick_scan_runs_when_the_answer_is_unreadable()
+    {
+        Answer("no json");
+        var message = Msg("сахар 2.5");
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentLow25);
+    }
+
+    [Fact]
+    public async Task Quick_scan_runs_when_the_gateway_throws()
+    {
+        _gateway.ThrowOnComplete = new InvalidOperationException("simulated");
+        var message = Msg("сахар 2.5", "group");
+
+        await Should.NotThrowAsync(() => HandleAsync(message));
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentLow25);
+    }
+
+    [Fact]
+    public async Task Quick_scan_runs_when_the_extraction_prompt_is_missing()
+    {
+        _prompts.ExtractPrompt = null;
+        var message = Msg("сахар 2.5");
+
+        await HandleAsync(message);
+
+        _gateway.Requests.ShouldBeEmpty();
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentLow25);
+    }
+
+    [Fact]
+    public async Task Quick_scan_finds_blood_pressure()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var message = Msg("давление 165 на 100");
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentSystolic165);
+    }
+
+    [Fact]
+    public async Task Quick_scan_sends_only_the_most_severe_hit()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var message = Msg("давление 150/95, сахар 2.5");
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentLow25);
+    }
+
+    [Fact]
+    public async Task Quick_scan_uses_the_doctors_values()
+    {
+        ReplaceRule("glucose.any", SafetyRuleDefaults.Find("glucose.any")! with { LowAlert = 4.0m, Source = "doctor" });
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var message = Msg("сахар 3.9");
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message,
+            "⚠️ Глюкоза: 3.9 — ниже порога 4.0 (порог от врача). Свяжитесь с врачом. " +
+            "Если самочувствие ухудшается — вызовите скорую (103 или 112). Действуйте по плану врача.");
+    }
+
+    [Theory]
+    [InlineData("сахар 7.8")]
+    [InlineData("у неё 2.5 утром")]
+    [InlineData("сильно болит голова")]
+    public async Task Without_a_dangerous_hit_the_failure_notice_is_sent(string text)
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var message = Msg(text);
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheFailureNotice(message);
+    }
+
+    [Theory]
+    [InlineData("сахар 45", "Не понял «45» — уточните единицы (нужно в ммоль/л).")]
+    [InlineData("сахар 250", "Не понял «250» — уточните единицы (нужно в ммоль/л).")]
+    [InlineData("сахар 0.3", "Не понял «0.3» — уточните значение.")]
+    [InlineData("давление 50/40", "Не понял «50/40» — уточните значение.")]
+    public async Task An_implausible_quick_scan_hit_gets_the_clarification_without_throttling(string text, string clarification)
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var first = Msg(text, "group", topicId: 7);
+        var second = Msg(text, "group", topicId: 7);
+
+        await HandleAsync(first);
+        await HandleAsync(second);
+
+        _telegram.Sent.ShouldBe(new[]
+        {
+            (-100L, (int?)7, clarification, (int?)first.MessageId),
+            (-100L, (int?)7, clarification, (int?)second.MessageId)
+        });
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Quick_scan_alerts_are_not_throttled_and_keep_the_notice_slot_free()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+
+        await HandleAsync(Msg("сахар 2.5", "group", topicId: 7));
+        await HandleAsync(Msg("сахар 2.4", "group", topicId: 7));
+        await HandleAsync(Msg("сахар 7.8", "group", topicId: 7));
+        await HandleAsync(Msg("сахар 7.9", "group", topicId: 7));
+
+        _telegram.Sent.Count.ShouldBe(3);
+        _telegram.Sent[0].Text.ShouldBe(UrgentLow25 + NotRecorded);
+        _telegram.Sent[1].Text.ShouldStartWith("\U0001F6A8 Глюкоза: 2.4.");
+        _telegram.Sent[1].Text.ShouldEndWith(NotRecorded);
+        _telegram.Sent[2].Text.ShouldBe(ExtractionReplies.FailureNotice);
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Quick_scan_falls_back_to_the_notice_when_the_rules_cannot_be_read()
+    {
+        _profiles.ThrowOnGetRules = true;
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var message = Msg("сахар 2.5");
+
+        await Should.NotThrowAsync(() => HandleAsync(message));
+
+        ShouldHaveSentOnlyTheFailureNotice(message);
+    }
+
+    // --- Quick scan when the model finds no readings ---
+
+    [Fact]
+    public async Task Quick_scan_alerts_when_the_model_finds_no_readings_in_a_dangerous_glucose_message()
+    {
+        Answer(NoEventsJson);
+        var message = Msg("сахар 2.5", "group", topicId: 7);
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentLow25);
+    }
+
+    [Fact]
+    public async Task Quick_scan_alerts_when_the_model_finds_no_readings_in_a_dangerous_pressure_message()
+    {
+        Answer(NoEventsJson);
+        var message = Msg("давление 165 на 100");
+
+        await HandleAsync(message);
+
+        ShouldHaveSentOnlyTheQuickScanAlert(message, UrgentSystolic165);
+    }
+
+    [Theory]
+    [InlineData("сахар 3.9")]
+    [InlineData("сахар 10.9")]
+    [InlineData("давление 139/89")]
+    [InlineData("сахар 7.8")]
+    [InlineData("как прошёл день?")]
+    public async Task A_message_without_readings_or_a_dangerous_value_stays_silent(string text)
+    {
+        Answer(NoEventsJson);
+
+        await HandleAsync(Msg(text, "group"));
+
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task No_readings_without_a_dangerous_value_never_uses_the_failure_notice_slot()
+    {
+        Answer(NoEventsJson);
+        await HandleAsync(Msg("сахар 7.8", "group", topicId: 7));
+
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.Failed);
+        var failed = Msg("сахар 7.9", "group", topicId: 7);
+        await HandleAsync(failed);
+
+        ShouldHaveSentOnlyTheFailureNotice(failed);
+    }
+
+    [Fact]
+    public async Task An_implausible_value_the_model_missed_gets_the_clarification()
+    {
+        Answer(NoEventsJson);
+        var message = Msg("сахар 45");
+
+        await HandleAsync(message);
+
+        _telegram.Sent.ShouldBe(new[] { (111L, (int?)null, "Не понял «45» — уточните единицы (нужно в ммоль/л).", (int?)message.MessageId) });
+        _events.Added.ShouldBeEmpty();
+    }
+
+    // --- Quick scan when the model records some readings but misses one ---
+
+    private const string Weight645EventJson = "{\"type\":\"weight\",\"day\":0,\"time\":null,\"kg\":64.5}";
+
+    [Fact]
+    public async Task A_dangerous_glucose_the_model_missed_is_alerted_next_to_the_recorded_events()
+    {
+        Answer(EventsAnswer(Weight645EventJson));
+        var message = Msg("вес 64.5, сахар 2.5", "group", topicId: 7);
+
+        await HandleAsync(message);
+
+        _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem().Type.ShouldBe("weight");
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, UrgentLow25 + NotRecorded, (int?)message.MessageId) });
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_dangerous_pressure_the_model_missed_is_alerted_next_to_a_recorded_glucose()
+    {
+        Answer(GlucoseAnswer("5.0"));
+
+        await HandleAsync(Msg("сахар 5.0, давление 165/100"));
+
+        SingleReply().ShouldBe(UrgentSystolic165 + NotRecorded);
+        _events.Added.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_metric_the_model_extracted_is_not_scanned_again()
+    {
+        // The model read the glucose differently (and safely); the scan must not second-guess it.
+        Answer(EventsAnswer(Weight645EventJson, "{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":5.2,\"unit\":\"mmol/L\",\"context\":\"other\"}"));
+
+        await HandleAsync(Msg("вес 64.5, сахар 2.5 вчера было, сегодня 5.2"));
+
+        _telegram.Sent.ShouldBeEmpty();
+        _events.Added.ShouldHaveSingleItem().Events.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Quick_scan_does_not_run_when_the_model_returned_an_unclear_item()
+    {
+        Answer("{\"events\":[],\"unclear\":[{\"fragment\":\"2.5\",\"reason\":\"unit\"}],\"is_question\":false}");
+
+        await HandleAsync(Msg("сахар 2.5"));
+
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldNotContain(NotRecorded);
+        _events.Added.ShouldBeEmpty();
+    }
+
+    private sealed class CapturingLogger : ILogger<HealthAssistant>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 }

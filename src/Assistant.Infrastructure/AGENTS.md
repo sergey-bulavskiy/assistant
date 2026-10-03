@@ -19,8 +19,8 @@
 - Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
   redelivery, including after an idle offset re-base, must not create duplicates or duplicate
   replies); integration tests in `tests/.../Persistence` cover it.
-- Health tables (`health_profiles`, `safety_rules`, `events`) are family-scoped **and fail closed**:
-  `HealthProfileStore` and `EventStore` take `familyId` on every call and throw `InvalidOperationException` when
+- Health tables (`health_profiles`, `safety_rules`, `events`, `safety_alerts`) are family-scoped **and fail closed**:
+  `HealthProfileStore`, `EventStore` and `SafetyAlertStore` take `familyId` on every call and throw `InvalidOperationException` when
   `ICurrentFamily.FamilyId` is unset or another family. Never `IgnoreQueryFilters()` on them, and
   never touch them from a fresh DI scope (`ICurrentFamily` is unset there; the `BudgetNoticeSender`
   fresh-scope pattern works only for the unfiltered `budget_notices`). `safety_rules.profile_id` is
@@ -169,6 +169,15 @@
   `budget_notices` has no family filter. Keep any future DB write inside `BudgetNoticeSender` on
   this same fresh-scope pattern, not on `_db`. Each admin send is wrapped in its own try/catch too --
   one owner's send failing (e.g. they blocked the manager bot) must never stop the others' DMs.
+- `safety_alerts` dedup works differently and must stay that way: `SafetyAlertStore.TryClaimAsync`
+  runs one raw `INSERT … SELECT … FROM events … ON CONFLICT (event_id, rule_key) DO NOTHING`
+  (`Database.ExecuteSqlInterpolatedAsync`) on the **request's** context, and the caller sends the
+  alert only when exactly 1 row was affected. Nothing is tracked and a conflict is not an exception,
+  so the shared context is never poisoned; a fresh DI scope (the `budget_notices` pattern) would
+  have no `ICurrentFamily`, which the fail-closed health stores refuse. The `SELECT` also refuses an
+  event of another family or a deleted one. The statement names the table and columns by hand: keep
+  it in sync with `SafetyAlertConfiguration` (`SafetyAlertStoreTests` catch a mismatch). Nullable
+  parameters are wrapped in `CAST(… AS numeric|integer)` so Postgres knows their type.
 - `LlmGateway` never awaits the post-call budget-notice check on the reply path at all: once a
   call's cost is recorded, it hands the whole re-evaluate-and-notify step to `IBudgetNoticeDispatcher`
   (`BudgetNoticeDispatcher.cs`) and discards the returned `Task`

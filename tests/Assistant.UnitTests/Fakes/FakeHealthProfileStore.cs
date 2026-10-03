@@ -31,8 +31,17 @@ public class FakeHealthProfileStore : IHealthProfileStore
         return Task.CompletedTask;
     }
 
-    public Task<IReadOnlyList<SafetyRuleInfo>> GetRulesAsync(long familyId, long profileId, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<SafetyRuleInfo>>(new List<SafetyRuleInfo>(Rules));
+    public bool ThrowOnGetRules { get; set; }
+
+    public Task<IReadOnlyList<SafetyRuleInfo>> GetRulesAsync(long familyId, long profileId, CancellationToken cancellationToken)
+    {
+        if (ThrowOnGetRules)
+        {
+            throw new InvalidOperationException("simulated rules failure");
+        }
+
+        return Task.FromResult<IReadOnlyList<SafetyRuleInfo>>(new List<SafetyRuleInfo>(Rules));
+    }
 
     public Task SaveRuleAsync(long familyId, long profileId, SafetyRuleInfo rule, long updatedByUserId, CancellationToken cancellationToken)
     {

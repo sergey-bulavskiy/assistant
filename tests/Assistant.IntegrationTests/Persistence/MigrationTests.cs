@@ -164,4 +164,58 @@ public class MigrationTests : IntegrationTestBase
 
         await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
     }
+
+    [Fact]
+    public async Task Safety_alerts_table_has_numeric_threshold_and_a_unique_event_rule_index()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'safety_alerts' AND column_name = 'threshold' AND data_type = 'numeric' AND numeric_precision = 8 AND numeric_scale = 2")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM pg_indexes WHERE tablename = 'safety_alerts' AND indexdef LIKE 'CREATE UNIQUE INDEX%' AND indexdef LIKE '%(event_id, rule_key)%'")
+            .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_event_with_an_alert_cannot_be_deleted()
+    {
+        var now = new DateTimeOffset(2030, 2, 7, 10, 0, 0, TimeSpan.Zero);
+        var profile = new HealthProfile { FamilyId = 1, BotId = 10, CreatedAt = now, UpdatedAt = now };
+        Db.HealthProfiles.Add(profile);
+        await Db.SaveChangesAsync();
+        var healthEvent = new HealthEvent
+        {
+            FamilyId = 1,
+            ProfileId = profile.Id,
+            Type = "glucose",
+            SubjectTag = "health",
+            OccurredAt = now,
+            OccurredAtSource = "message",
+            Payload = "{\"value\":2.5,\"context\":\"other\"}",
+            BotId = 1001,
+            ChatId = -100,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        Db.Events.Add(healthEvent);
+        await Db.SaveChangesAsync();
+        Db.SafetyAlerts.Add(new SafetyAlert
+        {
+            FamilyId = 1,
+            EventId = healthEvent.Id,
+            RuleKey = "glucose.any",
+            Level = "urgent",
+            Threshold = 3.0m,
+            ThresholdSource = "guideline_default",
+            ChatId = -100,
+            CreatedAt = now
+        });
+        await Db.SaveChangesAsync();
+
+        Db.ChangeTracker.Clear();
+        var toDelete = await Db.Events.SingleAsync();
+        Db.Events.Remove(toDelete);
+
+        await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
+    }
 }

@@ -77,7 +77,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     private int _nextUpdateId = 1;
     private int _nextMessageId = 1;
 
-    private async Task<(UpdateHandler Handler, ReceivingBot Bot, FakeTelegramClient Telegram, MessageStore Store)> SetupAsync()
+    private async Task<(UpdateHandler Handler, ReceivingBot Bot, FakeTelegramClient Telegram, MessageStore Store)> SetupAsync(
+        ILlmGateway? gatewayOverride = null)
     {
         var family = new Family { Name = "test family", CreatedAt = DateTimeOffset.UtcNow };
         Db.Families.Add(family);
@@ -118,7 +119,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             new ChatClientProvider(new Dictionary<string, IChatClient> { ["fake"] = _chat }), Db, clock, new ConcurrentCallGate(4),
             new BudgetGuard(config, Db, clock), new NoopBudgetNoticeDispatcher(), NullLogger<LlmGateway>.Instance);
         var healthAssistant = new HealthAssistant(
-            new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock), gateway,
+            new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock),
+            new SafetyAlertStore(Db, currentFamily, clock), gatewayOverride ?? gateway,
             new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), new NoopGeneralAssistant(), healthAssistant, options, buildInfo, clock,
@@ -258,6 +260,24 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Dangerous_reading_the_model_missed_gets_the_alert_and_nothing_is_recorded()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(NoEventsJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 2.5");
+
+        var stored = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        var sent = telegram.SentMessages.ShouldHaveSingleItem();
+        sent.Text.ShouldStartWith("\U0001F6A8 Глюкоза: 2.5.");
+        sent.Text.ShouldEndWith("\nНичего не записано — повторите сообщение позже.");
+        sent.ReplyToMessageId.ShouldBe(stored.TelegramMessageId);
+        telegram.Reactions.ShouldBeEmpty();
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        (await Db.SafetyAlerts.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+    }
+
+    [Fact]
     public async Task Reading_is_recorded_with_a_reaction()
     {
         var (handler, bot, telegram, _) = await SetupAsync();
@@ -280,7 +300,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             payload.RootElement.GetProperty("context").GetString().ShouldBe("after_meal_1h");
         }
 
-        saved.Flags.ShouldBeEmpty();
+        // 7.8 one hour after a meal is at or above the default one-hour target (7.0): a flag, no message.
+        saved.Flags.ShouldBe(new[] { "out_of_target" });
         saved.SourceMessageId.ShouldBe(stored.Id);
         saved.BotId.ShouldBe(1001);
         saved.ChatId.ShouldBe(OwnerId);
@@ -289,6 +310,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         saved.DeletedAt.ShouldBeNull();
         telegram.Reactions.ShouldBe(new[] { (OwnerId, stored.TelegramMessageId, (string?)"✍") });
         telegram.SentMessages.ShouldBeEmpty();
+        (await Db.SafetyAlerts.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
     }
 
     [Fact]
@@ -492,5 +514,215 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         {
             rule.FamilyId.ShouldBe(profiles.Single(p => p.Id == rule.ProfileId).FamilyId);
         }
+    }
+
+    // --- Safety rules and alerts ---
+
+    private const string LowGlucoseJson =
+        "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":2.5,\"unit\":\"mmol/L\",\"context\":\"other\"}]," +
+        "\"unclear\":[],\"is_question\":false}";
+
+    private const string DoctorLowJson =
+        "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":3.95,\"unit\":\"mmol/L\",\"context\":\"other\"}]," +
+        "\"unclear\":[],\"is_question\":false}";
+
+    private const string PressureJson =
+        "{\"events\":[{\"type\":\"blood_pressure\",\"day\":0,\"time\":null,\"systolic\":150,\"diastolic\":95}],\"unclear\":[],\"is_question\":false}";
+
+    private const string HeadacheJson =
+        "{\"events\":[{\"type\":\"symptom\",\"day\":0,\"time\":null,\"code\":\"headache\",\"text\":\"болит голова\"}],\"unclear\":[],\"is_question\":false}";
+
+    private const string UrgentLow25 =
+        "\U0001F6A8 Глюкоза: 2.5. Это может быть опасно. Срочно свяжитесь с врачом или вызовите скорую (103 или 112). " +
+        "Порог 3.0 — не подтверждено врачом. Действуйте по плану врача.";
+
+    private const string DoctorLow395 =
+        "⚠️ Глюкоза: 3.95 — ниже порога 4.0 (порог от врача). Свяжитесь с врачом. " +
+        "Если самочувствие ухудшается — вызовите скорую (103 или 112). Действуйте по плану врача.";
+
+    private const string SystolicAlert150 =
+        "⚠️ Верхнее давление: 150 — выше порога 140 (не подтверждено врачом). Свяжитесь с врачом. " +
+        "Если самочувствие ухудшается — вызовите скорую (103 или 112).";
+
+    private const string Combo15095 =
+        "\U0001F6A8 Давление 150/95 вместе с симптомом «головная боль». Это может быть опасно. " +
+        "Срочно свяжитесь с врачом или вызовите скорую (103 или 112). (не подтверждено врачом)";
+
+    private Task<List<SafetyAlert>> AlertRowsAsync() =>
+        Db.SafetyAlerts.IgnoreQueryFilters().AsNoTracking().OrderBy(a => a.Id).ToListAsync();
+
+    private async Task<ReceivingBot> AddFamilyBAsync(MessageStore store)
+    {
+        var familyB = new Family { Name = "test family B", CreatedAt = DateTimeOffset.UtcNow };
+        Db.Families.Add(familyB);
+        await Db.SaveChangesAsync();
+        AddMember(familyB.Id, OtherOwnerId, isOwner: true);
+        var dbBotB = new Bot { FamilyId = familyB.Id, TelegramBotId = 1002, Username = "test_health_bot_b", Role = "health", Status = BotStatus.Active, LastUpdateId = 0, CreatedAt = DateTimeOffset.UtcNow };
+        Db.Bots.Add(dbBotB);
+        await Db.SaveChangesAsync();
+        await store.EnsureBotStateAsync(new BotIdentity(dbBotB.TelegramBotId, dbBotB.Username), CancellationToken.None);
+        return new ReceivingBot(dbBotB.Id, dbBotB.TelegramBotId, dbBotB.Username, familyB.Id, dbBotB.Role);
+    }
+
+    [Fact]
+    public async Task Dangerous_reading_gets_the_fixed_alert_and_one_alert_row()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(LowGlucoseJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 2.5");
+
+        var stored = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        saved.Flags.ShouldBeEmpty();
+        var sent = telegram.SentMessages.ShouldHaveSingleItem();
+        sent.Text.ShouldBe(UrgentLow25);
+        sent.ChatId.ShouldBe(OwnerId);
+        sent.ReplyToMessageId.ShouldBe(stored.TelegramMessageId);
+        telegram.Reactions.ShouldBe(new[] { (OwnerId, stored.TelegramMessageId, (string?)"✍") });
+        var row = (await AlertRowsAsync()).ShouldHaveSingleItem();
+        row.FamilyId.ShouldBe(bot.FamilyId!.Value);
+        row.EventId.ShouldBe(saved.Id);
+        row.RuleKey.ShouldBe("glucose.any");
+        row.Level.ShouldBe("urgent");
+        row.Threshold.ShouldBe(3.00m);
+        row.ThresholdSource.ShouldBe("guideline_default");
+        row.ChatId.ShouldBe(OwnerId);
+        row.TopicId.ShouldBeNull();
+        row.CreatedAt.ShouldBe(Now);
+    }
+
+    [Fact]
+    public async Task Redelivered_dangerous_reading_alerts_once()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        // Only one answer is scripted: a second model call would throw and send the failure notice.
+        _chat.EnqueueResponse(LowGlucoseJson);
+        var message = PrivateText(OwnerId, "сахар 2.5");
+
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId, message));
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId, message));
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId + 1, message));
+
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        (await AlertRowsAsync()).ShouldHaveSingleItem();
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(UrgentLow25);
+        telegram.Reactions.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Doctor_threshold_gives_the_doctor_label_in_the_alert()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/threshold glucose.any low_alert 4.0");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(DoctorLowJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 3.95");
+
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(DoctorLow395);
+        var row = (await AlertRowsAsync()).ShouldHaveSingleItem();
+        row.Level.ShouldBe("alert");
+        row.Threshold.ShouldBe(4.00m);
+        row.ThresholdSource.ShouldBe("doctor");
+    }
+
+    [Fact]
+    public async Task Pressure_then_a_symptom_in_two_messages_gives_the_combination_alert()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(PressureJson);
+        _chat.EnqueueResponse(HeadacheJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "давление 150/95");
+        await SendAsync(handler, bot, telegram, OwnerId, "болит голова");
+
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { SystolicAlert150, Combo15095 });
+        var pressure = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync(e => e.Type == "blood_pressure");
+        var symptom = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync(e => e.Type == "symptom");
+        (await AlertRowsAsync()).Select(a => (a.EventId, a.RuleKey, a.Level, a.Threshold)).ShouldBe(new[]
+        {
+            (pressure.Id, "blood_pressure.systolic", "alert", (decimal?)140.00m),
+            (symptom.Id, "combo.bp_symptoms", "urgent", (decimal?)null)
+        });
+    }
+
+    [Fact]
+    public async Task A_deleted_reading_is_not_used_by_the_combination()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(PressureJson);
+        await SendAsync(handler, bot, telegram, OwnerId, "давление 150/95");
+        await SendAsync(handler, bot, telegram, OwnerId, "/undo");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(HeadacheJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "болит голова");
+
+        telegram.SentMessages.ShouldBeEmpty();
+        (await AlertRowsAsync()).ShouldHaveSingleItem().RuleKey.ShouldBe("blood_pressure.systolic");
+    }
+
+    [Fact]
+    public async Task The_combination_never_uses_another_familys_readings()
+    {
+        var (handler, botA, telegram, store) = await SetupAsync();
+        var botB = await AddFamilyBAsync(store);
+        _chat.EnqueueResponse(PressureJson);
+        _chat.EnqueueResponse(HeadacheJson);
+
+        await SendAsync(handler, botB, telegram, OtherOwnerId, "давление 150/95");
+        var alertB = telegram.SentMessages.ShouldHaveSingleItem();
+        alertB.ChatId.ShouldBe(OtherOwnerId);
+        alertB.Text.ShouldBe(SystolicAlert150);
+        telegram.ClearSent();
+
+        await SendAsync(handler, botA, telegram, OwnerId, "болит голова");
+
+        telegram.SentMessages.ShouldBeEmpty();
+        (await AlertRowsAsync()).ShouldHaveSingleItem().FamilyId.ShouldBe(botB.FamilyId!.Value);
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_removed_rule_never_fires()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/week");
+        await Db.SafetyRules.IgnoreQueryFilters().Where(r => r.RuleKey == "glucose.any").ExecuteDeleteAsync();
+        telegram.ClearSent();
+        _chat.EnqueueResponse(LowGlucoseJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 2.5");
+
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        telegram.Reactions.ShouldHaveSingleItem().Emoji.ShouldBe("✍");
+        telegram.SentMessages.ShouldBeEmpty();
+        (await AlertRowsAsync()).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task With_the_model_off_a_dangerous_glucose_value_still_gets_the_alert()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync(new NullLlmGateway());
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 2.5");
+
+        var stored = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        var alert = telegram.SentMessages.ShouldHaveSingleItem();
+        alert.Text.ShouldBe(UrgentLow25 + "\nНичего не записано — повторите сообщение позже.");
+        alert.ChatId.ShouldBe(OwnerId);
+        alert.ReplyToMessageId.ShouldBe(stored.TelegramMessageId);
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        (await AlertRowsAsync()).ShouldBeEmpty();
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        telegram.Reactions.ShouldBeEmpty();
+
+        // The alert did not use the failure notice's slot: the next failure still gets the notice.
+        await SendAsync(handler, bot, telegram, OwnerId, "давление 120/80");
+
+        telegram.SentMessages.Count.ShouldBe(2);
+        telegram.SentMessages[1].Text.ShouldBe(ExtractionReplies.FailureNotice);
     }
 }
