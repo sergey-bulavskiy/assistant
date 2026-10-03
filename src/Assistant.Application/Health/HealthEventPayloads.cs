@@ -40,4 +40,20 @@ public static class HealthEventPayloads
             return null;
         }
     }
+
+    /// <summary>True when both texts are the same JSON document. Property order, whitespace and
+    /// number formatting are ignored (Postgres reformats jsonb text). False when either is not JSON.</summary>
+    public static bool SameJson(string left, string right)
+    {
+        try
+        {
+            using var leftDocument = JsonDocument.Parse(left);
+            using var rightDocument = JsonDocument.Parse(right);
+            return JsonElement.DeepEquals(leftDocument.RootElement, rightDocument.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }

@@ -362,24 +362,6 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         telegram.Reactions.ShouldBeEmpty();
     }
 
-    [Fact]
-    public async Task Edited_message_is_not_extracted_again()
-    {
-        var (handler, bot, telegram, _) = await SetupAsync();
-        _chat.EnqueueResponse(GlucoseAt930Json);
-        var original = PrivateText(OwnerId, "сахар 7.8 в 9:30");
-        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
-
-        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "сахар 8.7 в 9:30")));
-
-        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
-        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync(e => e.DeletedAt == null);
-        using var payload = JsonDocument.Parse(saved.Payload);
-        payload.RootElement.GetProperty("value").GetDecimal().ShouldBe(7.8m);
-        telegram.SentMessages.ShouldBeEmpty();
-        telegram.Reactions.Count.ShouldBe(1);
-    }
-
     private const string WeightJson =
         "{\"events\":[{\"type\":\"weight\",\"day\":0,\"time\":null,\"kg\":64.5}],\"unclear\":[],\"is_question\":false}";
 
@@ -521,6 +503,16 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     private const string LowGlucoseJson =
         "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":2.5,\"unit\":\"mmol/L\",\"context\":\"other\"}]," +
         "\"unclear\":[],\"is_question\":false}";
+
+    private const string LowGlucoseAt930Json =
+        "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":\"09:30\",\"value\":2.5,\"unit\":\"mmol/L\",\"context\":\"after_meal_1h\"}]," +
+        "\"unclear\":[],\"is_question\":false}";
+
+    private const string LowGlucoseAndPressureJson =
+        "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":2.5,\"unit\":\"mmol/L\",\"context\":\"other\"}," +
+        "{\"type\":\"blood_pressure\",\"day\":0,\"time\":null,\"systolic\":150,\"diastolic\":95}],\"unclear\":[],\"is_question\":false}";
+
+    private const string NotRecorded = "\nНичего не записано — повторите сообщение позже.";
 
     private const string DoctorLowJson =
         "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":3.95,\"unit\":\"mmol/L\",\"context\":\"other\"}]," +
@@ -724,5 +716,199 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         telegram.SentMessages.Count.ShouldBe(2);
         telegram.SentMessages[1].Text.ShouldBe(ExtractionReplies.FailureNotice);
+    }
+
+    // --- Edited messages ---
+
+    private Task<List<HealthEvent>> EventsByIdAsync() =>
+        Db.Events.IgnoreQueryFilters().AsNoTracking().OrderBy(e => e.Id).ToListAsync();
+
+    private static decimal GlucoseValue(HealthEvent row)
+    {
+        using var payload = JsonDocument.Parse(row.Payload);
+        return payload.RootElement.GetProperty("value").GetDecimal();
+    }
+
+    [Fact]
+    public async Task Edited_reading_replaces_the_record_and_alerts_once()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        _chat.EnqueueResponse(LowGlucoseAt930Json);
+        _chat.EnqueueResponse(LowGlucoseAt930Json);
+        var original = PrivateText(OwnerId, "сахар 7.8 в 9:30");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+        var edit =PrivateEdit(OwnerId, original.MessageId, "сахар 2.5 в 9:30");
+        var editUpdate = new IncomingUpdate(_nextUpdateId++, edit);
+
+        await HandleUpdateAsync(handler, bot, telegram, editUpdate);
+
+        var message = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        message.Text.ShouldBe("сахар 2.5 в 9:30");
+        var events = await EventsByIdAsync();
+        events.Count.ShouldBe(2);
+        GlucoseValue(events[0]).ShouldBe(7.8m);
+        events[0].DeletedAt.ShouldBe(Now);
+        events[0].DeleteReason.ShouldBe("edit");
+        GlucoseValue(events[1]).ShouldBe(2.5m);
+        events[1].DeletedAt.ShouldBeNull();
+        events[1].SourceMessageId.ShouldBe(message.Id);
+        events[1].OccurredAt.ShouldBe(DateTimeOffset.Parse("2030-02-07T09:30:00Z"));
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(2);
+        var sent = telegram.SentMessages.ShouldHaveSingleItem();
+        sent.Text.ShouldBe(UrgentLow25);
+        sent.ReplyToMessageId.ShouldBe(original.MessageId);
+        sent.ChatId.ShouldBe(OwnerId);
+        telegram.Reactions.ShouldHaveSingleItem();
+        var alert = (await AlertRowsAsync()).ShouldHaveSingleItem();
+        alert.EventId.ShouldBe(events[1].Id);
+        alert.RuleKey.ShouldBe("glucose.any");
+
+        // The same update id again is skipped; the same edit under a new update id is read again
+        // but changes nothing (the record is unchanged, so no new alert).
+        await HandleUpdateAsync(handler, bot, telegram, editUpdate);
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, edit));
+
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(3);
+        var after = await EventsByIdAsync();
+        after.Select(e => (e.Id, e.DeletedAt)).ShouldBe(events.Select(e => (e.Id, e.DeletedAt)));
+        (await AlertRowsAsync()).ShouldHaveSingleItem();
+        telegram.SentMessages.ShouldHaveSingleItem();
+        telegram.Reactions.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task Edit_with_the_same_reading_keeps_the_record_and_does_not_alert_again()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(LowGlucoseJson);
+        _chat.EnqueueResponse(LowGlucoseJson);
+        var original = PrivateText(OwnerId, "сахар 2.5");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+        var firstId = (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).Id;
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "Сахар 2.5")));
+
+        var row = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        row.Id.ShouldBe(firstId);
+        row.DeletedAt.ShouldBeNull();
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(2);
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(UrgentLow25);
+        (await AlertRowsAsync()).ShouldHaveSingleItem();
+        telegram.Reactions.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task Edit_adding_a_reading_records_and_alerts_only_the_new_one()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(LowGlucoseJson);
+        _chat.EnqueueResponse(LowGlucoseAndPressureJson);
+        var original = PrivateText(OwnerId, "сахар 2.5");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+        var glucoseId = (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).Id;
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "сахар 2.5, давление 150/95")));
+
+        var events = await EventsByIdAsync();
+        events.Count.ShouldBe(2);
+        events.ShouldAllBe(e => e.DeletedAt == null);
+        events[0].Id.ShouldBe(glucoseId);
+        var pressureId = events[1].Id;
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { UrgentLow25, SystolicAlert150 });
+        (await AlertRowsAsync()).Select(a => (a.EventId, a.RuleKey)).ShouldBe(new[]
+        {
+            (glucoseId, "glucose.any"), (pressureId, "blood_pressure.systolic")
+        });
+        telegram.Reactions.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task Edit_without_readings_deletes_the_record_and_clears_the_reaction()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        _chat.EnqueueResponse(NoEventsJson);
+        var original = PrivateText(OwnerId, "сахар 7.8 в 9:30");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "просто разговор")));
+
+        var row = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        row.DeleteReason.ShouldBe("edit");
+        telegram.Reactions.ShouldBe(new[]
+        {
+            (OwnerId, original.MessageId, (string?)"✍"), (OwnerId, original.MessageId, (string?)null)
+        });
+        telegram.SentMessages.ShouldBeEmpty();
+
+        await SendAsync(handler, bot, telegram, OwnerId, "/today");
+
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Сегодня записей нет.");
+    }
+
+    [Fact]
+    public async Task Edit_of_an_undone_message_records_its_readings_again()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(WeightJson);
+        _chat.EnqueueResponse(WeightJson);
+        var original = PrivateText(OwnerId, "вес 64.5");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+        await SendAsync(handler, bot, telegram, OwnerId, "/undo");
+        (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).DeleteReason.ShouldBe("undo");
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "вес 64.5 кг")));
+
+        var rows = await Db.Events.IgnoreQueryFilters().AsNoTracking().ToListAsync();
+        rows.Count.ShouldBe(2);
+        rows.Count(r => r.DeletedAt is null).ShouldBe(1);
+        rows.Single(r => r.DeletedAt is not null).DeleteReason.ShouldBe("undo");
+        telegram.Reactions.Last().ShouldBe((OwnerId, original.MessageId, (string?)"✍"));
+    }
+
+    [Fact]
+    public async Task Edit_while_the_model_fails_keeps_the_record()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        _chat.EnqueueException(new InvalidOperationException("simulated provider failure"));
+        var original = PrivateText(OwnerId, "сахар 7.8 в 9:30");
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, original));
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, original.MessageId, "сахар 2.5 в 9:30")));
+
+        var row = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        row.DeletedAt.ShouldBeNull();
+        GlucoseValue(row).ShouldBe(7.8m);
+        var sent = telegram.SentMessages.ShouldHaveSingleItem();
+        sent.Text.ShouldBe(UrgentLow25 + NotRecorded);
+        sent.ReplyToMessageId.ShouldBe(original.MessageId);
+        (await AlertRowsAsync()).ShouldBeEmpty();
+        telegram.Reactions.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task Edit_of_a_message_the_bot_never_saw_is_recorded()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, 500, "сахар 7.8 в 9:30")));
+
+        var message = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        message.TelegramMessageId.ShouldBe(500);
+        message.EditedAt.ShouldNotBeNull();
+        var row = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        row.DeletedAt.ShouldBeNull();
+        row.SourceMessageId.ShouldBe(message.Id);
+        telegram.Reactions.ShouldBe(new[] { (OwnerId, 500, (string?)"✍") });
+        telegram.SentMessages.ShouldBeEmpty();
     }
 }

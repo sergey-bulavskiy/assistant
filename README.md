@@ -68,8 +68,13 @@ pressure); the bot validates them, saves them and sets ✍ on the message (👍 
 Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
 time it cannot place) it asks once, as a reply. If the model is unavailable or its answer is
 unreadable, nothing is recorded and the bot replies "⚠️ Не смог обработать сообщение — ничего не
-записано. …" (at most once per 10 minutes per chat or topic). Edited messages are not read again
-yet: remove a wrong record with `/undo` or `/del` and post it again.
+записано. …" (at most once per 10 minutes per chat or topic). Editing a message (up to 24 hours after sending it) reads it again, with one more model call:
+readings that did not change stay as they are (same number in `/today`, no repeated alert), changed
+or removed readings are deleted, and new ones are recorded. A changed dangerous value gets its alert
+again. If no readings are left, the ✍ disappears. Editing a message whose readings were removed
+with `/undo` or `/del` records them again as new ones (the edit is the new truth). If the edit cannot be read (model unavailable), the
+earlier records stay and the usual notice or quick-scan alert is sent. Edited commands are not run
+again.
 
 **Safety alerts.** Every newly recorded reading is checked by fixed rules in code (never by the
 model) against the profile's thresholds (`/thresholds`). A dangerous value or symptom gets a fixed
@@ -350,6 +355,10 @@ real bots and a real family.
   подтверждено врачом). …"; `/threshold glucose.any low_alert 4.0`, then "сахар 3.9" → "⚠️ Глюкоза:
   3.9 — ниже порога 4.0 (порог от врача). …". With the model off, "сахар 2.5" → the alert followed by
   "Ничего не записано — повторите сообщение позже."
+- In a private chat with the health bot: "вес 70.5", then edit it to "вес 71.5" → ✍ stays and
+  `/today` shows only "вес 71.5 кг"; edit it to "просто текст" → the ✍ disappears and `/today` says
+  "Сегодня записей нет.". "сахар 5.5", edited to "сахар 2.5" → the 🚨 alert once; edit it again to
+  "Сахар 2.5" → no second alert.
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

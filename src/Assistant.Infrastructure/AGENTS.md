@@ -38,6 +38,16 @@
   `HealthEventValidator` before saving; Postgres reformats jsonb text, so tests parse it. `bot_id` is
   the Telegram bot id and `source_message_id` is `messages.id`; `/del` as a reply finds the source
   through `messages`. Pass only offset-0 `DateTimeOffset` values (Npgsql rejects others).
+- An edited message's events are replaced by `EventStore.ReplaceMessageEventsAsync` with one
+  `SaveChanges` (a failure keeps the earlier events). An unchanged event (same type, `occurred_at`
+  and payload, compared with `HealthEventPayloads.SameJson` because Postgres reformats jsonb) keeps
+  its row and id, so its `safety_alerts` claim still stops a repeated alert; the others are
+  soft-deleted with `delete_reason = edit`. Never delete `safety_alerts` rows: old alerts stay as
+  history.
+  Rules are re-run on every edit, but a kept row keeps the flags from its first save; flags are
+  informational only, alerts are decided by the `safety_alerts` claims. `/undo` targets the message
+  with the highest source message id (not the newest `occurred_at`). Soft-deleted rows are never
+  matched on edit, so editing an undone or deleted message records its readings again as new rows.
 
 ## Bot polling (`Bots/`)
 
