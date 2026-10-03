@@ -82,3 +82,17 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   `SettingsCommandHandler`, `ApprovalService` and `ReplyPolicy`.
 - One poller per bot token: don't run it locally with the same bots/groups while CD's smoke job runs.
 - Synthetic data only, like every other test; the account and bots are throwaway.
+
+## Extraction evals (`Assistant.Evals`)
+
+- Replay runs in every `dotnet test`: each case's recorded model answer goes through the real
+  `ExtractionParser`, `HealthEventValidator` and `SafetyRuleEvaluator` and must give the case's
+  expected result. No model, network or key; keep it that way.
+- The live run is opt-in: `[EvalsLiveFact]` skips unless `EVALS_LIVE=1`. Never remove that gate and
+  never run it in CI. It calls a real model (see `tests/Assistant.Evals/README.md`).
+- Cases (`cases/extraction.jsonl`) are invented and neutral like all test data. Never change an
+  expected value just to make a row pass: a failing row means the parser, validator, rules or the
+  recorded answer changed. A change to `ExtractionParser`, `HealthEventValidator`,
+  `SafetyRuleEvaluator`, `SafetyRuleDefaults` or `roles/health/extract.md` should be checked against
+  these cases (replay always; live when the prompt or the model changes).
+- Private cases (`EVALS_CASES_FILE`) live outside the repo and are never committed.
