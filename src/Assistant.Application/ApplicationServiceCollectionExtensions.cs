@@ -14,6 +14,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
         services.AddScoped<IHealthAssistant, HealthAssistant>();
         services.AddSingleton<FailureNoticeThrottle>();
+        services.AddSingleton<AddressedHintThrottle>();
         return services;
     }
 }

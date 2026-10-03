@@ -102,9 +102,13 @@ is throttled. Readings written any other way get only the failure notice when ex
 **Questions.** The bot answers a question only when it is addressed: in a private chat every message
 is, in a group or topic only a message that mentions the bot (`@username`) or replies to one of its
 messages (the place's "reply to all" setting is ignored for this bot). The extraction call tells
-whether a message is a question; a message the bot recorded as a reading, or that got a clarification
-or a quick-scan reply, is never also answered (a message that is both a reading and a question gets
-only the reaction or the clarification). If extraction fails on an addressed question, only the
+whether a message is a question; an addressed question is answered even when readings were recorded
+from the same message (the answer's context already includes them), but never when the message got a
+clarification, a quick-scan reply or a safety alert (that fixed reply is the answer) or is an edit.
+An addressed new message that produced nothing at all (extraction worked, but no reading, no question,
+no clarification or alert, e.g. a greeting) gets one short fixed hint as a reply, "Слушаю. Запишите
+показатель (например: сахар 5.8 после обеда) или задайте вопрос.", at most once per 5 minutes per chat/topic
+(in memory); the hint also fires on any addressed group reply to the bot (e.g. a thank-you after an answer), under the same throttle; very short or emoji-only texts are not extracted and get no hint. If extraction fails on an addressed question, only the
 failure notice is sent, no answer. The answer is a second model call on the `smart` tier
 (`LLM_MODELS` order) with the profile's context: the stage week, the context note (`/setnote`), the
 thresholds with their source and the readings of the last 24 hours, plus the last few messages of the

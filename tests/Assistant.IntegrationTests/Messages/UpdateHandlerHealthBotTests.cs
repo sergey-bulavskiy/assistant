@@ -123,7 +123,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         var healthAssistant = new HealthAssistant(
             new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock),
             new SafetyAlertStore(Db, currentFamily, clock), messageStore, gatewayOverride ?? gateway, config,
-            new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
+            new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), new AddressedHintThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), new NoopGeneralAssistant(), healthAssistant, options, buildInfo, clock,
             NullLogger<UpdateHandler>.Instance);
@@ -242,7 +242,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Plain_text_is_stored_without_a_reply()
+    public async Task Plain_text_is_stored_and_a_private_chat_gets_only_the_hint()
     {
         var (handler, bot, telegram, _) = await SetupAsync();
         _chat.EnqueueResponse(NoEventsJson);
@@ -251,7 +251,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         var stored = await Db.Messages.IgnoreQueryFilters().SingleAsync();
         stored.Text.ShouldBe("test message");
-        telegram.SentMessages.ShouldBeEmpty();
+        telegram.SentMessages.ShouldHaveSingleItem().Text
+            .ShouldBe("Слушаю. Запишите показатель (например: сахар 5.8 после обеда) или задайте вопрос.");
         telegram.Reactions.ShouldBeEmpty();
         var call = await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking().SingleAsync();
         call.Tier.ShouldBe("fast");
@@ -1008,5 +1009,24 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         answerCall[0].Text.ShouldContain("- Readings of the last 24 hours (local time, oldest first):\n  - none\n");
         answerCall[0].Text.ShouldNotContain("глюкоза 7.8");
         answerCall.ShouldAllBe(m => m.Text != "сахар 7.8 в 9:30");
+    }
+
+    [Fact]
+    public async Task Reading_and_question_in_one_message_is_recorded_and_the_answer_context_holds_the_reading()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/setstart 15.01.2030");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(
+            "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":\"09:30\",\"value\":7.8,\"unit\":\"mmol/L\",\"context\":\"after_meal_1h\"}]," +
+            "\"unclear\":[],\"is_question\":true}");
+        _chat.EnqueueResponse("Тестовый ответ.");
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30, это высокий?");
+
+        (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).DeletedAt.ShouldBeNull();
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
+        var answerCall = _chat.RequestedMessages[^1];
+        answerCall[0].Text.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
     }
 }
