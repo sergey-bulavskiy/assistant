@@ -419,6 +419,11 @@ INTEGRESQL_URL=http://localhost:15000/ TEST_PG_HOST=localhost TEST_PG_PORT=15432
 docker compose -f docker-compose.tests.yml down
 ```
 
+Extraction evals (`tests/Assistant.Evals`) run with every `dotnet test`: invented health messages
+with recorded model answers are checked against the expected records and alerts, without calling a
+model. A live run against a real model is opt-in and local only (`EVALS_LIVE=1`); see
+`tests/Assistant.Evals/README.md`.
+
 ## Privacy note
 
 No personal data is stored in this repository. All data the bot collects at runtime lives in the

@@ -47,7 +47,7 @@ command only as an example next to a generic fallback.
 | `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot adapter, bot polling (`Bots/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption, LLM gateway and `claude -p` provider (`Llm/`), health profile, event and safety alert stores (`Health/`), role prompt loader (`Roles/`) | `src/Assistant.Infrastructure/AGENTS.md` |
 | `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
 | `roles/` | Role prompt sources (`roles/<role>/*.md`), generic, embedded into Infrastructure at build time | `src/Assistant.Infrastructure/AGENTS.md` |
-| `tests/` | Unit + integration (IntegreSQL) tests; opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |
+| `tests/` | Unit + integration (IntegreSQL) tests; extraction evals (`Assistant.Evals`: recorded answers replayed in every run, live model run opt-in); opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |
 | `deploy/` | Production compose, `.env.example` | `deploy/AGENTS.md` |
 | `.github/` | CI/CD workflows, Dependabot | `.github/AGENTS.md` |
 
@@ -80,7 +80,7 @@ dotnet build -c Release -warnaserror   # same flags as CI; warnings are errors
 dotnet test -c Release                 # integration tests need Docker running
 ```
 
-A plain `dotnet test` skips the smoke test; it is opt-in (`tests/AGENTS.md`).
+A plain `dotnet test` skips the smoke test and the live extraction evals; both are opt-in (`tests/AGENTS.md`).
 
 Faster local loop and test infrastructure details: `tests/AGENTS.md`.
 

@@ -6,6 +6,7 @@
     <Project Path="src/Assistant.Infrastructure/Assistant.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Assistant.Evals/Assistant.Evals.csproj" />
     <Project Path="tests/Assistant.IntegrationTests/Assistant.IntegrationTests.csproj" />
     <Project Path="tests/Assistant.SmokeTests/Assistant.SmokeTests.csproj" />
     <Project Path="tests/Assistant.SmokeTests.Login/Assistant.SmokeTests.Login.csproj" />
