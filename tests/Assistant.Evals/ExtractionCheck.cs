@@ -14,7 +14,9 @@ public sealed record CaseResult(string CaseId, bool Critical, IReadOnlyList<stri
 
 /// <summary>Runs a model answer through the production steps of HealthAssistant (ExtractionParser,
 /// HealthEventValidator, and SafetyRuleEvaluator with the published-guideline default rules, no
-/// earlier events, now = the message time) and compares the outcome with the case's expected result.</summary>
+/// earlier events, now = the message time) and compares the outcome with the case's expected result.
+/// Every valid event counts, whatever its intent (the rules check them all); an expected event's
+/// "intent" and the expected "undo" are compared only when the case states them.</summary>
 public static class ExtractionCheck
 {
     private const string LocalTimeFormat = "yyyy-MM-dd HH:mm";
@@ -30,14 +32,14 @@ public static class ExtractionCheck
         }
 
         var sentAt = evalCase.SentAtUtc;
-        var valid = new List<NewHealthEvent>();
+        var valid = new List<(NewHealthEvent Event, string Intent)>();
         var unclear = output.Unclear.Select(u => Reason(u.Reason)).ToList();
         foreach (var extracted in output.Events)
         {
             var validation = HealthEventValidator.Validate(extracted, sentAt, evalCase.TimeZone);
             if (validation.Event is { } recordable)
             {
-                valid.Add(recordable);
+                valid.Add((recordable, extracted.Intent ?? ExtractionIntents.Record));
             }
             else if (validation.Problem is { } problem)
             {
@@ -52,40 +54,51 @@ public static class ExtractionCheck
             problems.Add($"is_question: expected {question.GetValue<bool>()}, got {output.IsQuestion}");
         }
 
+        if (evalCase.Expected["undo"] is { } undo && undo.GetValue<bool>() != output.Undo)
+        {
+            problems.Add($"undo: expected {undo.GetValue<bool>()}, got {output.Undo}");
+        }
+
         if (evalCase.Expected.ContainsKey("alert"))
         {
-            CompareAlert(evalCase, valid, sentAt, problems);
+            CompareAlert(evalCase, valid.Select(v => v.Event).ToList(), sentAt, problems);
         }
 
         return new CaseResult(evalCase.Id, evalCase.Critical, problems);
     }
 
-    private static void CompareEvents(EvalCase evalCase, List<NewHealthEvent> valid, List<string> problems)
+    private static void CompareEvents(EvalCase evalCase, List<(NewHealthEvent Event, string Intent)> valid, List<string> problems)
     {
-        var remaining = new List<NewHealthEvent>(valid);
+        var remaining = new List<(NewHealthEvent Event, string Intent)>(valid);
         foreach (var node in evalCase.Expected["events"]!.AsArray())
         {
             var want = node!.AsObject();
-            var match = remaining.FirstOrDefault(e => Matches(want, e, evalCase.TimeZone));
-            if (match is null)
+            var index = remaining.FindIndex(e => Matches(want, e.Event, e.Intent, evalCase.TimeZone));
+            if (index < 0)
             {
                 problems.Add("missing event " + want.ToJsonString());
             }
             else
             {
-                remaining.Remove(match);
+                remaining.RemoveAt(index);
             }
         }
 
-        foreach (var extra in remaining)
+        foreach (var (extra, intent) in remaining)
         {
-            problems.Add($"unexpected event {extra.Type} {extra.PayloadJson} at {LocalTime(extra, evalCase.TimeZone)} ({extra.OccurredAtSource})");
+            problems.Add(
+                $"unexpected event {extra.Type} {extra.PayloadJson} at {LocalTime(extra, evalCase.TimeZone)} ({extra.OccurredAtSource}, {intent})");
         }
     }
 
-    private static bool Matches(JsonObject want, NewHealthEvent actual, string timeZone)
+    private static bool Matches(JsonObject want, NewHealthEvent actual, string intent, string timeZone)
     {
         if (want["type"]!.GetValue<string>() != actual.Type)
+        {
+            return false;
+        }
+
+        if (want["intent"] is { } wantIntent && wantIntent.GetValue<string>() != intent)
         {
             return false;
         }
@@ -105,7 +118,7 @@ public static class ExtractionCheck
         using var payload = JsonDocument.Parse(actual.PayloadJson);
         foreach (var (name, value) in want)
         {
-            if (name is "type" or "at")
+            if (name is "type" or "at" or "intent")
             {
                 continue;
             }

@@ -104,7 +104,7 @@ is, in a group or topic only a message that mentions the bot (`@username`) or re
 messages (the place's "reply to all" setting is ignored for this bot). The extraction call tells
 whether a message is a question; an addressed question is answered even when readings were recorded
 from the same message (the answer's context already includes them), but never when the message got a
-clarification, a quick-scan reply or a safety alert (that fixed reply is the answer) or is an edit.
+clarification, a quick-scan reply or a safety alert for a recorded reading (that fixed reply is the answer) or is an edit.
 An addressed new message that produced nothing at all (extraction worked, but no reading, no question,
 no clarification or alert, e.g. a greeting) gets one short fixed hint as a reply, "Слушаю. Запишите
 показатель (например: сахар 5.8 после обеда) или задайте вопрос.", at most once per 5 minutes per chat/topic
@@ -120,6 +120,37 @@ or Cyrillic (answers are asked for in Russian, or in English for an English ques
 ends with "Не заменяю врача." When the model is unavailable the bot replies with the General
 assistant's short notices ("Слишком много запросов, подождите минуту.", …). Answers are kept as
 conversation context; alerts and other fixed texts are not.
+
+**Ask before recording.** Besides the values themselves, the model also classifies what the sender
+meant by each one. A value reported as a fact is recorded as described above. A value that only
+appears inside a question or a hypothetical ("а 10 — это много?") is never recorded and gets no
+buttons. When the wording could be read either way ("сахар 10 - высокий?"), nothing is recorded
+immediately: once the question has been answered (if the message was addressed), the bot posts
+"Записать глюкоза 10.0 ммоль/л?" with **Да** and **Нет** buttons. Any approved family member may tap
+either button, and whichever tap arrives first is the one that counts. Да saves the value under the
+name of whoever sent the original message (✍ is then added to that message) and rewrites the button
+message to "Записано: …"; Нет instead rewrites it to "Не записано." and nothing is saved. A second
+tap after the first gets "Уже решено.", a tap more than 24 hours after the question gets "Время
+вышло — напишите значение ещё раз.", and a tap from someone outside the family gets "У вас нет
+прав.". Editing the original message closes its buttons the same way and re-reads the edited text
+from scratch — edited messages are never asked about, so an unclear value in an edit is recorded
+directly. Safety checks never wait for Да/Нет: a dangerous value still triggers its fixed alert right
+away even if it was only asked about, and a later Да does not send that same alert a second time. If
+the model omits the classification for a value, the bot falls back to its separate "is this a
+question" flag: a value in a message flagged as a question is treated as asked-about, anything else
+is recorded as usual.
+
+**Undo by saying so.** Phrases such as "удали это", "не записывай" or "нет, я только спросил" — sent
+either as a reply to a message or addressed to the bot directly — remove the records of exactly one
+message, following the same target rules as `/undo`: first the message being replied to (deleting its
+records, or closing its still-open Да/Нет question), and otherwise your own most recently recorded
+message in that chat or topic from the last 24 hours, or your most recent still-open question if that
+is more recent. Recognizing this kind of request is entirely the model's job — the code never removes
+more than the one targeted message and never retracts an alert that was already sent. The bot answers
+with "Удалено: …", "Не записано." or "Нечего отменять.". This only works when you post in the
+tracking group under your own name rather than anonymously as the group, because an anonymous sender
+can't be matched to their records; posting anonymously gets "Не могу определить автора — ответьте на
+сообщение командой /del." instead.
 
 Extraction makes one LLM call per text message in the health bot's chats. These calls count toward
 `LLM_CALLS_PER_DAY` and `LLM_CALLS_PER_MINUTE`, which are per family, per UTC day, and shared with
@@ -387,6 +418,13 @@ real bots and a real family.
   заменяю врача."; "на сколько единиц увеличить дозу?" → "Я не даю советов по дозам лекарств. …"
   followed by "Не заменяю врача.". In the tracking group the same question without a mention → no
   answer; with `@<health bot username>` → an answer as a reply.
+- In a private chat with the health bot: "сахар 10 - высокий?" → an answer, followed by "Записать
+  глюкоза 10.0 ммоль/л?" with Да/Нет buttons; tapping Да → "Записано: …" and ✍ on the original
+  question; tapping Да again → "Уже решено.". `/today` shows the value exactly once. "а если сахар
+  2.5, что делать?" → the 🚨 alert fires immediately together with an answer, with no buttons and
+  nothing added to `/today`. "сахар 9 - высокий?" followed by "нет, я только спросил" → "Не
+  записано." and the buttons are removed. In the tracking group, a tap from an account that is not
+  an approved family member → "У вас нет прав.".
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

@@ -135,19 +135,27 @@ public class EventStore : IEventStore
         return new ReplacedEvents(current.Select(ToInfo).ToArray(), events.Count - added.Count, unmatched.Select(ToInfo).ToArray());
     }
 
-    public async Task<DeletedEvents> DeleteLatestOfUserAsync(
-        long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter, string reason,
+    public async Task<long?> FindLatestSourceMessageOfUserAsync(
+        long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter,
         CancellationToken cancellationToken)
     {
         EnsureFamilyScope(familyId);
 
-        var latestSource = await _db.Events.AsNoTracking()
+        return await _db.Events.AsNoTracking()
             .Where(e => e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null
                 && e.BotId == botId && e.ChatId == chatId && e.TopicId == topicId
                 && e.RecordedByUserId == userId && e.SourceMessageId != null && e.CreatedAt >= createdAfter)
             .OrderByDescending(e => e.SourceMessageId)
             .Select(e => e.SourceMessageId)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<DeletedEvents> DeleteLatestOfUserAsync(
+        long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter, string reason,
+        CancellationToken cancellationToken)
+    {
+        var latestSource = await FindLatestSourceMessageOfUserAsync(
+            familyId, profileId, botId, chatId, topicId, userId, createdAfter, cancellationToken);
         if (latestSource is null)
         {
             return DeletedEvents.None;
@@ -160,7 +168,8 @@ public class EventStore : IEventStore
     }
 
     public async Task<DeletedEvents> DeleteBySourceTelegramMessageAsync(
-        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken)
+        long familyId, long profileId, long botId, long chatId, int telegramMessageId, string reason, CancellationToken cancellationToken,
+        DateTimeOffset? createdAfter = null)
     {
         EnsureFamilyScope(familyId);
 
@@ -170,7 +179,8 @@ public class EventStore : IEventStore
             .Select(m => m.Id);
         var rows = await _db.Events
             .Where(e => e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null
-                && e.SourceMessageId != null && sourceIds.Contains(e.SourceMessageId.Value))
+                && e.SourceMessageId != null && sourceIds.Contains(e.SourceMessageId.Value)
+                && (createdAfter == null || e.CreatedAt >= createdAfter))
             .ToListAsync(cancellationToken);
         return await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
     }

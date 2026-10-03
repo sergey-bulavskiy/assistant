@@ -5,6 +5,10 @@ namespace Assistant.Application.Health;
 public sealed record ExtractedEvent
 {
     public string? Type { get; init; }
+
+    /// <summary>An ExtractionIntents value. ExtractionParser always sets it (ExtractionIntents.Resolve).</summary>
+    public string? Intent { get; init; }
+
     public int? Day { get; init; }
     public string? Time { get; init; }
     public decimal? Value { get; init; }
@@ -31,5 +35,7 @@ public sealed record ExtractedUnclear
     public string? Reason { get; init; }
 }
 
-/// <summary>A parsed extraction answer (known event types only).</summary>
-public sealed record ExtractionOutput(IReadOnlyList<ExtractedEvent> Events, IReadOnlyList<ExtractedUnclear> Unclear, bool IsQuestion);
+/// <summary>A parsed extraction answer (known event types only). Undo: the message asks to remove a
+/// recording or not to keep it (the model decides; code limits what is removed).</summary>
+public sealed record ExtractionOutput(
+    IReadOnlyList<ExtractedEvent> Events, IReadOnlyList<ExtractedUnclear> Unclear, bool IsQuestion, bool Undo = false);

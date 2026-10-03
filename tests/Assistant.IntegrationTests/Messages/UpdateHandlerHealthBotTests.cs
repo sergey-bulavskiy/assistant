@@ -122,7 +122,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             new BudgetGuard(config, Db, clock), new NoopBudgetNoticeDispatcher(), NullLogger<LlmGateway>.Instance);
         var healthAssistant = new HealthAssistant(
             new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock),
-            new SafetyAlertStore(Db, currentFamily, clock), messageStore, gatewayOverride ?? gateway, config,
+            new SafetyAlertStore(Db, currentFamily, clock), new PendingRecordStore(Db, currentFamily, clock), messageStore,
+            gatewayOverride ?? gateway, config,
             new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), new AddressedHintThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), new NoopGeneralAssistant(), healthAssistant, options, buildInfo, clock,
@@ -1018,7 +1019,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         await SendAsync(handler, bot, telegram, OwnerId, "/setstart 15.01.2030");
         telegram.ClearSent();
         _chat.EnqueueResponse(
-            "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":\"09:30\",\"value\":7.8,\"unit\":\"mmol/L\",\"context\":\"after_meal_1h\"}]," +
+            "{\"events\":[{\"type\":\"glucose\",\"intent\":\"record\",\"day\":0,\"time\":\"09:30\",\"value\":7.8,\"unit\":\"mmol/L\",\"context\":\"after_meal_1h\"}]," +
             "\"unclear\":[],\"is_question\":true}");
         _chat.EnqueueResponse("Тестовый ответ.");
 
@@ -1028,5 +1029,220 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
         var answerCall = _chat.RequestedMessages[^1];
         answerCall[0].Text.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+    }
+
+    // --- Ask before recording ---
+
+    private static string UnsureGlucoseJson(string value) =>
+        "{\"events\":[{\"type\":\"glucose\",\"intent\":\"unsure\",\"day\":0,\"time\":null,\"value\":" + value + ",\"unit\":null,\"context\":null}]," +
+        "\"unclear\":[],\"is_question\":true}";
+
+    private Task TapAsync(
+        UpdateHandler handler, ReceivingBot bot, FakeTelegramClient telegram, long userId, string data, long chatId, int promptId,
+        string chatType = "private", long? updateId = null) =>
+        handler.HandleAsync(
+            bot, telegram,
+            new IncomingUpdate(updateId ?? _nextUpdateId++, null, CallbackQuery: new CallbackQueryInfo($"cbq-{data}-{userId}", userId, data, chatId, promptId, null, chatType)),
+            CancellationToken.None);
+
+    private Task<PendingRecord> PendingRowAsync() => Db.PendingRecords.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+
+    private async Task AddGroupPlaceAsync(ReceivingBot bot)
+    {
+        Db.Places.Add(new Assistant.Domain.Places.Place
+        {
+            BotId = bot.BotDbId, ChatId = -100, TopicId = null, Title = "test group", Status = Assistant.Domain.Places.PlaceStatus.Approved,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await Db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task An_unsure_value_waits_for_Da_and_is_recorded_once()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(UnsureGlucoseJson("10"));
+        _chat.EnqueueResponse("Тестовый ответ.");
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 10 - высокий?");
+
+        var stored = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync(m => m.Direction == MessageDirection.In);
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        telegram.Reactions.ShouldBeEmpty();
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { "Тестовый ответ." + Footer, "Записать глюкоза 10.0 ммоль/л?" });
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        prompt.ReplyToMessageId.ShouldBe(stored.TelegramMessageId);
+        var pending = await PendingRowAsync();
+        pending.Status.ShouldBe("pending");
+        pending.PromptMessageId.ShouldBe(prompt.MessageId);
+        pending.SourceMessageId.ShouldBe(stored.Id);
+        prompt.Buttons.Select(b => (b.Label, b.CallbackData)).ShouldBe(new[] { ("Да", $"rec_yes:{pending.Id}"), ("Нет", $"rec_no:{pending.Id}") });
+
+        var tapUpdateId = _nextUpdateId++;
+        await TapAsync(handler, bot, telegram, OwnerId, $"rec_yes:{pending.Id}", OwnerId, prompt.MessageId, updateId: tapUpdateId);
+        await TapAsync(handler, bot, telegram, OwnerId, $"rec_yes:{pending.Id}", OwnerId, prompt.MessageId, updateId: tapUpdateId);
+
+        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        saved.SourceMessageId.ShouldBe(stored.Id);
+        saved.RecordedByUserId.ShouldBe(OwnerId);
+        telegram.Reactions.ShouldBe(new[] { (OwnerId, stored.TelegramMessageId, (string?)"✍") });
+        telegram.TextEdits.ShouldBe(new[] { (OwnerId, prompt.MessageId, "Записано: глюкоза 10.0 ммоль/л.") });
+        telegram.AnsweredCallbacks.Select(a => a.Text).ShouldBe(new[] { null, "Уже решено." });
+        var accepted = await PendingRowAsync();
+        accepted.Status.ShouldBe("accepted");
+        accepted.ResolvedByUserId.ShouldBe(OwnerId);
+    }
+
+    [Fact]
+    public async Task Net_records_nothing()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(UnsureGlucoseJson("10"));
+        _chat.EnqueueResponse("Тестовый ответ.");
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 10 - высокий?");
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        var pending = await PendingRowAsync();
+
+        await TapAsync(handler, bot, telegram, OwnerId, $"rec_no:{pending.Id}", OwnerId, prompt.MessageId);
+
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        (await PendingRowAsync()).Status.ShouldBe("declined");
+        telegram.TextEdits.ShouldBe(new[] { (OwnerId, prompt.MessageId, "Не записано.") });
+    }
+
+    [Fact]
+    public async Task Only_an_approved_member_of_the_family_can_tap()
+    {
+        var (handler, bot, telegram, store) = await SetupAsync();
+        await AddFamilyBAsync(store);
+        await AddGroupPlaceAsync(bot);
+        _chat.EnqueueResponse(UnsureGlucoseJson("10"));
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, GroupText(OwnerId, "сахар 10 - высокий?")));
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        var data = $"rec_yes:{(await PendingRowAsync()).Id}";
+
+        await TapAsync(handler, bot, telegram, OtherOwnerId, data, -100, prompt.MessageId, "group");
+        await TapAsync(handler, bot, telegram, 444, data, -100, prompt.MessageId, "group");
+
+        telegram.AnsweredCallbacks.Select(a => a.Text).ShouldBe(new[] { "У вас нет прав.", "У вас нет прав." });
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(0);
+        (await PendingRowAsync()).Status.ShouldBe("pending");
+        (await Db.FamilyMembers.IgnoreQueryFilters().CountAsync(m => m.TelegramUserId == 444)).ShouldBe(0);
+
+        // Any approved member, not only an owner.
+        await TapAsync(handler, bot, telegram, MemberId, data, -100, prompt.MessageId, "group");
+
+        (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).RecordedByUserId.ShouldBe(OwnerId);
+        (await PendingRowAsync()).ResolvedByUserId.ShouldBe(MemberId);
+    }
+
+    [Fact]
+    public async Task A_dangerous_value_in_a_question_alerts_at_once_and_Da_does_not_alert_again()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(UnsureGlucoseJson("2.5"));
+        _chat.EnqueueResponse("Тестовый ответ.");
+
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 2.5 - это опасно?");
+
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer, "Записать глюкоза 2.5 ммоль/л?" });
+        var pending = await PendingRowAsync();
+        pending.AlertedRuleKeys.ShouldBe(new[] { "glucose.any" });
+        (await AlertRowsAsync()).ShouldBeEmpty();
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        telegram.ClearSent();
+
+        await TapAsync(handler, bot, telegram, OwnerId, $"rec_yes:{pending.Id}", OwnerId, prompt.MessageId);
+
+        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        var alert = (await AlertRowsAsync()).ShouldHaveSingleItem();
+        alert.EventId.ShouldBe(saved.Id);
+        alert.RuleKey.ShouldBe("glucose.any");
+        telegram.SentMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Editing_the_message_while_its_question_is_open_expires_the_question()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(UnsureGlucoseJson("10"));
+        _chat.EnqueueResponse("Тестовый ответ.");
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 10 - высокий?");
+        var stored = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync(m => m.Direction == MessageDirection.In);
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        var pending = await PendingRowAsync();
+        _chat.EnqueueResponse(
+            "{\"events\":[{\"type\":\"glucose\",\"intent\":\"record\",\"day\":0,\"time\":null,\"value\":10,\"unit\":null,\"context\":null}],\"unclear\":[],\"is_question\":false}");
+
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId++, PrivateEdit(OwnerId, stored.TelegramMessageId, "сахар 10")));
+
+        (await PendingRowAsync()).Status.ShouldBe("expired");
+        telegram.TextEdits.ShouldContain((OwnerId, prompt.MessageId, "Время вышло — напишите значение ещё раз."));
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+
+        await TapAsync(handler, bot, telegram, OwnerId, $"rec_yes:{pending.Id}", OwnerId, prompt.MessageId);
+
+        telegram.AnsweredCallbacks.ShouldHaveSingleItem().Text.ShouldBe("Уже решено.");
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+    }
+
+    // --- Free-text undo ---
+
+    private const string UndoJson = "{\"events\":[],\"unclear\":[],\"is_question\":false,\"undo\":true}";
+
+    [Fact]
+    public async Task Free_text_undo_as_a_reply_removes_that_messages_records()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30");
+        var reading = await Db.Messages.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        telegram.ClearSent();
+        _chat.EnqueueResponse(UndoJson);
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId++, PrivateText(OwnerId, "удали это", replyToMessageId: reading.TelegramMessageId)));
+
+        var row = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        row.DeletedAt.ShouldNotBeNull();
+        row.DeleteReason.ShouldBe("undo");
+        telegram.Reactions.ShouldBe(new[] { (OwnerId, reading.TelegramMessageId, (string?)null) });
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe($"Удалено: #{row.Id} глюкоза 7.8 ммоль/л (через 1 ч после еды).");
+        (await Db.Messages.IgnoreQueryFilters().CountAsync(m => m.Text == "сахар 7.8 в 9:30")).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Free_text_undo_after_a_question_declines_the_question_and_keeps_the_earlier_reading()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30");
+        _chat.EnqueueResponse(UnsureGlucoseJson("10"));
+        _chat.EnqueueResponse("Тестовый ответ.");
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 10 - высокий?");
+        var prompt = telegram.ButtonMessages.ShouldHaveSingleItem();
+        telegram.ClearSent();
+        _chat.EnqueueResponse(UndoJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "нет, я только спросил");
+
+        (await PendingRowAsync()).Status.ShouldBe("declined");
+        (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).DeletedAt.ShouldBeNull();
+        telegram.TextEdits.ShouldBe(new[] { (OwnerId, prompt.MessageId, "Не записано.") });
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Не записано.");
+    }
+
+    [Fact]
+    public async Task Free_text_undo_without_a_reply_removes_the_senders_latest_reading()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse(GlucoseAt930Json);
+        await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30");
+        _chat.EnqueueResponse(UndoJson);
+
+        await SendAsync(handler, bot, telegram, OwnerId, "удали последнюю запись");
+
+        (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).DeleteReason.ShouldBe("undo");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldStartWith("Удалено: #");
     }
 }

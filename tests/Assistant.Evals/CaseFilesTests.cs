@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Assistant.Application.Health;
 using Assistant.Domain.Health;
 
 namespace Assistant.Evals;
@@ -171,6 +172,12 @@ public sealed class CaseFilesTests : IDisposable
         reasons.ShouldContain("type");
 
         cases.Any(c => c.Expected["is_question"] is { } q && q.GetValue<bool>()).ShouldBeTrue();
+        var intents = cases.SelectMany(c => c.Expected["events"]!.AsArray())
+            .Select(e => e!["intent"]?.GetValue<string>())
+            .OfType<string>()
+            .ToHashSet();
+        intents.ShouldBe(ExtractionIntents.All, ignoreOrder: true);
+        cases.Any(c => c.Expected["undo"] is { } u && u.GetValue<bool>()).ShouldBeTrue();
         cases.Any(c => c.Critical && c.Expected["alert"] is not null).ShouldBeTrue();
         cases.Any(c => c.Critical && c.Expected.ContainsKey("alert") && c.Expected["alert"] is null).ShouldBeTrue();
         cases.Any(c => c.TimeZone != "UTC").ShouldBeTrue();

@@ -53,6 +53,26 @@ public class UpdateHandlerTests
 
         public Task<FamilyMemberStatus> GetFamilyMemberStatusAsync(long familyMemberId, CancellationToken cancellationToken) =>
             Task.FromResult(NextMemberStatus);
+
+        public FamilyMemberStatus? FoundMemberStatus { get; set; } = FamilyMemberStatus.Approved;
+
+        public PlaceStatus? FoundPlaceStatus { get; set; } = PlaceStatus.Approved;
+
+        public List<(long FamilyId, long UserId)> MemberLookups { get; } = new();
+
+        public List<(long BotDbId, long ChatId, int? TopicId)> PlaceLookups { get; } = new();
+
+        public Task<FamilyMemberStatus?> FindFamilyMemberStatusAsync(long familyId, long telegramUserId, CancellationToken cancellationToken)
+        {
+            MemberLookups.Add((familyId, telegramUserId));
+            return Task.FromResult(FoundMemberStatus);
+        }
+
+        public Task<PlaceStatus?> FindPlaceStatusAsync(long botDbId, long chatId, int? topicId, CancellationToken cancellationToken)
+        {
+            PlaceLookups.Add((botDbId, chatId, topicId));
+            return Task.FromResult(FoundPlaceStatus);
+        }
     }
 
     private sealed class FakeCurrentFamily : ICurrentFamily
@@ -92,6 +112,14 @@ public class UpdateHandlerTests
         public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
         {
             Calls.Add((bot, message, storeResult));
+            return Task.CompletedTask;
+        }
+
+        public List<CallbackQueryInfo> Callbacks { get; } = new();
+
+        public Task HandleCallbackAsync(ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, CancellationToken cancellationToken)
+        {
+            Callbacks.Add(callback);
             return Task.CompletedTask;
         }
     }
@@ -405,5 +433,96 @@ public class UpdateHandlerTests
         await handler.HandleAsync(GeneralBot, telegram, new IncomingUpdate(42, Message(userId: 111)), CancellationToken.None);
 
         health.Calls.ShouldBeEmpty();
+    }
+
+    // --- Button taps (callback queries) of role bots ---
+
+    private static readonly ReceivingBot HealthBot = RoleBot with { Role = "health" };
+
+    private static CallbackQueryInfo Tap(string chatType = "group", int? topicId = 7, long userId = 222) =>
+        new("cbq-1", userId, "rec_yes:5", MessageChatId: chatType == "private" ? userId : -100, MessageId: 50,
+            MessageTopicId: topicId, MessageChatType: chatType);
+
+    [Fact]
+    public async Task Health_bot_tap_by_an_approved_member_in_an_approved_place_reaches_the_health_assistant()
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, store, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+        var tap = Tap();
+
+        await handler.HandleAsync(HealthBot, telegram, new IncomingUpdate(50, null, CallbackQuery: tap), CancellationToken.None);
+
+        health.Callbacks.ShouldHaveSingleItem().ShouldBe(tap);
+        approvals.MemberLookups.ShouldBe(new[] { (42L, 222L) });
+        approvals.PlaceLookups.ShouldBe(new[] { (1L, -100L, (int?)7) });
+        approvals.PlaceApprovalCalls.ShouldBe(0);
+        telegram.AnsweredCallbacks.ShouldBeEmpty();
+        var stored = store.Calls.ShouldHaveSingleItem();
+        stored.UpdateId.ShouldBe(50);
+        stored.Message.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(FamilyMemberStatus.Pending)]
+    [InlineData(FamilyMemberStatus.Denied)]
+    [InlineData(null)]
+    public async Task Health_bot_tap_by_someone_who_is_not_an_approved_member_is_refused(FamilyMemberStatus? status)
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, store, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+        approvals.FoundMemberStatus = status;
+
+        await handler.HandleAsync(HealthBot, telegram, new IncomingUpdate(51, null, CallbackQuery: Tap()), CancellationToken.None);
+
+        health.Callbacks.ShouldBeEmpty();
+        telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-1", (string?)"У вас нет прав.") });
+        store.Calls.ShouldHaveSingleItem().Message.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(PlaceStatus.Pending)]
+    [InlineData(PlaceStatus.Denied)]
+    [InlineData(PlaceStatus.Disabled)]
+    [InlineData(null)]
+    public async Task Health_bot_tap_in_a_place_that_is_not_approved_is_refused(PlaceStatus? status)
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+        approvals.FoundPlaceStatus = status;
+
+        await handler.HandleAsync(HealthBot, telegram, new IncomingUpdate(52, null, CallbackQuery: Tap()), CancellationToken.None);
+
+        health.Callbacks.ShouldBeEmpty();
+        telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-1", (string?)"У вас нет прав.") });
+    }
+
+    [Fact]
+    public async Task Health_bot_tap_in_a_private_chat_needs_no_place()
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, _, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+        approvals.FoundPlaceStatus = null;
+
+        await handler.HandleAsync(HealthBot, telegram, new IncomingUpdate(53, null, CallbackQuery: Tap("private", null, 111)), CancellationToken.None);
+
+        health.Callbacks.ShouldHaveSingleItem();
+        approvals.PlaceLookups.ShouldBeEmpty();
+        approvals.MemberLookups.ShouldBe(new[] { (42L, 111L) });
+    }
+
+    [Theory]
+    [InlineData("general")]
+    [InlineData("test")]
+    public async Task Other_role_bots_answer_a_tap_with_no_text(string role)
+    {
+        var health = new FakeHealthAssistant();
+        var (handler, store, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
+
+        await handler.HandleAsync(RoleBot with { Role = role }, telegram, new IncomingUpdate(54, null, CallbackQuery: Tap()), CancellationToken.None);
+
+        health.Callbacks.ShouldBeEmpty();
+        telegram.AnsweredCallbacks.ShouldBe(new[] { ("cbq-1", (string?)null) });
+        approvals.MemberLookups.ShouldBeEmpty();
+        store.Calls.ShouldHaveSingleItem().Message.ShouldBeNull();
     }
 }

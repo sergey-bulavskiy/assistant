@@ -71,11 +71,18 @@ public class TelegramClientAdapter : ITelegramClient
             cancellationToken: cancellationToken);
 
     public async Task<int> SendTextWithButtonsAsync(
-        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, int? replyToMessageId, CancellationToken cancellationToken)
     {
         var markup = new InlineKeyboardMarkup(buttons.Select(b => InlineKeyboardButton.WithCallbackData(b.Label, b.CallbackData)));
         var sent = await _client.SendMessage(
-            chatId: chatId, text: text, messageThreadId: topicId, replyMarkup: markup, cancellationToken: cancellationToken);
+            chatId: chatId,
+            text: text,
+            messageThreadId: topicId,
+            replyParameters: replyToMessageId is { } id
+                ? new ReplyParameters { MessageId = id, AllowSendingWithoutReply = true }
+                : null,
+            replyMarkup: markup,
+            cancellationToken: cancellationToken);
         return sent.Id;
     }
 

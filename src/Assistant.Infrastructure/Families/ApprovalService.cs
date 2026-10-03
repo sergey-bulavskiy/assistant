@@ -170,6 +170,18 @@ public class ApprovalService : IApprovalService
         return member.Status;
     }
 
+    public async Task<FamilyMemberStatus?> FindFamilyMemberStatusAsync(long familyId, long telegramUserId, CancellationToken cancellationToken) =>
+        await _db.FamilyMembers.IgnoreQueryFilters()
+            .Where(m => m.FamilyId == familyId && m.TelegramUserId == telegramUserId)
+            .Select(m => (FamilyMemberStatus?)m.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task<PlaceStatus?> FindPlaceStatusAsync(long botDbId, long chatId, int? topicId, CancellationToken cancellationToken) =>
+        await _db.Places.IgnoreQueryFilters()
+            .Where(p => p.BotId == botDbId && p.ChatId == chatId && p.TopicId == topicId)
+            .Select(p => (PlaceStatus?)p.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task<ApprovalResolution> ResolveUserApprovalAsync(long familyMemberId, bool approve, CancellationToken cancellationToken)
     {
         var member = await _db.FamilyMembers.IgnoreQueryFilters().FirstOrDefaultAsync(m => m.Id == familyMemberId, cancellationToken);
@@ -203,7 +215,7 @@ public class ApprovalService : IApprovalService
 
         foreach (var owner in owners)
         {
-            var messageId = await managerClient.SendTextWithButtonsAsync(owner.TelegramUserId, null, text, buttons, cancellationToken);
+            var messageId = await managerClient.SendTextWithButtonsAsync(owner.TelegramUserId, null, text, buttons, replyToMessageId: null, cancellationToken);
             locations.Add((owner.TelegramUserId, messageId));
         }
 

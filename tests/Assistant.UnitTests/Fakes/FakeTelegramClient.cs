@@ -8,6 +8,11 @@ public class FakeTelegramClient : ITelegramClient
 
     public List<(long ChatId, int MessageId, IReadOnlyList<InlineButton> Buttons)> ButtonEdits { get; } = new();
 
+    /// <summary>Every SendTextWithButtonsAsync call with the id it returned (also listed in Sent).</summary>
+    public List<(long ChatId, int? TopicId, string Text, IReadOnlyList<InlineButton> Buttons, int? ReplyToMessageId, int MessageId)> ButtonMessages { get; } = new();
+
+    public List<(long ChatId, int MessageId, string Text)> TextEdits { get; } = new();
+
     public List<(long ChatId, int? TopicId, string Action)> ChatActionsSent { get; } = new();
 
     public List<(string CallbackQueryId, string? Text)> AnsweredCallbacks { get; } = new();
@@ -73,10 +78,18 @@ public class FakeTelegramClient : ITelegramClient
     }
 
     public Task<int> SendTextWithButtonsAsync(
-        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
+        long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, int? replyToMessageId, CancellationToken cancellationToken)
     {
-        Sent.Add((chatId, topicId, text, null));
-        return Task.FromResult(_nextSentMessageId++);
+        _sendCalls++;
+        if (ThrowOnSend || _sendCalls == ThrowOnSendNumber)
+        {
+            throw new InvalidOperationException("simulated send failure");
+        }
+
+        var messageId = _nextSentMessageId++;
+        Sent.Add((chatId, topicId, text, replyToMessageId));
+        ButtonMessages.Add((chatId, topicId, text, buttons, replyToMessageId, messageId));
+        return Task.FromResult(messageId);
     }
 
     public Task EditMessageButtonsAsync(long chatId, int messageId, IReadOnlyList<InlineButton> buttons, CancellationToken cancellationToken)
@@ -85,7 +98,11 @@ public class FakeTelegramClient : ITelegramClient
         return Task.CompletedTask;
     }
 
-    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken)
+    {
+        TextEdits.Add((chatId, messageId, text));
+        return Task.CompletedTask;
+    }
 
     public Task AnswerCallbackAsync(string callbackQueryId, string? text, CancellationToken cancellationToken)
     {

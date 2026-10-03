@@ -110,6 +110,12 @@ public sealed class EvalCase
             throw new FormatException("expected.events must be an array of objects, each with a type");
         }
 
+        if (events.Any(e => e!["intent"] is { } intent
+                && (intent.GetValueKind() != JsonValueKind.String || !ExtractionIntents.All.Contains(intent.GetValue<string>()))))
+        {
+            throw new FormatException("an expected event's intent must be record, question_only or unsure");
+        }
+
         if (expected["unclear"] is not JsonArray unclear || unclear.Any(u => u?.GetValueKind() != JsonValueKind.String))
         {
             throw new FormatException("expected.unclear must be an array of reasons");
@@ -119,6 +125,11 @@ public sealed class EvalCase
             && expected["is_question"]?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
         {
             throw new FormatException("expected.is_question must be true or false");
+        }
+
+        if (expected.ContainsKey("undo") && expected["undo"]?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new FormatException("expected.undo must be true or false");
         }
 
         if (expected["alert"] is { } alert

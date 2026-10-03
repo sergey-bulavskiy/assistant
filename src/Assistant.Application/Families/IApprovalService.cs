@@ -20,4 +20,12 @@ public interface IApprovalService
     Task<ApprovalResolution> ResolveUserApprovalAsync(long familyMemberId, bool approve, CancellationToken cancellationToken);
 
     Task<FamilyMemberStatus> GetFamilyMemberStatusAsync(long familyMemberId, CancellationToken cancellationToken);
+
+    /// <summary>Read-only: the status of this Telegram user in the family, or null when they are not
+    /// a member. Never creates a row or sends anything (button taps re-check with it).</summary>
+    Task<FamilyMemberStatus?> FindFamilyMemberStatusAsync(long familyId, long telegramUserId, CancellationToken cancellationToken);
+
+    /// <summary>Read-only: the status of the bot's place for this chat and topic (null topic = the
+    /// whole chat), or null when there is no such place. Never creates a row or sends anything.</summary>
+    Task<PlaceStatus?> FindPlaceStatusAsync(long botDbId, long chatId, int? topicId, CancellationToken cancellationToken);
 }

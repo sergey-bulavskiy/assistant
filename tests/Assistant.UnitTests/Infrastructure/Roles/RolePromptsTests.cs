@@ -46,7 +46,9 @@ public class RolePromptsTests
         text.ShouldContain("\"events\"");
         text.ShouldContain("\"unclear\"");
         text.ShouldContain("\"is_question\"");
-        foreach (var value in HealthEventTypes.All.Concat(GlucoseContexts.All).Concat(SymptomCodes.All))
+        text.ShouldContain("\"undo\"");
+        text.ShouldContain("\"intent\"");
+        foreach (var value in HealthEventTypes.All.Concat(GlucoseContexts.All).Concat(SymptomCodes.All).Concat(ExtractionIntents.All))
         {
             text.ShouldContain(value);
         }

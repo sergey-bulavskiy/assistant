@@ -331,6 +331,48 @@ public class TelegramUpdateMapperTests
     }
 
     [Fact]
+    public void Callback_query_carries_the_chat_type_and_the_forum_topic_of_its_message()
+    {
+        Update Tap(ChatType chatType, bool isTopicMessage, int? threadId) => new()
+        {
+            Id = 502,
+            CallbackQuery = new CallbackQuery
+            {
+                Id = "cbq-2",
+                From = new User { Id = 222 },
+                Data = "rec_yes:5",
+                Message = new Message
+                {
+                    Id = 43, Chat = new Chat { Id = -100, Type = chatType }, IsTopicMessage = isTopicMessage, MessageThreadId = threadId
+                }
+            }
+        };
+
+        var topic = TelegramUpdateMapper.Map(Tap(ChatType.Supergroup, isTopicMessage: true, threadId: 7)).CallbackQuery!;
+        topic.MessageChatId.ShouldBe(-100);
+        topic.MessageId.ShouldBe(43);
+        topic.MessageTopicId.ShouldBe(7);
+        topic.MessageChatType.ShouldBe("supergroup");
+
+        // A reply thread outside a forum topic is not a topic (the same rule as for messages).
+        var group = TelegramUpdateMapper.Map(Tap(ChatType.Group, isTopicMessage: false, threadId: 7)).CallbackQuery!;
+        group.MessageTopicId.ShouldBeNull();
+        group.MessageChatType.ShouldBe("group");
+    }
+
+    [Fact]
+    public void Callback_query_without_a_message_has_no_chat_type()
+    {
+        var update = new Update { Id = 503, CallbackQuery = new CallbackQuery { Id = "cbq-3", From = new User { Id = 222 }, Data = "rec_no:5" } };
+
+        var result = TelegramUpdateMapper.Map(update).CallbackQuery!;
+
+        result.MessageChatType.ShouldBeNull();
+        result.MessageTopicId.ShouldBeNull();
+        result.MessageChatId.ShouldBe(0);
+    }
+
+    [Fact]
     public void Bot_added_to_chat_maps_to_a_membership_change_with_IsNowMember_true()
     {
         var update = new Update

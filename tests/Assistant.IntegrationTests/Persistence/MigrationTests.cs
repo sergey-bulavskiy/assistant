@@ -218,4 +218,17 @@ public class MigrationTests : IntegrationTestBase
 
         await Should.ThrowAsync<DbUpdateException>(() => Db.SaveChangesAsync());
     }
+    [Fact]
+    public async Task Pending_records_table_has_jsonb_events_a_rule_key_array_and_the_message_index()
+    {
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'pending_records' AND column_name = 'events' AND data_type = 'jsonb'")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'pending_records' AND column_name = 'alerted_rule_keys' AND data_type = 'ARRAY' AND column_default LIKE '%{{}}%'")
+            .SingleAsync()).ShouldBe(1);
+        (await Db.Database.SqlQueryRaw<int>(
+            "SELECT count(*)::int AS \"Value\" FROM pg_indexes WHERE tablename = 'pending_records' AND indexdef LIKE '%(family_id, source_message_id)%'")
+            .SingleAsync()).ShouldBe(1);
+    }
 }
