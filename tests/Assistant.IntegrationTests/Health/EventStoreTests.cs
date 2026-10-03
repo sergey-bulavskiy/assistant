@@ -81,6 +81,165 @@ public class EventStoreTests : IntegrationTestBase
         }
     }
 
+    private async Task<ReplacedEvents> ReplaceAsync(
+        long profileId, HealthEventSource source, params NewHealthEvent[] events)
+    {
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            return await store.ReplaceMessageEventsAsync(1, profileId, source, events, CancellationToken.None);
+        }
+    }
+
+    private Task<List<HealthEvent>> RowsOfAsync(long messageId) =>
+        Db.Events.AsNoTracking().Where(e => e.SourceMessageId == messageId).OrderBy(e => e.Id).ToListAsync();
+
+    [Fact]
+    public async Task Replace_keeps_unchanged_events_deletes_changed_ones_and_adds_new_ones()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var old = await AddAsync(
+            profile.Id,
+            Source(m1),
+            NewEvent("glucose", "{\"value\":7.8,\"context\":\"other\"}", "2030-02-07T08:00:00Z"),
+            Weight());
+
+        var result = await ReplaceAsync(
+            profile.Id,
+            Source(m1),
+            NewEvent("weight", "{\"kg\": 60.0}", "2030-02-07T08:00:00Z"),
+            NewEvent("glucose", "{\"value\":2.5,\"context\":\"other\"}", "2030-02-07T08:00:00Z"),
+            NewEvent("blood_pressure", "{\"systolic\":120,\"diastolic\":80,\"pulse\":null}", "2030-02-07T08:00:00Z"));
+
+        result.Events.Count.ShouldBe(3);
+        result.Events[0].Id.ShouldBe(old[1].Id);
+        result.Events[1].Id.ShouldBeGreaterThan(old[1].Id);
+        result.Events[2].Id.ShouldBeGreaterThan(old[1].Id);
+        result.Events.Select(e => e.Type).ShouldBe(new[] { "weight", "glucose", "blood_pressure" });
+        result.KeptCount.ShouldBe(1);
+        result.Deleted.Single().Id.ShouldBe(old[0].Id);
+        result.HadEvents.ShouldBeTrue();
+
+        var rows = await RowsOfAsync(m1);
+        rows.Count.ShouldBe(4);
+        var oldGlucose = rows.Single(r => r.Id == old[0].Id);
+        oldGlucose.DeletedAt.ShouldBe(Now);
+        oldGlucose.DeleteReason.ShouldBe("edit");
+        oldGlucose.UpdatedAt.ShouldBe(Now);
+        rows.Where(r => r.Id != old[0].Id).ShouldAllBe(r => r.DeletedAt == null);
+        rows.Where(r => r.Id > old[1].Id).ShouldAllBe(r => r.FamilyId == 1 && r.ProfileId == profile.Id && r.SubjectTag == "health"
+            && r.BotId == 1001 && r.ChatId == -100 && r.TopicId == 7 && r.RecordedByUserId == 111
+            && r.CreatedAt == Now && r.Flags.Length == 0);
+        rows.Count(r => r.Id > old[1].Id).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Replace_with_the_same_events_changes_nothing()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var old = await AddAsync(
+            profile.Id,
+            Source(m1),
+            NewEvent("glucose", "{\"value\":7.8,\"context\":\"other\"}", "2030-02-07T08:00:00Z"),
+            Weight());
+
+        var result = await ReplaceAsync(
+            profile.Id,
+            Source(m1),
+            NewEvent("glucose", "{\"value\":7.8,\"context\":\"other\"}", "2030-02-07T08:00:00Z"),
+            Weight());
+
+        result.Events.Select(e => e.Id).ShouldBe(old.Select(e => e.Id));
+        result.KeptCount.ShouldBe(2);
+        result.Deleted.ShouldBeEmpty();
+        var rows = await RowsOfAsync(m1);
+        rows.Count.ShouldBe(2);
+        rows.ShouldAllBe(r => r.DeletedAt == null && r.UpdatedAt == Now);
+    }
+
+    [Fact]
+    public async Task Replace_with_no_events_deletes_only_this_messages_events()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var m2 = await AddMessageAsync(2);
+        var first = await AddAsync(profile.Id, Source(m1), Weight(), Weight("2030-02-07T09:00:00Z"));
+        await AddAsync(profile.Id, Source(m2), Weight());
+
+        var result = await ReplaceAsync(profile.Id, Source(m1));
+
+        result.Events.ShouldBeEmpty();
+        result.KeptCount.ShouldBe(0);
+        result.Deleted.Select(e => e.Id).ShouldBe(first.Select(e => e.Id));
+        result.HadEvents.ShouldBeTrue();
+        (await RowsOfAsync(m1)).ShouldAllBe(r => r.DeleteReason == "edit");
+        (await RowsOfAsync(m2)).ShouldAllBe(r => r.DeletedAt == null);
+    }
+
+    [Fact]
+    public async Task Replace_matches_each_earlier_event_once()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var twins = await AddAsync(profile.Id, Source(m1), Weight(), Weight());
+
+        var result = await ReplaceAsync(profile.Id, Source(m1), Weight());
+
+        result.KeptCount.ShouldBe(1);
+        result.Events.Single().Id.ShouldBe(twins[0].Id);
+        result.Deleted.Single().Id.ShouldBe(twins[1].Id);
+    }
+
+    [Fact]
+    public async Task Replace_ignores_deleted_events()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var gone = await AddAsync(profile.Id, Source(m1), Weight());
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            await store.DeleteByIdAsync(1, profile.Id, gone[0].Id, "del", CancellationToken.None);
+        }
+
+        var result = await ReplaceAsync(profile.Id, Source(m1), Weight());
+
+        result.KeptCount.ShouldBe(0);
+        result.Deleted.ShouldBeEmpty();
+        result.HadEvents.ShouldBeFalse();
+        result.Events.Single().Id.ShouldNotBe(gone[0].Id);
+        (await Db.Events.AsNoTracking().SingleAsync(e => e.Id == gone[0].Id)).DeleteReason.ShouldBe("del");
+    }
+
+    [Fact]
+    public async Task Replace_ignores_events_of_another_chat_with_the_same_message_id()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var m1 = await AddMessageAsync(1);
+        var otherChat = await AddAsync(profile.Id, new HealthEventSource(m1, 1001, -200, 7, 111), Weight());
+
+        var result = await ReplaceAsync(profile.Id, Source(m1));
+
+        result.Deleted.ShouldBeEmpty();
+        (await Db.Events.AsNoTracking().SingleAsync(e => e.Id == otherChat[0].Id)).DeletedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Replace_needs_the_source_message()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            await Should.ThrowAsync<ArgumentException>(() => store.ReplaceMessageEventsAsync(
+                1, profile.Id, new HealthEventSource(null, 1001, -100, 7, 111), new[] { Weight() }, CancellationToken.None));
+        }
+
+        (await Db.Events.CountAsync()).ShouldBe(0);
+    }
+
     [Fact]
     public async Task Add_saves_events_with_the_profile_subject_tag_and_source()
     {
@@ -286,6 +445,8 @@ public class EventStoreTests : IntegrationTestBase
                 store.DeleteBySourceTelegramMessageAsync(1, profile.Id, 1001, -100, 1, "del", CancellationToken.None));
             await Should.ThrowAsync<InvalidOperationException>(() =>
                 store.DeleteByIdAsync(1, profile.Id, 1, "del", CancellationToken.None));
+            await Should.ThrowAsync<InvalidOperationException>(() =>
+                store.ReplaceMessageEventsAsync(1, profile.Id, Source(m1), new[] { Weight() }, CancellationToken.None));
         }
 
         (await Db.Events.CountAsync()).ShouldBe(0);
@@ -317,6 +478,8 @@ public class EventStoreTests : IntegrationTestBase
             (await store.DeleteByIdAsync(1, profileB.Id, eventB, "del", CancellationToken.None)).Events.ShouldBeEmpty();
             await Should.ThrowAsync<InvalidOperationException>(() =>
                 store.AddAsync(1, profileB.Id, Source(messageB), new[] { Weight() }, CancellationToken.None));
+            await Should.ThrowAsync<InvalidOperationException>(() => store.ReplaceMessageEventsAsync(
+                1, profileB.Id, new HealthEventSource(messageB, 1002, -100, 7, 222), Array.Empty<NewHealthEvent>(), CancellationToken.None));
         }
 
         (await Db.Events.AsNoTracking().SingleAsync(e => e.Id == eventB)).DeletedAt.ShouldBeNull();

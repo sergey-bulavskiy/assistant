@@ -17,7 +17,8 @@ namespace Assistant.Application.Health;
 /// it, one fixed alert per dangerous event), marks recorded messages with ✍ and asks once when something
 /// cannot be recorded. When extraction fails or is refused, or the model missed a glucose or blood
 /// pressure reading, a quick scan still alerts on dangerous values (or asks about implausible ones).
-/// Edits are ignored. Never logs message text, model answers or values.</summary>
+/// An edited text message (sent at most 24 h ago) is read again and its records follow the new text;
+/// unchanged records keep their id, so they never alert twice. Never logs message text, model answers or values.</summary>
 public class HealthAssistant : IHealthAssistant
 {
     public const string OwnerOnlyText = "Только владелец семьи может менять профиль.";
@@ -79,6 +80,9 @@ public class HealthAssistant : IHealthAssistant
 
     private static readonly TimeSpan UndoWindow = TimeSpan.FromHours(24);
 
+    /// <summary>Edits of messages sent longer ago than this are ignored (their records stay).</summary>
+    private static readonly TimeSpan EditWindow = TimeSpan.FromHours(24);
+
     private readonly IHealthProfileStore _profiles;
     private readonly IFamilyOwnership _ownership;
     private readonly IEventStore _events;
@@ -117,9 +121,24 @@ public class HealthAssistant : IHealthAssistant
     public async Task HandleAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
     {
-        // Only new messages. Edits (Updated) keep today's storage behaviour and nothing else for now;
-        // redeliveries never reply twice.
-        if (storeResult.Outcome != StoreOutcome.Stored || message.IsEdit || bot.FamilyId is not { } familyId)
+        if (bot.FamilyId is not { } familyId)
+        {
+            return;
+        }
+
+        // An edit is read again (Updated; or Stored when the bot never saw the original). Redeliveries
+        // (AlreadyProcessed, Duplicate, OffsetOnly) never reply twice.
+        if (message.IsEdit)
+        {
+            if (storeResult.Outcome is StoreOutcome.Stored or StoreOutcome.Updated)
+            {
+                await HandleEditAsync(bot, telegramClient, message, familyId, storeResult, cancellationToken);
+            }
+
+            return;
+        }
+
+        if (storeResult.Outcome != StoreOutcome.Stored)
         {
             return;
         }
@@ -450,23 +469,82 @@ public class HealthAssistant : IHealthAssistant
         }
     }
 
-    private async Task ExtractAsync(
-        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        StoreResult storeResult, CancellationToken cancellationToken)
+    // An edited text message is read again and its records follow the new text. Ignored: non-text
+    // edits, edits into a command (commands run only when sent) and edits of messages sent more than
+    // EditWindow ago; their records stay. Everything else (rules, alerts, clarification, quick scan,
+    // failure notice) works as for a new message.
+    private async Task HandleEditAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, long familyId, StoreResult storeResult,
+        CancellationToken cancellationToken)
     {
-        if (!ExtractionPrompt.ShouldExtract(text))
+        if (message.Kind != MessageKind.Text || message.Text is not { } text || text.StartsWith('/') || storeResult.MessageDbId is null)
         {
             return;
         }
 
+        if (_clock.UtcNow - message.SentAt > EditWindow)
+        {
+            _logger.LogInformation("Edit of message {MessageDbId} ignored: sent too long ago", storeResult.MessageDbId);
+            return;
+        }
+
+        var profile = await _profiles.GetOrCreateAsync(familyId, bot.BotDbId, cancellationToken);
+        await ExtractAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, isEdit: true);
+    }
+
+    // An edit into a text without readings (too short or emoji only, no model call): the message's
+    // records are deleted and its reaction is cleared.
+    private async Task RemoveEditedEventsAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, long familyId, HealthProfileInfo profile, long? messageDbId,
+        CancellationToken cancellationToken)
+    {
+        var source = new HealthEventSource(messageDbId, bot.TelegramBotId, message.ChatId, message.TopicId, message.UserId);
+        var replaced = await _events.ReplaceMessageEventsAsync(familyId, profile.Id, source, Array.Empty<NewHealthEvent>(), cancellationToken);
+        await UpdateEditReactionAsync(telegramClient, message, replaced, messageDbId, cancellationToken);
+    }
+
+    // An edited message keeps its reaction while it has records (no second call: a refused ✍ would
+    // turn into 👍), gets ✍ when it had none before, and loses the reaction when none are left.
+    // Logs counts only.
+    private async Task UpdateEditReactionAsync(
+        ITelegramClient telegramClient, IncomingMessage message, ReplacedEvents replaced, long? messageDbId, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Edit of message {MessageDbId}: {Kept} kept, {Deleted} deleted, {Added} added",
+            messageDbId, replaced.KeptCount, replaced.Deleted.Count, replaced.Events.Count - replaced.KeptCount);
+        if (replaced.Events.Count > 0 && !replaced.HadEvents)
+        {
+            await MarkRecordedAsync(telegramClient, message, cancellationToken);
+        }
+        else if (replaced.Events.Count == 0 && replaced.HadEvents)
+        {
+            await ClearReactionsAsync(telegramClient, new[] { new MessageRef(message.ChatId, message.MessageId) }, cancellationToken);
+        }
+    }
+
+    private async Task ExtractAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
+        StoreResult storeResult, CancellationToken cancellationToken, bool isEdit = false)
+    {
         var messageDbId = storeResult.MessageDbId;
+        if (!ExtractionPrompt.ShouldExtract(text))
+        {
+            // No model call. An edit into such a text has no readings left.
+            if (isEdit)
+            {
+                await RemoveEditedEventsAsync(bot, telegramClient, message, familyId, profile, messageDbId, cancellationToken);
+            }
+
+            return;
+        }
+
         var instructions = _rolePrompts.Find(BotRoles.Health, ExtractInstructionsFile);
         if (instructions is null)
         {
             // The prompt resource is missing (an Error was logged at startup): extraction is off and
             // the family is told that nothing was recorded.
             LogOutcome($"refused:{LlmRefusalReason.NotConfigured}", messageDbId, 0);
-            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
         }
 
@@ -490,14 +568,14 @@ public class HealthAssistant : IHealthAssistant
         {
             _logger.LogError("health extraction call failed: {ExceptionType}", ex.GetType().Name);
             LogOutcome("failed", messageDbId, 0);
-            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
         }
 
         if (!result.IsAnswer)
         {
             LogOutcome($"refused:{result.RefusalReason}", messageDbId, 0);
-            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
         }
 
@@ -505,7 +583,7 @@ public class HealthAssistant : IHealthAssistant
         if (output is null)
         {
             LogOutcome("invalid_output", messageDbId, 0);
-            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
         }
 
@@ -524,22 +602,37 @@ public class HealthAssistant : IHealthAssistant
             }
         }
 
-        if (valid.Count > 0)
+        // An edit replaces the message's records even when the new text has none left.
+        if (valid.Count > 0 || isEdit)
         {
             var source = new HealthEventSource(messageDbId, bot.TelegramBotId, message.ChatId, message.TopicId, message.UserId);
             IReadOnlyList<SafetyEvaluation> evaluations = Array.Empty<SafetyEvaluation>();
             var evaluated = false;
             IReadOnlyList<HealthEventInfo> saved;
+            ReplacedEvents? replaced = null;
             try
             {
                 // Safety rules (deterministic code, never the model) run on every new event before it is
-                // saved; their flags are saved with it.
-                var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
-                var recent = await LoadComboContextAsync(familyId, profile, valid, rules, cancellationToken);
-                evaluations = SafetyRuleEvaluator.Evaluate(valid, recent, rules, _clock.UtcNow);
-                evaluated = true;
+                // saved; their flags are saved with it. On an edit they run on every event of the new
+                // text: an unchanged event keeps its id, so its existing alert claim stops a second alert.
+                if (valid.Count > 0)
+                {
+                    var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
+                    var recent = await LoadComboContextAsync(familyId, profile, valid, rules, messageDbId, cancellationToken);
+                    evaluations = SafetyRuleEvaluator.Evaluate(valid, recent, rules, _clock.UtcNow);
+                    evaluated = true;
+                }
+
                 var flagged = valid.Select((e, i) => e with { Flags = evaluations[i].Flags }).ToList();
-                saved = await _events.AddAsync(familyId, profile.Id, source, flagged, cancellationToken);
+                if (isEdit)
+                {
+                    replaced = await _events.ReplaceMessageEventsAsync(familyId, profile.Id, source, flagged, cancellationToken);
+                    saved = replaced.Events;
+                }
+                else
+                {
+                    saved = await _events.AddAsync(familyId, profile.Id, source, flagged, cancellationToken);
+                }
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -570,7 +663,14 @@ public class HealthAssistant : IHealthAssistant
             }
 
             // ✍ first, then the alerts; the clarification (below) comes last.
-            await MarkRecordedAsync(telegramClient, message, cancellationToken);
+            if (replaced is null)
+            {
+                await MarkRecordedAsync(telegramClient, message, cancellationToken);
+            }
+            else
+            {
+                await UpdateEditReactionAsync(telegramClient, message, replaced, messageDbId, cancellationToken);
+            }
             await SendAlertsAsync(telegramClient, message, familyId, profile, saved, evaluations, messageDbId, cancellationToken);
         }
 
@@ -598,10 +698,11 @@ public class HealthAssistant : IHealthAssistant
     }
 
     // Earlier active events the combination rule may pair with (deleted ones never count). Read before
-    // the new events are saved, so a new event never pairs with itself through the store.
+    // the new events are saved, so a new event never pairs with itself through the store; the
+    // message's own earlier events are left out too (an edit replaces them).
     private async Task<IReadOnlyList<HealthEventInfo>> LoadComboContextAsync(
         long familyId, HealthProfileInfo profile, IReadOnlyList<NewHealthEvent> events, IReadOnlyList<SafetyRuleInfo> rules,
-        CancellationToken cancellationToken)
+        long? messageDbId, CancellationToken cancellationToken)
     {
         var combo = rules.FirstOrDefault(r => r.RuleKey == SafetyRuleKeys.ComboBpSymptoms);
         if (combo?.WindowHours is not { } hours || hours <= 0)
@@ -613,7 +714,8 @@ public class HealthAssistant : IHealthAssistant
         var from = events.Min(e => e.OccurredAt) - window;
         // GetActiveAsync's upper bound is exclusive; the evaluator checks the exact window.
         var to = events.Max(e => e.OccurredAt) + window + TimeSpan.FromSeconds(1);
-        return await _events.GetActiveAsync(familyId, profile.Id, from, to, cancellationToken);
+        var active = await _events.GetActiveAsync(familyId, profile.Id, from, to, cancellationToken);
+        return active.Where(e => messageDbId is null || e.SourceMessageId != messageDbId).ToList();
     }
 
     // One fixed alert per saved event that reached an alert level, in event order: claimed in
@@ -675,7 +777,7 @@ public class HealthAssistant : IHealthAssistant
     // clarification; otherwise the throttled failure notice.
     private async Task HandleExtractionFailureAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        long? messageDbId, CancellationToken cancellationToken)
+        long? messageDbId, bool isEdit, CancellationToken cancellationToken)
     {
         if (await TrySendQuickScanReplyAsync(
                 telegramClient, message, text, familyId, profile, messageDbId, new HashSet<string>(), clarify: true, cancellationToken))
@@ -683,7 +785,9 @@ public class HealthAssistant : IHealthAssistant
             return;
         }
 
-        await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+        // A failed edit always says so (the throttle is neither consulted nor used up): otherwise the
+        // earlier records would silently stay and the user would think the edit was applied.
+        await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken, throttled: !isEdit);
     }
 
     // Quick scan: transient, unsaved readings validated like extracted ones and checked against the
@@ -746,9 +850,9 @@ public class HealthAssistant : IHealthAssistant
         return sent;
     }
 
-    private async Task SendFailureNoticeAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, CancellationToken cancellationToken)
+    private async Task SendFailureNoticeAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, CancellationToken cancellationToken, bool throttled = true)
     {
-        if (!_failureNotices.TryAcquire(bot.TelegramBotId, message.ChatId, message.TopicId, _clock.UtcNow))
+        if (throttled && !_failureNotices.TryAcquire(bot.TelegramBotId, message.ChatId, message.TopicId, _clock.UtcNow))
         {
             _logger.LogInformation("Extraction failure notice throttled for chat message {MessageId}", message.MessageId);
             return;

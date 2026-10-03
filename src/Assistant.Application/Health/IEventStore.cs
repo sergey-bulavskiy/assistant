@@ -22,6 +22,17 @@ public sealed record DeletedEvents(IReadOnlyList<HealthEventInfo> Events, IReadO
     public static DeletedEvents None { get; } = new(Array.Empty<HealthEventInfo>(), Array.Empty<MessageRef>());
 }
 
+/// <summary>Result of reading an edited message again. Events: one entry per new event, in input
+/// order; an event equal to one of the message's earlier active events (same type, time and payload)
+/// keeps that row and id, the others are new rows. KeptCount: how many earlier events were kept.
+/// Deleted: the message's earlier events no longer in its text, soft-deleted with reason edit
+/// (oldest id first).</summary>
+public sealed record ReplacedEvents(IReadOnlyList<HealthEventInfo> Events, int KeptCount, IReadOnlyList<HealthEventInfo> Deleted)
+{
+    /// <summary>True when the message had active events before the edit.</summary>
+    public bool HadEvents => KeptCount > 0 || Deleted.Count > 0;
+}
+
 /// <summary>Health events of one profile. Fails closed like IHealthProfileStore: every method takes
 /// familyId and throws InvalidOperationException unless ICurrentFamily.FamilyId equals it. Deleted
 /// events are never returned or deleted again. botId is always the Telegram bot id.</summary>
@@ -49,4 +60,12 @@ public interface IEventStore
 
     /// <summary>/del 123: deletes that event if it is active and belongs to this family and profile.</summary>
     Task<DeletedEvents> DeleteByIdAsync(long familyId, long profileId, long eventId, string reason, CancellationToken cancellationToken);
+
+    /// <summary>Edited message: makes <paramref name="events"/> the active events of the source message
+    /// (source.MessageDbId, required) with one save. The message's earlier active events (same bot
+    /// and chat) that are unchanged are kept, the others are soft-deleted with reason edit, and the
+    /// remaining new events are added. A failure changes nothing. Throws InvalidOperationException if
+    /// the profile is not in this family, ArgumentException without a source message.</summary>
+    Task<ReplacedEvents> ReplaceMessageEventsAsync(
+        long familyId, long profileId, HealthEventSource source, IReadOnlyList<NewHealthEvent> events, CancellationToken cancellationToken);
 }

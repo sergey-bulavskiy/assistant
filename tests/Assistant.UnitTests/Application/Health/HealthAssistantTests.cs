@@ -1440,6 +1440,296 @@ public class HealthAssistantTests
         _events.Added.ShouldBeEmpty();
     }
 
+    // --- Edits ---
+
+    private const string UnitClarification18 = "Не понял «18» — уточните единицы (нужно в ммоль/л).";
+
+    // An earlier glucose record of the edited message (message db id 1).
+    private static readonly HealthEventInfo OldGlucose78 = new(5, "glucose", Now, "{\"value\":7.8,\"context\":\"other\"}", 1);
+
+    private IncomingMessage Edit(
+        string? text, string chatType = "private", int? topicId = null, DateTimeOffset? sentAt = null, MessageKind kind = MessageKind.Text) =>
+        new(ChatId: chatType == "private" ? 111 : -100, ChatType: chatType, ChatTitle: chatType == "private" ? null : "test group",
+            TopicId: topicId, MessageId: _nextMessageId++, UserId: 111, Username: "test_user",
+            Text: text, Kind: kind, IsEdit: true, SentAt: sentAt ?? Now, EditedAt: Now,
+            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: null, ReplyToUserId: null);
+
+    [Fact]
+    public async Task An_edit_replaces_the_records_and_alerts_on_the_changed_value()
+    {
+        _events.ReplaceDeletes.Add(OldGlucose78);
+        Answer(GlucoseAnswer("2.5"));
+        var edit = Edit("сахар 2.5", "group", topicId: 7);
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _events.Added.ShouldBeEmpty();
+        var replaced = _events.Replaced.ShouldHaveSingleItem();
+        replaced.FamilyId.ShouldBe(42);
+        replaced.ProfileId.ShouldBe(1);
+        replaced.Source.ShouldBe(new HealthEventSource(1, 999, -100, 7, 111));
+        var reading = replaced.Events.ShouldHaveSingleItem();
+        reading.Type.ShouldBe("glucose");
+        reading.PayloadJson.ShouldBe("{\"value\":2.5,\"context\":\"other\"}");
+        reading.OccurredAt.ShouldBe(Now);
+        reading.Flags.ShouldNotBeNull().ShouldBeEmpty();
+        var request = _gateway.Requests.ShouldHaveSingleItem();
+        request.TriggerMessageId.ShouldBe(1);
+        request.Messages.ShouldHaveSingleItem().Text.ShouldBe("сахар 2.5");
+        // The message already carries its reaction.
+        _telegram.Reactions.ShouldBeEmpty();
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, UrgentLow25, (int?)edit.MessageId) });
+        _alerts.Claims.ShouldHaveSingleItem().Alert
+            .ShouldBe(new NewSafetyAlert(1, "glucose.any", "urgent", 3.0m, "guideline_default", -100, 7));
+    }
+
+    [Fact]
+    public async Task An_unchanged_dangerous_reading_is_not_alerted_again()
+    {
+        _events.ReplaceKeeps[0] = 5;
+        _alerts.ClaimResult = false;
+        Answer(GlucoseAnswer("2.5"));
+
+        await HandleAsync(Edit("Сахар 2.5"), StoreOutcome.Updated);
+
+        var claim = _alerts.Claims.ShouldHaveSingleItem().Alert;
+        claim.EventId.ShouldBe(5);
+        claim.RuleKey.ShouldBe("glucose.any");
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_kept_reading_that_never_alerted_alerts_now()
+    {
+        // No alert row for event 5 yet (e.g. the threshold changed since): the claim is won.
+        _events.ReplaceKeeps[0] = 5;
+        Answer(GlucoseAnswer("2.5"));
+
+        await HandleAsync(Edit("сахар 2.5"), StoreOutcome.Updated);
+
+        _alerts.Claims.ShouldHaveSingleItem().Alert.EventId.ShouldBe(5);
+        SingleReply().ShouldBe(UrgentLow25);
+    }
+
+    [Fact]
+    public async Task An_edit_of_a_message_without_records_sets_the_reaction()
+    {
+        Answer(GlucoseAt930Json);
+        var edit = Edit("сахар 7.8 в 9:30", "group");
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _telegram.Reactions.ShouldBe(new[] { (-100L, edit.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBeEmpty();
+        _events.Replaced.ShouldHaveSingleItem().Events.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task An_edit_without_readings_deletes_the_records_and_clears_the_reaction()
+    {
+        _events.ReplaceDeletes.Add(OldGlucose78);
+        Answer(NoEventsJson);
+        var edit = Edit("просто разговор");
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _events.Replaced.ShouldHaveSingleItem().Events.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBe(new[] { (111L, edit.MessageId, (string?)null) });
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_edit_into_short_text_deletes_the_records_without_a_model_call()
+    {
+        _events.ReplaceDeletes.Add(OldGlucose78);
+        var edit = Edit("ок");
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _gateway.Requests.ShouldBeEmpty();
+        _events.Replaced.ShouldHaveSingleItem().Events.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBe(new[] { (111L, edit.MessageId, (string?)null) });
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_edit_with_an_unclear_value_gets_the_clarification()
+    {
+        _events.ReplaceDeletes.Add(OldGlucose78);
+        Answer("{\"events\":[],\"unclear\":[{\"fragment\":\"18\",\"reason\":\"unit\"}],\"is_question\":false}");
+        var edit = Edit("утром 18");
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _events.Replaced.ShouldHaveSingleItem().Events.ShouldBeEmpty();
+        _telegram.Sent.ShouldBe(new[] { (111L, (int?)null, UnitClarification18, (int?)edit.MessageId) });
+        _telegram.Reactions.ShouldBe(new[] { (111L, edit.MessageId, (string?)null) });
+    }
+
+    [Theory]
+    [InlineData("давление 120/80", false)]
+    [InlineData("сахар 2.5", true)]
+    public async Task A_failed_edit_keeps_the_records(string text, bool alert)
+    {
+        _events.ReplaceDeletes.Add(OldGlucose78);
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.RateLimited);
+        var edit = Edit(text);
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _events.Replaced.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        var sent = _telegram.Sent.ShouldHaveSingleItem();
+        sent.ReplyToMessageId.ShouldBe(edit.MessageId);
+        sent.Text.ShouldBe(alert ? UrgentLow25 + NotRecorded : ExtractionReplies.FailureNotice);
+    }
+
+    public enum FailureKind { Refusal, Exception, Unreadable, MissingPrompt }
+
+    private void MakeExtractionFail(FailureKind kind)
+    {
+        switch (kind)
+        {
+            case FailureKind.Refusal:
+                _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.RateLimited);
+                break;
+            case FailureKind.Exception:
+                _gateway.ThrowOnComplete = new InvalidOperationException("simulated");
+                break;
+            case FailureKind.Unreadable:
+                Answer("not json at all");
+                break;
+            default:
+                _prompts.ExtractPrompt = null;
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData(FailureKind.Refusal)]
+    [InlineData(FailureKind.Exception)]
+    [InlineData(FailureKind.Unreadable)]
+    [InlineData(FailureKind.MissingPrompt)]
+    public async Task A_failed_edit_gets_the_notice_even_when_the_throttle_slot_was_just_used(FailureKind kind)
+    {
+        MakeExtractionFail(kind);
+        _throttle.TryAcquire(Bot.TelegramBotId, 111, null, Now).ShouldBeTrue();
+        var edit = Edit("вес 71.5");
+
+        await HandleAsync(edit, StoreOutcome.Updated);
+
+        _telegram.Sent.ShouldBe(new[] { (111L, (int?)null, ExtractionReplies.FailureNotice, (int?)edit.MessageId) });
+        // The edit did not use up the slot: it is still taken from the earlier notice, not renewed.
+        _throttle.TryAcquire(Bot.TelegramBotId, 111, null, Now.AddMinutes(10).AddSeconds(-1)).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(FailureKind.Refusal)]
+    [InlineData(FailureKind.Exception)]
+    [InlineData(FailureKind.Unreadable)]
+    [InlineData(FailureKind.MissingPrompt)]
+    public async Task A_failed_first_time_message_stays_throttled_when_the_slot_was_just_used(FailureKind kind)
+    {
+        MakeExtractionFail(kind);
+        _throttle.TryAcquire(Bot.TelegramBotId, 111, null, Now).ShouldBeTrue();
+
+        await HandleAsync(Msg("вес 71.5"));
+
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_store_failure_on_an_edit_gets_the_failure_notice_and_is_rethrown()
+    {
+        _events.ThrowOnReplace = new InvalidOperationException("simulated");
+        Answer(GlucoseAt930Json);
+        var edit = Edit("сахар 7.8 в 9:30", "group");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => HandleAsync(edit, StoreOutcome.Updated));
+
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)null, ExtractionReplies.FailureNotice, (int?)edit.MessageId) });
+        _telegram.Reactions.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Edits_of_messages_sent_more_than_24_hours_ago_are_ignored()
+    {
+        Answer(GlucoseAnswer("2.5"));
+
+        await HandleAsync(Edit("сахар 2.5", sentAt: Now.AddHours(-24).AddSeconds(-1)), StoreOutcome.Updated);
+
+        _gateway.Requests.ShouldBeEmpty();
+        _events.Replaced.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _profiles.GetOrCreateCalls.ShouldBe(0);
+
+        // Exactly 24 hours is still read; the reading takes the send time, too old to alert.
+        await HandleAsync(Edit("сахар 2.5", sentAt: Now.AddHours(-24)), StoreOutcome.Updated);
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _events.Replaced.ShouldHaveSingleItem().Events.ShouldHaveSingleItem().Flags.ShouldBe(new[] { "old_value_not_alerted" });
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Command_and_non_text_edits_are_ignored()
+    {
+        await HandleAsync(Edit("/today"), StoreOutcome.Updated);
+        await HandleAsync(Edit(null, kind: MessageKind.Photo), StoreOutcome.Updated);
+
+        _telegram.Sent.ShouldBeEmpty();
+        _gateway.Requests.ShouldBeEmpty();
+        _events.Replaced.ShouldBeEmpty();
+        _profiles.GetOrCreateCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task An_edit_of_a_message_the_bot_never_stored_is_read_as_an_edit()
+    {
+        Answer(GlucoseAt930Json);
+        var edit = Edit("сахар 7.8 в 9:30");
+
+        await HandleAsync(edit, StoreOutcome.Stored);
+
+        _events.Added.ShouldBeEmpty();
+        _events.Replaced.ShouldHaveSingleItem();
+        _telegram.Reactions.ShouldBe(new[] { (111L, edit.MessageId, (string?)WritingHand) });
+    }
+
+    [Theory]
+    [InlineData(StoreOutcome.Duplicate)]
+    [InlineData(StoreOutcome.AlreadyProcessed)]
+    [InlineData(StoreOutcome.OffsetOnly)]
+    public async Task Redelivered_edits_are_ignored(StoreOutcome outcome)
+    {
+        Answer(GlucoseAnswer("2.5"));
+
+        await HandleAsync(Edit("сахар 2.5"), outcome);
+
+        _gateway.Requests.ShouldBeEmpty();
+        _events.Replaced.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_edit_never_pairs_with_the_messages_own_earlier_readings()
+    {
+        // The earlier pressure reading came from the edited message itself (message db id 1).
+        _events.ActiveEvents.Add(new HealthEventInfo(50, "blood_pressure", Now.AddHours(-1), "{\"systolic\":150,\"diastolic\":95,\"pulse\":null}", 1));
+        Answer(EventsAnswer(HeadacheEventJson));
+
+        await HandleAsync(Edit("болит голова"), StoreOutcome.Updated);
+
+        _telegram.Sent.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
     private sealed class CapturingLogger : ILogger<HealthAssistant>
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = new();

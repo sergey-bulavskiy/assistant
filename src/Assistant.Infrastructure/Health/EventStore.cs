@@ -33,31 +33,9 @@ public class EventStore : IEventStore
             return Array.Empty<HealthEventInfo>();
         }
 
-        var subjectTag = await _db.HealthProfiles.AsNoTracking()
-            .Where(p => p.Id == profileId && p.FamilyId == familyId)
-            .Select(p => p.SubjectTag)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new InvalidOperationException("Health profile not found in this family.");
-
+        var subjectTag = await GetSubjectTagAsync(familyId, profileId, cancellationToken);
         var now = _clock.UtcNow;
-        var rows = events.Select(e => new HealthEvent
-        {
-            FamilyId = familyId,
-            ProfileId = profileId,
-            Type = e.Type,
-            SubjectTag = subjectTag,
-            OccurredAt = e.OccurredAt,
-            OccurredAtSource = e.OccurredAtSource,
-            Payload = e.PayloadJson,
-            Flags = e.Flags?.ToArray() ?? Array.Empty<string>(),
-            SourceMessageId = source.MessageDbId,
-            BotId = source.BotId,
-            ChatId = source.ChatId,
-            TopicId = source.TopicId,
-            RecordedByUserId = source.UserId,
-            CreatedAt = now,
-            UpdatedAt = now
-        }).ToList();
+        var rows = events.Select(e => NewRow(familyId, profileId, subjectTag, source, e, now)).ToList();
 
         _db.Events.AddRange(rows);
         try
@@ -89,6 +67,72 @@ public class EventStore : IEventStore
             .OrderBy(e => e.OccurredAt).ThenBy(e => e.Id)
             .Select(e => new HealthEventInfo(e.Id, e.Type, e.OccurredAt, e.Payload, e.SourceMessageId))
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<ReplacedEvents> ReplaceMessageEventsAsync(
+        long familyId, long profileId, HealthEventSource source, IReadOnlyList<NewHealthEvent> events, CancellationToken cancellationToken)
+    {
+        EnsureFamilyScope(familyId);
+        if (source.MessageDbId is not { } messageDbId)
+        {
+            throw new ArgumentException("An edited message needs its messages.id.", nameof(source));
+        }
+
+        // Checked first, also when nothing is added: another family's profile is refused before any change.
+        var subjectTag = await GetSubjectTagAsync(familyId, profileId, cancellationToken);
+
+        var earlier = await _db.Events
+            .Where(e => e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null
+                && e.SourceMessageId == messageDbId && e.BotId == source.BotId && e.ChatId == source.ChatId)
+            .OrderBy(e => e.Id)
+            .ToListAsync(cancellationToken);
+
+        var now = _clock.UtcNow;
+        var unmatched = new List<HealthEvent>(earlier);
+        var current = new List<HealthEvent>();
+        var added = new List<HealthEvent>();
+        foreach (var e in events)
+        {
+            // An unchanged event keeps its row and id, so its safety alert claim still stops a second alert.
+            var same = unmatched.FirstOrDefault(r =>
+                r.Type == e.Type && r.OccurredAt == e.OccurredAt && HealthEventPayloads.SameJson(r.Payload, e.PayloadJson));
+            if (same is not null)
+            {
+                unmatched.Remove(same);
+                current.Add(same);
+                continue;
+            }
+
+            var row = NewRow(familyId, profileId, subjectTag, source, e, now);
+            added.Add(row);
+            current.Add(row);
+        }
+
+        foreach (var row in unmatched)
+        {
+            row.DeletedAt = now;
+            row.DeleteReason = EventDeleteReasons.Edit;
+            row.UpdatedAt = now;
+        }
+
+        _db.Events.AddRange(added);
+        try
+        {
+            // One save: the deletes and the inserts commit together, so a failure keeps the earlier events.
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            // The request's context is shared: never leave failed changes tracked for the next save.
+            foreach (var row in added.Concat(unmatched))
+            {
+                _db.Entry(row).State = EntityState.Detached;
+            }
+
+            throw;
+        }
+
+        return new ReplacedEvents(current.Select(ToInfo).ToArray(), events.Count - added.Count, unmatched.Select(ToInfo).ToArray());
     }
 
     public async Task<DeletedEvents> DeleteLatestOfUserAsync(
@@ -173,6 +217,34 @@ public class EventStore : IEventStore
 
         return new DeletedEvents(rows.OrderBy(r => r.Id).Select(ToInfo).ToArray(), messages);
     }
+
+    private async Task<string> GetSubjectTagAsync(long familyId, long profileId, CancellationToken cancellationToken) =>
+        await _db.HealthProfiles.AsNoTracking()
+            .Where(p => p.Id == profileId && p.FamilyId == familyId)
+            .Select(p => p.SubjectTag)
+            .FirstOrDefaultAsync(cancellationToken)
+        ?? throw new InvalidOperationException("Health profile not found in this family.");
+
+    private static HealthEvent NewRow(
+        long familyId, long profileId, string subjectTag, HealthEventSource source, NewHealthEvent e, DateTimeOffset now) =>
+        new()
+        {
+            FamilyId = familyId,
+            ProfileId = profileId,
+            Type = e.Type,
+            SubjectTag = subjectTag,
+            OccurredAt = e.OccurredAt,
+            OccurredAtSource = e.OccurredAtSource,
+            Payload = e.PayloadJson,
+            Flags = e.Flags?.ToArray() ?? Array.Empty<string>(),
+            SourceMessageId = source.MessageDbId,
+            BotId = source.BotId,
+            ChatId = source.ChatId,
+            TopicId = source.TopicId,
+            RecordedByUserId = source.UserId,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
 
     // A null or different FamilyId both mean "not this family's request scope".
     private void EnsureFamilyScope(long familyId)

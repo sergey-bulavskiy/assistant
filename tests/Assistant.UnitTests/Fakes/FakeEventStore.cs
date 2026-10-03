@@ -19,6 +19,48 @@ public class FakeEventStore : IEventStore
     /// <summary>When set, AddAsync throws this instead of storing.</summary>
     public Exception? ThrowOnAdd { get; set; }
 
+    public List<(long FamilyId, long ProfileId, HealthEventSource Source, IReadOnlyList<NewHealthEvent> Events)> Replaced { get; } = new();
+
+    /// <summary>Earlier events of the message that ReplaceMessageEventsAsync reports as deleted.</summary>
+    public List<HealthEventInfo> ReplaceDeletes { get; } = new();
+
+    /// <summary>Input index → id of the earlier event that ReplaceMessageEventsAsync reports as kept
+    /// (unchanged); every other input gets a new id.</summary>
+    public Dictionary<int, long> ReplaceKeeps { get; } = new();
+
+    /// <summary>When set, ReplaceMessageEventsAsync throws this instead of replacing.</summary>
+    public Exception? ThrowOnReplace { get; set; }
+
+    public Task<ReplacedEvents> ReplaceMessageEventsAsync(
+        long familyId, long profileId, HealthEventSource source, IReadOnlyList<NewHealthEvent> events, CancellationToken cancellationToken)
+    {
+        if (ThrowOnReplace is { } exception)
+        {
+            throw exception;
+        }
+
+        Replaced.Add((familyId, profileId, source, events));
+        var kept = 0;
+        var current = new List<HealthEventInfo>();
+        for (var i = 0; i < events.Count; i++)
+        {
+            long id;
+            if (ReplaceKeeps.TryGetValue(i, out var keptId))
+            {
+                id = keptId;
+                kept++;
+            }
+            else
+            {
+                id = _nextId++;
+            }
+
+            current.Add(new HealthEventInfo(id, events[i].Type, events[i].OccurredAt, events[i].PayloadJson, source.MessageDbId));
+        }
+
+        return Task.FromResult(new ReplacedEvents(current, kept, ReplaceDeletes.ToList()));
+    }
+
     public Task<IReadOnlyList<HealthEventInfo>> AddAsync(
         long familyId, long profileId, HealthEventSource source, IReadOnlyList<NewHealthEvent> events, CancellationToken cancellationToken)
     {
