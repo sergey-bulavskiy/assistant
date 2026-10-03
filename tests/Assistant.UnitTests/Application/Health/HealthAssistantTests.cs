@@ -22,6 +22,7 @@ public class HealthAssistantTests
     private readonly FakeTelegramClient _telegram = new();
     private readonly FakeEventStore _events = new();
     private readonly FakeSafetyAlertStore _alerts = new();
+    private readonly FakeMessageStore _messages = new();
     private readonly FakeLlmGateway _gateway = new() { NextResult = LlmResult.Answered(NoEventsJson, "haiku") };
     private readonly FakeRolePrompts _prompts = new();
     private readonly FailureNoticeThrottle _throttle = new();
@@ -39,22 +40,38 @@ public class HealthAssistantTests
         _ownership.OwnerUserIds.Add(111);
     }
 
-    private HealthAssistant CreateAssistant(IClock? clock = null) =>
-        new(_profiles, _ownership, _events, _alerts, _gateway, _prompts, _throttle, clock ?? new FixedClock(Now),
-            new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log);
+    private static LlmConfig Config() => new()
+    {
+        Models = new[] { new ModelCatalogEntry("test", "sonnet"), new ModelCatalogEntry("test", "haiku") },
+        CallsPerMinute = 10,
+        CallsPerDay = 100,
+        MaxContextMessages = 30,
+        MaxInputChars = 8000,
+        MaxOutputTokens = 1000,
+        CallTimeoutSeconds = 60,
+        MaxConcurrentCalls = 2,
+        ModelCooldownMinutes = 5,
+        Prices = new Dictionary<string, ModelPrice>(),
+        Budget = null,
+        FastModels = Array.Empty<ModelCatalogEntry>(),
+    };
+
+    private HealthAssistant CreateAssistant(IClock? clock = null, bool llmOff = false) =>
+        new(_profiles, _ownership, _events, _alerts, _messages, _gateway, llmOff ? null : Config(), _prompts, _throttle,
+            clock ?? new FixedClock(Now), new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log);
 
     private IncomingMessage Msg(
         string? text, string chatType = "private", long userId = 111, int? topicId = null, MessageKind kind = MessageKind.Text,
-        int? replyToMessageId = null) =>
+        int? replyToMessageId = null, long? replyToUserId = null) =>
         new(ChatId: chatType == "private" ? userId : -100, ChatType: chatType, ChatTitle: chatType == "private" ? null : "test group",
             TopicId: topicId, MessageId: _nextMessageId++, UserId: userId, Username: "test_user",
             Text: text, Kind: kind, IsEdit: false, SentAt: Now, EditedAt: null,
-            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: replyToMessageId, ReplyToUserId: null);
+            MigrateToChatId: null, RawJson: "{}", ReplyToMessageId: replyToMessageId, ReplyToUserId: replyToUserId);
 
     private void Answer(string json) => _gateway.NextResult = LlmResult.Answered(json, "haiku");
 
-    private Task HandleAsync(IncomingMessage message, StoreOutcome outcome = StoreOutcome.Stored, IClock? clock = null) =>
-        CreateAssistant(clock).HandleAsync(Bot, _telegram, message, new StoreResult(outcome, 1), CancellationToken.None);
+    private Task HandleAsync(IncomingMessage message, StoreOutcome outcome = StoreOutcome.Stored, IClock? clock = null, long messageDbId = 1) =>
+        CreateAssistant(clock).HandleAsync(Bot, _telegram, message, new StoreResult(outcome, messageDbId), CancellationToken.None);
 
     private string SingleReply() => _telegram.Sent.ShouldHaveSingleItem().Text;
 
@@ -205,7 +222,7 @@ public class HealthAssistantTests
         foreach (var expected in new[]
                  {
                      "/today", "/undo", "/del", "/week", "/profile", "/thresholds", "/setstart", "/threshold", "не заменяю врача",
-                     "не подтверждено врачом", "не советую лекарства"
+                     "не подтверждено врачом", "не советую лекарства", "упомяните меня"
                  })
         {
             reply.ShouldContain(expected);
@@ -1728,6 +1745,340 @@ public class HealthAssistantTests
 
         _telegram.Sent.ShouldBeEmpty();
         _alerts.Claims.ShouldBeEmpty();
+    }
+
+    // --- Answers to addressed questions ---
+
+    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+    private const string Footer = "\n\nНе заменяю врача.";
+    private const string DoseRefusal = "Я не даю советов по дозам лекарств. Это вопрос к врачу — запишите его, чтобы спросить на приёме.";
+    private const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
+
+    private void AskAndAnswer(string answer)
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered(answer, "sonnet"));
+    }
+
+    private void AskOnly() => _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
+
+    [Fact]
+    public async Task Private_question_gets_a_smart_answer_with_the_footer()
+    {
+        AskAndAnswer("Тестовый ответ.");
+
+        await HandleAsync(Msg("какой сахар считается нормой натощак?"));
+
+        _gateway.Requests.Count.ShouldBe(2);
+        _gateway.Requests[0].Tier.ShouldBe("fast");
+        var answer = _gateway.Requests[1];
+        answer.Tier.ShouldBe("smart");
+        answer.PreferredModel.ShouldBeNull();
+        answer.FamilyId.ShouldBe(42);
+        answer.BotId.ShouldBe(999);
+        answer.ChatId.ShouldBe(111);
+        answer.TopicId.ShouldBeNull();
+        answer.TriggerMessageId.ShouldBe(1);
+        var last = answer.Messages[^1];
+        last.Role.ShouldBe(LlmMessageRole.User);
+        last.Text.ShouldBe("какой сахар считается нормой натощак?");
+        _telegram.Sent.ShouldBe(new[] { (111L, (int?)null, "Тестовый ответ." + Footer, (int?)null) });
+        var stored = _messages.OutgoingMessages.ShouldHaveSingleItem();
+        stored.BotId.ShouldBe(999);
+        stored.ChatId.ShouldBe(111);
+        stored.TopicId.ShouldBeNull();
+        stored.ChatType.ShouldBe("private");
+        stored.Text.ShouldBe("Тестовый ответ." + Footer);
+        _telegram.Reactions.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+        _telegram.ChatActionsSent.ShouldContain((111L, (int?)null, "typing"));
+    }
+
+    [Fact]
+    public async Task The_answer_prompt_carries_the_profile_context()
+    {
+        _profiles.Profile = _profiles.Profile with { StageStartDate = new DateOnly(2030, 1, 15), ContextNote = "test context note" };
+        _events.ActiveEvents.Add(new HealthEventInfo(5, "glucose", Now.AddMinutes(-30), "{\"value\":7.8,\"context\":\"after_meal_1h\"}", 3));
+        AskAndAnswer("Тестовый ответ.");
+
+        await HandleAsync(Msg("какой сахар считается нормой натощак?"));
+
+        var system = _gateway.Requests[1].SystemPrompt;
+        system.ShouldStartWith("test answer instructions");
+        system.ShouldContain("- Stage week: 3 нед. 2 дн.");
+        system.ShouldContain("test context note");
+        system.ShouldContain("glucose.any: low_urgent 3.0, low_alert 3.9, high_alert 11.0, high_urgent 13.9 — не подтверждено врачом");
+        system.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+        _gateway.Requests[0].SystemPrompt.ShouldNotContain("test context note");
+        _events.LastRange.ShouldBe((42L, 1L, Now.AddHours(-24), Now.AddHours(1)));
+    }
+
+    [Fact]
+    public async Task Earlier_messages_go_before_the_question()
+    {
+        await _messages.StoreAsync(999, 1, Msg("раньше был вопрос"), CancellationToken.None);
+        await _messages.StoreOutgoingAsync(999, 111, null, "private", 500, "раньше был ответ", CancellationToken.None);
+        AskAndAnswer("Тестовый ответ.");
+
+        await HandleAsync(Msg("а сейчас?"), messageDbId: 10);
+
+        _gateway.Requests[1].Messages.Select(m => (m.Role, m.Text)).ShouldBe(new[]
+        {
+            (LlmMessageRole.User, "раньше был вопрос"),
+            (LlmMessageRole.Assistant, "раньше был ответ"),
+            (LlmMessageRole.User, "а сейчас?")
+        });
+    }
+
+    [Fact]
+    public async Task History_is_capped_at_ten_messages()
+    {
+        for (var i = 1; i <= 12; i++)
+        {
+            await _messages.StoreAsync(999, i, Msg($"сообщение {i}"), CancellationToken.None);
+        }
+
+        AskAndAnswer("Тестовый ответ.");
+
+        await HandleAsync(Msg("а сейчас?"), messageDbId: 100);
+
+        var messages = _gateway.Requests[1].Messages;
+        messages.Count.ShouldBe(11);
+        messages[0].Text.ShouldBe("сообщение 3");
+        messages[^1].Text.ShouldBe("а сейчас?");
+    }
+
+    [Fact]
+    public async Task Group_question_without_mention_or_reply_is_not_answered()
+    {
+        AskOnly();
+
+        await HandleAsync(Msg("какой сахар считается нормой?", "group", topicId: 7));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _telegram.Sent.ShouldBeEmpty();
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("@test_health_bot какой сахар считается нормой?")]
+    [InlineData("какой сахар считается нормой, @TEST_HEALTH_BOT?")]
+    public async Task Group_question_with_a_mention_is_answered_in_the_topic(string text)
+    {
+        AskAndAnswer("Тестовый ответ.");
+        var message = Msg(text, "group", topicId: 7);
+
+        await HandleAsync(message);
+
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, "Тестовый ответ." + Footer, (int?)message.MessageId) });
+        _messages.OutgoingMessages.ShouldHaveSingleItem().TopicId.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task A_genuine_reply_to_the_bot_is_answered()
+    {
+        AskAndAnswer("Тестовый ответ.");
+
+        await HandleAsync(Msg("а это нормально?", "group", topicId: 7, replyToMessageId: 50, replyToUserId: 999));
+
+        _gateway.Requests.Count.ShouldBe(2);
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
+    }
+
+    [Fact]
+    public async Task A_reply_to_the_topic_root_is_not_answered()
+    {
+        AskOnly();
+
+        await HandleAsync(Msg("а это нормально?", "group", topicId: 7, replyToMessageId: 7, replyToUserId: 999));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_message_with_readings_is_not_also_answered()
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered(
+            "{\"events\":[{\"type\":\"glucose\",\"day\":0,\"time\":null,\"value\":5.5,\"unit\":\"mmol/L\",\"context\":\"fasting\"}]," +
+            "\"unclear\":[],\"is_question\":true}", "haiku"));
+        var message = Msg("сахар 5.5 натощак, это нормально?");
+
+        await HandleAsync(message);
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _events.Added.ShouldHaveSingleItem();
+        _telegram.Reactions.ShouldBe(new[] { (111L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBeEmpty();
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_question_with_a_clarification_is_not_also_answered()
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered("{\"events\":[],\"unclear\":[{\"fragment\":\"18\",\"reason\":\"type\"}],\"is_question\":true}", "haiku"));
+
+        await HandleAsync(Msg("утром было 18, это много?"));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe("Не понял «18» — уточните что это за показатель.");
+    }
+
+    [Fact]
+    public async Task A_question_with_a_quick_scan_alert_is_not_also_answered()
+    {
+        AskOnly();
+
+        await HandleAsync(Msg("сахар 2.5, что делать?"));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe(UrgentLow25 + NotRecorded);
+    }
+
+    [Fact]
+    public async Task Edits_are_never_answered()
+    {
+        AskOnly();
+
+        await HandleAsync(Msg("какой сахар считается нормой?") with { IsEdit = true, EditedAt = Now }, StoreOutcome.Updated);
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_extraction_is_not_answered()
+    {
+        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.RateLimited);
+
+        await HandleAsync(Msg("какой сахар считается нормой?"));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe(ExtractionReplies.FailureNotice);
+    }
+
+    [Theory]
+    [InlineData("Увеличьте дозу на 2 единицы.")]
+    [InlineData("Сахар в норме. Можно убавить 2 ед перед ужином.")]
+    [InlineData("Increase the dose by 2 units.")]
+    public async Task Dose_advice_is_replaced_by_the_fixed_refusal(string modelAnswer)
+    {
+        AskAndAnswer(modelAnswer);
+
+        await HandleAsync(Msg("на сколько увеличить дозу?"));
+
+        SingleReply().ShouldBe(DoseRefusal + Footer);
+        _messages.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
+        _telegram.Sent.ShouldAllBe(s => !s.Text.Contains(modelAnswer));
+        _messages.OutgoingMessages.ShouldAllBe(m => !m.Text.Contains(modelAnswer));
+        _log.Entries.ShouldContain(e => e.Message.Contains("dose_advice_replaced"));
+        _log.Entries.ShouldAllBe(e => !e.Message.Contains(modelAnswer));
+    }
+
+    [Fact]
+    public async Task Dose_advice_after_the_first_telegram_part_is_still_replaced()
+    {
+        const string doseSentence = "Увеличьте дозу на 2 единицы.";
+        var longAnswer = string.Concat(Enumerable.Repeat("Сахар в норме, записи за день выглядят ровно. ", 120));
+        longAnswer.Length.ShouldBeGreaterThan(4096);
+        AskAndAnswer(longAnswer + doseSentence);
+
+        await HandleAsync(Msg("расскажите подробно про сахар"));
+
+        SingleReply().ShouldBe(DoseRefusal + Footer);
+        _telegram.Sent.ShouldAllBe(s => !s.Text.Contains(doseSentence));
+        _messages.OutgoingMessages.ShouldAllBe(m => !m.Text.Contains(doseSentence));
+    }
+
+    [Theory]
+    [InlineData(LlmRefusalReason.RateLimited, "Слишком много запросов, подождите минуту.")]
+    [InlineData(LlmRefusalReason.DailyCapReached, "Дневной лимит запросов исчерпан, продолжим завтра.")]
+    [InlineData(LlmRefusalReason.AllModelsUnavailable, "Все модели сейчас недоступны (лимиты), попробуйте позже.")]
+    [InlineData(LlmRefusalReason.BudgetExhausted, "Лимит расходов исчерпан, попробуйте позже.")]
+    [InlineData(LlmRefusalReason.Failed, "Не получилось ответить, попробуйте ещё раз.")]
+    [InlineData(LlmRefusalReason.NotConfigured, "Ассистент пока не настроен.")]
+    public async Task Refusals_reply_with_the_general_texts(LlmRefusalReason reason, string expected)
+    {
+        AskOnly();
+        _gateway.Results.Enqueue(LlmResult.Refused(reason));
+
+        await HandleAsync(Msg("какой сахар считается нормой?"));
+
+        SingleReply().ShouldBe(expected);
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_throwing_smart_call_gets_the_failed_text()
+    {
+        AskOnly();
+        _gateway.ThrowOnCall[2] = new InvalidOperationException("simulated");
+
+        await Should.NotThrowAsync(() => HandleAsync(Msg("какой сахар считается нормой?")));
+
+        _gateway.Requests.Count.ShouldBe(2);
+        SingleReply().ShouldBe(FailedText);
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failing_context_read_gets_the_failed_text()
+    {
+        AskOnly();
+        _profiles.ThrowOnGetRules = true;
+
+        // No digits: neither the save block nor the quick scan reads the rules.
+        await Should.NotThrowAsync(() => HandleAsync(Msg("какой сахар считается нормой?")));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe(FailedText);
+    }
+
+    [Fact]
+    public async Task An_empty_answer_gets_the_failed_text()
+    {
+        AskAndAnswer("   ");
+
+        await HandleAsync(Msg("какой сахар считается нормой?"));
+
+        SingleReply().ShouldBe(FailedText);
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Missing_answer_prompt_says_not_configured()
+    {
+        _prompts.AnswerPrompt = null;
+        AskOnly();
+
+        await HandleAsync(Msg("какой сахар считается нормой?"));
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe("Ассистент пока не настроен.");
+    }
+
+    [Fact]
+    public async Task Llm_config_off_says_not_configured()
+    {
+        AskOnly();
+
+        await CreateAssistant(llmOff: true).HandleAsync(
+            Bot, _telegram, Msg("какой сахар считается нормой?"), new StoreResult(StoreOutcome.Stored, 1), CancellationToken.None);
+
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe("Ассистент пока не настроен.");
+    }
+
+    [Fact]
+    public async Task Logs_never_contain_the_question_or_the_answer()
+    {
+        AskAndAnswer("секретный тестовый ответ");
+
+        await HandleAsync(Msg("секретный тестовый вопрос?"));
+
+        _telegram.Sent.ShouldHaveSingleItem();
+        _log.Entries.ShouldAllBe(e => !e.Message.Contains("секретный"));
+        _log.Entries.ShouldContain(e => e.Message.Contains("Answer answered for message 1"));
     }
 
     private sealed class CapturingLogger : ILogger<HealthAssistant>

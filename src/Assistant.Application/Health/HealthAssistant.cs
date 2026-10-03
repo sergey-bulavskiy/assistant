@@ -18,7 +18,9 @@ namespace Assistant.Application.Health;
 /// cannot be recorded. When extraction fails or is refused, or the model missed a glucose or blood
 /// pressure reading, a quick scan still alerts on dangerous values (or asks about implausible ones).
 /// An edited text message (sent at most 24 h ago) is read again and its records follow the new text;
-/// unchanged records keep their id, so they never alert twice. Never logs message text, model answers or values.</summary>
+/// unchanged records keep their id, so they never alert twice. A question addressed to the bot that
+/// records nothing gets one `smart` answer with the profile's context; it passes the dose-advice filter
+/// and ends with a fixed footer. Never logs message text, model answers or values.</summary>
 public class HealthAssistant : IHealthAssistant
 {
     public const string OwnerOnlyText = "Только владелец семьи может менять профиль.";
@@ -33,6 +35,11 @@ public class HealthAssistant : IHealthAssistant
 
     private const string ExtractInstructionsFile = "extract.md";
 
+    private const string AnswerInstructionsFile = "prompt.md";
+
+    /// <summary>Ends every answer that came from the model (also one replaced by the dose filter).</summary>
+    public const string AnswerFooter = "Не заменяю врача.";
+
     private const int MaxPhoneLength = 100;
     private const int MaxNoteLength = 500;
 
@@ -44,7 +51,8 @@ public class HealthAssistant : IHealthAssistant
         "Опасные значения и симптомы я сразу отмечаю фиксированным предупреждением по порогам из /thresholds " +
         "(пока врач их не подтвердил, они помечены «не подтверждено врачом»). Я не заменяю врача: " +
         "если самочувствие вызывает тревогу, звоните врачу или в скорую, не дожидаясь меня. " +
-        "Я никогда не советую лекарства и их дозы.\n" +
+        "Я никогда не советую лекарства и их дозы. Можно задать вопрос: в личном чате просто напишите его, " +
+        "в группе — упомяните меня или ответьте на моё сообщение.\n" +
         "/today — записи за сегодня\n" +
         "/undo — отменить вашу последнюю запись\n" +
         "/del — удалить записи (в ответ на сообщение) или /del <номер>\n" +
@@ -87,7 +95,9 @@ public class HealthAssistant : IHealthAssistant
     private readonly IFamilyOwnership _ownership;
     private readonly IEventStore _events;
     private readonly ISafetyAlertStore _safetyAlerts;
+    private readonly IMessageStore _messages;
     private readonly ILlmGateway _gateway;
+    private readonly LlmConfig? _config;
     private readonly IRolePrompts _rolePrompts;
     private readonly FailureNoticeThrottle _failureNotices;
     private readonly IClock _clock;
@@ -99,7 +109,9 @@ public class HealthAssistant : IHealthAssistant
         IFamilyOwnership ownership,
         IEventStore events,
         ISafetyAlertStore safetyAlerts,
+        IMessageStore messages,
         ILlmGateway gateway,
+        LlmConfig? config,
         IRolePrompts rolePrompts,
         FailureNoticeThrottle failureNotices,
         IClock clock,
@@ -110,7 +122,9 @@ public class HealthAssistant : IHealthAssistant
         _ownership = ownership;
         _events = events;
         _safetyAlerts = safetyAlerts;
+        _messages = messages;
         _gateway = gateway;
+        _config = config;
         _rolePrompts = rolePrompts;
         _failureNotices = failureNotices;
         _clock = clock;
@@ -680,6 +694,7 @@ public class HealthAssistant : IHealthAssistant
             await ReplyAsync(telegramClient, message, ExtractionReplies.Clarification(problems[0], text), cancellationToken, quote: true);
         }
 
+        var quickScanSent = false;
         if (output.Events.Count > 0 || output.Unclear.Count == 0)
         {
             // A reading in one of the quick-scan formats that the model missed (no event of that
@@ -690,11 +705,20 @@ public class HealthAssistant : IHealthAssistant
                 .Select(e => e.Type?.Trim().ToLowerInvariant())
                 .OfType<string>()
                 .ToHashSet();
-            await TrySendQuickScanReplyAsync(
+            quickScanSent = await TrySendQuickScanReplyAsync(
                 telegramClient, message, text, familyId, profile, messageDbId, extractedTypes, clarify: problems.Count == 0, cancellationToken);
         }
 
         LogOutcome(valid.Count > 0 ? "events" : problems.Count > 0 ? "clarify" : "no_events", messageDbId, valid.Count);
+
+        // An answer only for a new message addressed to this bot that the model marked as a question
+        // and that produced nothing else: no record, no clarification, no quick-scan reply. A reading
+        // is never also answered. reply_to_all is never read for this role.
+        if (!isEdit && output.IsQuestion && valid.Count == 0 && problems.Count == 0 && !quickScanSent
+            && Addressing.IsAddressed(bot, message, text))
+        {
+            await AnswerQuestionAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+        }
     }
 
     // Earlier active events the combination rule may pair with (deleted ones never count). Read before
@@ -767,6 +791,134 @@ public class HealthAssistant : IHealthAssistant
             _logger.LogWarning("Safety alert {RuleKey} ({Level}) for event {EventId}", decision.RuleKey, decision.Level, eventId);
         }
     }
+
+    // One smart call for an addressed question: roles/health/prompt.md plus the runtime block (stage
+    // week, context note, thresholds, readings of the last 24 hours) and the last few messages of this
+    // chat/topic. The answer passes the dose-advice filter (dose advice replaces the whole answer with
+    // the fixed refusal) and always ends with the footer. A refusal or failure gets a fixed text, never
+    // silence, and is not stored. Logs the outcome only, never the question, the note or the answer.
+    private async Task AnswerQuestionAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
+        long? messageDbId, CancellationToken cancellationToken)
+    {
+        var instructions = _rolePrompts.Find(BotRoles.Health, AnswerInstructionsFile);
+        if (_config is null || instructions is null)
+        {
+            LogAnswer($"refused:{LlmRefusalReason.NotConfigured}", messageDbId);
+            await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.NotConfiguredText, storeAsContext: false, cancellationToken);
+            return;
+        }
+
+        LlmResult result;
+        try
+        {
+            var now = _clock.UtcNow;
+            var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
+            // Readings may be stated up to 10 minutes ahead of the message; the hour covers that.
+            var readings = await _events.GetActiveAsync(
+                familyId, profile.Id, now - ConsultationPrompt.ReadingsWindow, now.AddHours(1), cancellationToken);
+            // No /new for this role: the last few messages of this chat/topic; the question itself is
+            // excluded here and appended once by ContextBuilder.
+            var history = await _messages.GetRecentContextAsync(
+                bot.TelegramBotId, message.ChatId, message.TopicId, afterMessageId: null, beforeMessageId: messageDbId,
+                Math.Min(_config.MaxContextMessages, ConsultationPrompt.MaxHistoryMessages), cancellationToken);
+            var request = new LlmRequest(
+                familyId,
+                bot.TelegramBotId,
+                LlmConfig.SmartTier,
+                PreferredModel: null,
+                ConsultationPrompt.BuildSystemPrompt(instructions, now, profile, CurrentWeek(profile), rules, readings),
+                ContextBuilder.Build(history, text, message.Username, message.ChatType != "private", _config.MaxInputChars),
+                ChatId: message.ChatId,
+                TopicId: message.TopicId,
+                TriggerMessageId: messageDbId);
+
+            using var typingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var typingTask = TypingIndicator.RunAsync(telegramClient, message.ChatId, message.TopicId, typingCts.Token);
+            try
+            {
+                result = await _gateway.CompleteAsync(request, cancellationToken);
+            }
+            finally
+            {
+                await typingCts.CancelAsync();
+                await typingTask;
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError("health answer failed: {ExceptionType}", ex.GetType().Name);
+            LogAnswer("failed", messageDbId);
+            await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.FailedText, storeAsContext: false, cancellationToken);
+            return;
+        }
+
+        if (!result.IsAnswer)
+        {
+            LogAnswer($"refused:{result.RefusalReason}", messageDbId);
+            await SendAnswerAsync(
+                bot, telegramClient, message, GeneralAssistant.RefusalText(result, _clock.UtcNow), storeAsContext: false, cancellationToken);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(result.Text))
+        {
+            LogAnswer("empty", messageDbId);
+            await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.FailedText, storeAsContext: false, cancellationToken);
+            return;
+        }
+
+        // The deterministic filter is the enforcement (D7); the prompt rule alone is not trusted. The
+        // model's own text of a replaced answer is never sent, stored or logged.
+        var blocked = DoseAdviceFilter.ContainsDoseAdvice(result.Text);
+        var answer = blocked ? DoseAdviceFilter.RefusalText : result.Text.Trim();
+        LogAnswer(blocked ? "dose_advice_replaced" : "answered", messageDbId);
+        await SendAnswerAsync(bot, telegramClient, message, $"{answer}\n\n{AnswerFooter}", storeAsContext: true, cancellationToken);
+    }
+
+    // Like the General assistant's replies: split for Telegram; in groups the first part is a reply to
+    // the question, private chats never quote. Only answers are stored as outgoing context.
+    private async Task SendAnswerAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, bool storeAsContext,
+        CancellationToken cancellationToken)
+    {
+        var isGroup = message.ChatType != "private";
+        var isFirstPart = true;
+        foreach (var part in ReplySplitter.Split(text))
+        {
+            int sentMessageId;
+            try
+            {
+                var replyToMessageId = isGroup && isFirstPart ? message.MessageId : (int?)null;
+                sentMessageId = await telegramClient.SendTextAsync(message.ChatId, message.TopicId, part, replyToMessageId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("failed to send health answer: {ExceptionType}", ex.GetType().Name);
+                return;
+            }
+
+            isFirstPart = false;
+            if (!storeAsContext)
+            {
+                continue;
+            }
+
+            try
+            {
+                // CancellationToken.None: the user already has this part, so a shutdown must not drop its record.
+                await _messages.StoreOutgoingAsync(
+                    bot.TelegramBotId, message.ChatId, message.TopicId, message.ChatType, sentMessageId, part, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("failed to store health answer: {ExceptionType}", ex.GetType().Name);
+            }
+        }
+    }
+
+    private void LogAnswer(string outcome, long? messageDbId) =>
+        _logger.LogInformation("Answer {Outcome} for message {MessageDbId}", outcome, messageDbId);
 
     // One line per extraction, never the text, the model answer or a fragment.
     private void LogOutcome(string outcome, long? messageDbId, int eventCount) =>
