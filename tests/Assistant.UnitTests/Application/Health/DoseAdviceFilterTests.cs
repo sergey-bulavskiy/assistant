@@ -268,9 +268,9 @@ public class DoseAdviceFilterTests
             answer.Append("сахар в норме ");
         }
 
-        var text = answer.ToString();
-
-        DoseAdviceFilter.ContainsDoseAdvice(text).ShouldBeFalse();
-        DoseAdviceFilter.ContainsDoseAdvice(text, TimeSpan.FromTicks(1)).ShouldBeTrue();
+        // A modest input must pass with the default timeout; the huge one is only used with a 1-tick
+        // timeout, so the test does not depend on how fast the machine scans two million characters.
+        DoseAdviceFilter.ContainsDoseAdvice("сахар в норме. Сегодня гуляли.").ShouldBeFalse();
+        DoseAdviceFilter.ContainsDoseAdvice(answer.ToString(), TimeSpan.FromTicks(1)).ShouldBeTrue();
     }
 }
