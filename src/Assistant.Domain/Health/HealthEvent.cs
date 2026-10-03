@@ -22,7 +22,7 @@ public class HealthEvent
 
     public string Payload { get; set; } = "{}";
 
-    /// <summary>Rule flags set by the safety rules; empty until then.</summary>
+    /// <summary><see cref="HealthEventFlags"/> values set by the safety rules when the event is saved.</summary>
     public string[] Flags { get; set; } = Array.Empty<string>();
 
     public long? SourceMessageId { get; set; }

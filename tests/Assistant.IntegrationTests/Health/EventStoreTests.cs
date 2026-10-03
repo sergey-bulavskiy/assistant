@@ -109,6 +109,22 @@ public class EventStoreTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Add_saves_the_safety_flags()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var messageId = await AddMessageAsync(1);
+        var flagged = NewEvent("glucose", "{\"value\":7.8,\"context\":\"after_meal_1h\"}", "2030-02-07T08:00:00Z")
+            with { Flags = new[] { "out_of_target", "old_value_not_alerted" } };
+
+        var infos = await AddAsync(profile.Id, Source(messageId), flagged, Weight());
+
+        var rows = await Db.Events.AsNoTracking().OrderBy(e => e.Id).ToListAsync();
+        rows.Select(r => r.Id).ShouldBe(infos.Select(i => i.Id));
+        rows[0].Flags.ShouldBe(new[] { "out_of_target", "old_value_not_alerted" });
+        rows[1].Flags.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task GetActive_returns_the_range_oldest_first_without_deleted_events()
     {
         var profile = await AddProfileAsync(1, 10);

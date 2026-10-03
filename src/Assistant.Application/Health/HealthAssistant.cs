@@ -13,8 +13,11 @@ namespace Assistant.Application.Health;
 /// <summary>The `health` role bot: a health tracking assistant for one household member (one profile
 /// per bot, created lazily with the default safety rules). Answers its deterministic commands and
 /// turns every other new text message into health events with one `fast` LLM call (JSON answer,
-/// strict parser, code-side validation), marks recorded messages with ✍ and asks once when something
-/// cannot be recorded. Edits are ignored. Never logs message text or model answers.</summary>
+/// strict parser, code-side validation), checks every new event with the safety rules (flags saved with
+/// it, one fixed alert per dangerous event), marks recorded messages with ✍ and asks once when something
+/// cannot be recorded. When extraction fails or is refused, or the model missed a glucose or blood
+/// pressure reading, a quick scan still alerts on dangerous values (or asks about implausible ones).
+/// Edits are ignored. Never logs message text, model answers or values.</summary>
 public class HealthAssistant : IHealthAssistant
 {
     public const string OwnerOnlyText = "Только владелец семьи может менять профиль.";
@@ -37,8 +40,9 @@ public class HealthAssistant : IHealthAssistant
     private const string StartText =
         "Привет! Я веду дневник здоровья одного участника семьи. Пишите показатели обычным текстом " +
         "(например, «сахар 5.6 натощак» или «давление 120/80») — я запишу их и поставлю ✍ на сообщение. " +
-        "Значения я пока не проверяю и предупреждений не отправляю: не полагайтесь на меня, " +
-        "если самочувствие вызывает тревогу, — звоните врачу или в скорую. " +
+        "Опасные значения и симптомы я сразу отмечаю фиксированным предупреждением по порогам из /thresholds " +
+        "(пока врач их не подтвердил, они помечены «не подтверждено врачом»). Я не заменяю врача: " +
+        "если самочувствие вызывает тревогу, звоните врачу или в скорую, не дожидаясь меня. " +
         "Я никогда не советую лекарства и их дозы.\n" +
         "/today — записи за сегодня\n" +
         "/undo — отменить вашу последнюю запись\n" +
@@ -78,6 +82,7 @@ public class HealthAssistant : IHealthAssistant
     private readonly IHealthProfileStore _profiles;
     private readonly IFamilyOwnership _ownership;
     private readonly IEventStore _events;
+    private readonly ISafetyAlertStore _safetyAlerts;
     private readonly ILlmGateway _gateway;
     private readonly IRolePrompts _rolePrompts;
     private readonly FailureNoticeThrottle _failureNotices;
@@ -89,6 +94,7 @@ public class HealthAssistant : IHealthAssistant
         IHealthProfileStore profiles,
         IFamilyOwnership ownership,
         IEventStore events,
+        ISafetyAlertStore safetyAlerts,
         ILlmGateway gateway,
         IRolePrompts rolePrompts,
         FailureNoticeThrottle failureNotices,
@@ -99,6 +105,7 @@ public class HealthAssistant : IHealthAssistant
         _profiles = profiles;
         _ownership = ownership;
         _events = events;
+        _safetyAlerts = safetyAlerts;
         _gateway = gateway;
         _rolePrompts = rolePrompts;
         _failureNotices = failureNotices;
@@ -459,7 +466,7 @@ public class HealthAssistant : IHealthAssistant
             // The prompt resource is missing (an Error was logged at startup): extraction is off and
             // the family is told that nothing was recorded.
             LogOutcome($"refused:{LlmRefusalReason.NotConfigured}", messageDbId, 0);
-            await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
             return;
         }
 
@@ -483,14 +490,14 @@ public class HealthAssistant : IHealthAssistant
         {
             _logger.LogError("health extraction call failed: {ExceptionType}", ex.GetType().Name);
             LogOutcome("failed", messageDbId, 0);
-            await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
             return;
         }
 
         if (!result.IsAnswer)
         {
             LogOutcome($"refused:{result.RefusalReason}", messageDbId, 0);
-            await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
             return;
         }
 
@@ -498,7 +505,7 @@ public class HealthAssistant : IHealthAssistant
         if (output is null)
         {
             LogOutcome("invalid_output", messageDbId, 0);
-            await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+            await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
             return;
         }
 
@@ -520,20 +527,51 @@ public class HealthAssistant : IHealthAssistant
         if (valid.Count > 0)
         {
             var source = new HealthEventSource(messageDbId, bot.TelegramBotId, message.ChatId, message.TopicId, message.UserId);
+            IReadOnlyList<SafetyEvaluation> evaluations = Array.Empty<SafetyEvaluation>();
+            var evaluated = false;
+            IReadOnlyList<HealthEventInfo> saved;
             try
             {
-                await _events.AddAsync(familyId, profile.Id, source, valid, cancellationToken);
+                // Safety rules (deterministic code, never the model) run on every new event before it is
+                // saved; their flags are saved with it.
+                var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
+                var recent = await LoadComboContextAsync(familyId, profile, valid, rules, cancellationToken);
+                evaluations = SafetyRuleEvaluator.Evaluate(valid, recent, rules, _clock.UtcNow);
+                evaluated = true;
+                var flagged = valid.Select((e, i) => e with { Flags = evaluations[i].Flags }).ToList();
+                saved = await _events.AddAsync(familyId, profile.Id, source, flagged, cancellationToken);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 // Tell the family nothing was recorded, then rethrow: the update is not consumed silently.
+                // When the rules already found a dangerous value (only the save failed), its fixed alert
+                // goes out instead of the plain notice; nothing is claimed, there is no event row. When the
+                // rules could not be checked at all and the text holds a reading in a quick-scan format,
+                // the notice is not throttled: the family always hears that a possible reading was missed.
                 _logger.LogError("saving health events failed: {ExceptionType}", ex.GetType().Name);
                 LogOutcome("store_failed", messageDbId, 0);
-                await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+                if (SafetyRuleEvaluator.MostSevere(evaluations.Select(e => e.Alert)) is { } unsaved)
+                {
+                    await ReplyAsync(
+                        telegramClient, message, SafetyAlertText.FormatNotRecorded(unsaved, profile.EmergencyPhone), cancellationToken, quote: true);
+                    _logger.LogWarning(
+                        "Safety alert {RuleKey} ({Level}) for unsaved message {MessageDbId}", unsaved.RuleKey, unsaved.Level, messageDbId);
+                }
+                else if (!evaluated && QuickReadingScanner.Scan(text).Count > 0)
+                {
+                    await ReplyAsync(telegramClient, message, ExtractionReplies.FailureNotice, cancellationToken, quote: true);
+                }
+                else
+                {
+                    await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+                }
+
                 throw;
             }
 
+            // ✍ first, then the alerts; the clarification (below) comes last.
             await MarkRecordedAsync(telegramClient, message, cancellationToken);
+            await SendAlertsAsync(telegramClient, message, familyId, profile, saved, evaluations, messageDbId, cancellationToken);
         }
 
         if (problems.Count > 0)
@@ -542,12 +580,171 @@ public class HealthAssistant : IHealthAssistant
             await ReplyAsync(telegramClient, message, ExtractionReplies.Clarification(problems[0], text), cancellationToken, quote: true);
         }
 
+        if (output.Events.Count > 0 || output.Unclear.Count == 0)
+        {
+            // A reading in one of the quick-scan formats that the model missed (no event of that
+            // metric in its answer, e.g. it recorded a weight but not "сахар 2.5") still gets its fixed
+            // alert (nothing recorded for that value), or the clarification when it is not plausible
+            // and no clarification was sent yet. Otherwise silent, no failure notice.
+            var extractedTypes = output.Events
+                .Select(e => e.Type?.Trim().ToLowerInvariant())
+                .OfType<string>()
+                .ToHashSet();
+            await TrySendQuickScanReplyAsync(
+                telegramClient, message, text, familyId, profile, messageDbId, extractedTypes, clarify: problems.Count == 0, cancellationToken);
+        }
+
         LogOutcome(valid.Count > 0 ? "events" : problems.Count > 0 ? "clarify" : "no_events", messageDbId, valid.Count);
+    }
+
+    // Earlier active events the combination rule may pair with (deleted ones never count). Read before
+    // the new events are saved, so a new event never pairs with itself through the store.
+    private async Task<IReadOnlyList<HealthEventInfo>> LoadComboContextAsync(
+        long familyId, HealthProfileInfo profile, IReadOnlyList<NewHealthEvent> events, IReadOnlyList<SafetyRuleInfo> rules,
+        CancellationToken cancellationToken)
+    {
+        var combo = rules.FirstOrDefault(r => r.RuleKey == SafetyRuleKeys.ComboBpSymptoms);
+        if (combo?.WindowHours is not { } hours || hours <= 0)
+        {
+            return Array.Empty<HealthEventInfo>();
+        }
+
+        var window = TimeSpan.FromHours(hours);
+        var from = events.Min(e => e.OccurredAt) - window;
+        // GetActiveAsync's upper bound is exclusive; the evaluator checks the exact window.
+        var to = events.Max(e => e.OccurredAt) + window + TimeSpan.FromSeconds(1);
+        return await _events.GetActiveAsync(familyId, profile.Id, from, to, cancellationToken);
+    }
+
+    // One fixed alert per saved event that reached an alert level, in event order: claimed in
+    // safety_alerts first and sent only when this call won the claim, so a redelivery never alerts
+    // twice. A failed claim still sends (a duplicate alert is better than a missing one). A failed
+    // send is retried once in place; if that fails too it is logged as an Error (rule key and message
+    // id only) and the claim row stays, so a redelivery does not send it either. Logs rule key and
+    // level only, never values.
+    private async Task SendAlertsAsync(
+        ITelegramClient telegramClient, IncomingMessage message, long familyId, HealthProfileInfo profile,
+        IReadOnlyList<HealthEventInfo> saved, IReadOnlyList<SafetyEvaluation> evaluations, long? messageDbId,
+        CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < saved.Count && i < evaluations.Count; i++)
+        {
+            if (evaluations[i].Alert is not { } decision)
+            {
+                continue;
+            }
+
+            var eventId = saved[i].Id;
+            var alert = new NewSafetyAlert(
+                eventId, decision.RuleKey, decision.Level, decision.Threshold, decision.ThresholdSource, message.ChatId, message.TopicId);
+            bool claimed;
+            try
+            {
+                claimed = await _safetyAlerts.TryClaimAsync(familyId, alert, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError("safety alert claim failed, sending anyway: {ExceptionType}", ex.GetType().Name);
+                claimed = true;
+            }
+
+            if (!claimed)
+            {
+                _logger.LogInformation("Safety alert {RuleKey} for event {EventId} not claimed", decision.RuleKey, eventId);
+                continue;
+            }
+
+            var alertText = SafetyAlertText.Format(decision, profile.EmergencyPhone);
+            if (!await ReplyAsync(telegramClient, message, alertText, cancellationToken, quote: true)
+                && !await ReplyAsync(telegramClient, message, alertText, cancellationToken, quote: true))
+            {
+                _logger.LogError("Safety alert {RuleKey} for message {MessageDbId} could not be sent", decision.RuleKey, messageDbId);
+                continue;
+            }
+
+            _logger.LogWarning("Safety alert {RuleKey} ({Level}) for event {EventId}", decision.RuleKey, decision.Level, eventId);
+        }
     }
 
     // One line per extraction, never the text, the model answer or a fragment.
     private void LogOutcome(string outcome, long? messageDbId, int eventCount) =>
         _logger.LogInformation("Extraction {Outcome} for message {MessageDbId}: {EventCount} events", outcome, messageDbId, eventCount);
+
+    // Extraction refused or failed (LLM off included): nothing is recorded. A dangerous reading in one
+    // of the quick-scan formats still gets its fixed alert, an implausible one (e.g. another unit) the
+    // clarification; otherwise the throttled failure notice.
+    private async Task HandleExtractionFailureAsync(
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
+        long? messageDbId, CancellationToken cancellationToken)
+    {
+        if (await TrySendQuickScanReplyAsync(
+                telegramClient, message, text, familyId, profile, messageDbId, new HashSet<string>(), clarify: true, cancellationToken))
+        {
+            return;
+        }
+
+        await SendFailureNoticeAsync(bot, telegramClient, message, cancellationToken);
+    }
+
+    // Quick scan: transient, unsaved readings validated like extracted ones and checked against the
+    // profile's rules with no earlier events (only glucose.any and the two pressure rules can fire).
+    // Hits of a metric in skipTypes (the model extracted that metric) are ignored. One alert for the
+    // most severe hit (no safety_alerts row: there is no event), then, when clarify is set, the
+    // clarification for the first hit the validator rejected (e.g. "сахар 45": another unit). Neither
+    // is throttled. Returns false when nothing was sent (a failed scan included); the caller decides
+    // on a fallback. Logs rule key and level only.
+    private async Task<bool> TrySendQuickScanReplyAsync(
+        ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
+        long? messageDbId, IReadOnlySet<string> skipTypes, bool clarify, CancellationToken cancellationToken)
+    {
+        SafetyDecision? decision = null;
+        ExtractedUnclear? problem = null;
+        try
+        {
+            var readings = new List<NewHealthEvent>();
+            foreach (var hit in QuickReadingScanner.Scan(text).Where(h => h.Type is null || !skipTypes.Contains(h.Type)))
+            {
+                var validation = HealthEventValidator.Validate(hit, message.SentAt, profile.TimeZone);
+                if (validation.Event is { } reading)
+                {
+                    readings.Add(reading);
+                }
+                else
+                {
+                    problem ??= validation.Problem;
+                }
+            }
+
+            if (readings.Count > 0)
+            {
+                var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
+                var evaluations = SafetyRuleEvaluator.Evaluate(readings, Array.Empty<HealthEventInfo>(), rules, _clock.UtcNow);
+                decision = SafetyRuleEvaluator.MostSevere(evaluations.Select(e => e.Alert));
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError("quick scan failed: {ExceptionType}", ex.GetType().Name);
+            return false;
+        }
+
+        var sent = false;
+        if (decision is not null)
+        {
+            await ReplyAsync(telegramClient, message, SafetyAlertText.FormatNotRecorded(decision, profile.EmergencyPhone), cancellationToken, quote: true);
+            _logger.LogWarning("Quick scan alert {RuleKey} ({Level}) for message {MessageDbId}", decision.RuleKey, decision.Level, messageDbId);
+            sent = true;
+        }
+
+        if (clarify && problem is not null)
+        {
+            await ReplyAsync(telegramClient, message, ExtractionReplies.Clarification(problem, text), cancellationToken, quote: true);
+            _logger.LogInformation("Quick scan clarification for message {MessageDbId}", messageDbId);
+            sent = true;
+        }
+
+        return sent;
+    }
 
     private async Task SendFailureNoticeAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, CancellationToken cancellationToken)
     {
@@ -585,18 +782,21 @@ public class HealthAssistant : IHealthAssistant
 
     // Command replies follow the General assistant: a Telegram reply in groups, a plain message in
     // private chats. Clarifications and the failure notice always quote the message (quote: true),
-    // in private chats too. Fixed bot texts, so never stored as conversation.
-    private async Task ReplyAsync(
+    // in private chats too. Fixed bot texts, so never stored as conversation. Returns false when the
+    // send failed (already logged).
+    private async Task<bool> ReplyAsync(
         ITelegramClient telegramClient, IncomingMessage message, string text, CancellationToken cancellationToken, bool quote = false)
     {
         try
         {
             var replyToMessageId = quote || message.ChatType != "private" ? message.MessageId : (int?)null;
             await telegramClient.SendTextAsync(message.ChatId, message.TopicId, text, replyToMessageId, cancellationToken);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError("failed to send health reply: {ExceptionType}", ex.GetType().Name);
+            return false;
         }
     }
 }

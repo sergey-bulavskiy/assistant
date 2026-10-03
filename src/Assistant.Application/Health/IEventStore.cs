@@ -1,8 +1,10 @@
 namespace Assistant.Application.Health;
 
 /// <summary>A validated event ready to save. OccurredAt is UTC; PayloadJson comes from
-/// HealthEventPayloads.Serialize; Type is a HealthEventTypes value.</summary>
-public sealed record NewHealthEvent(string Type, DateTimeOffset OccurredAt, string OccurredAtSource, string PayloadJson);
+/// HealthEventPayloads.Serialize; Type is a HealthEventTypes value; Flags are HealthEventFlags values
+/// from the safety rules (null = none).</summary>
+public sealed record NewHealthEvent(
+    string Type, DateTimeOffset OccurredAt, string OccurredAtSource, string PayloadJson, IReadOnlyList<string>? Flags = null);
 
 /// <summary>Where events were posted. MessageDbId is messages.id; BotId is the Telegram bot id
 /// (as messages.bot_id); UserId is the sender's Telegram user id.</summary>

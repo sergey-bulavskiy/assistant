@@ -56,8 +56,10 @@ household member. One health bot tracks exactly one person (its profile, created
 published-guideline default thresholds on its first message). Turn off Group Privacy for it
 (step 5) before adding it to the tracking group or topic.
 
-> **Not ready to rely on yet.** It records readings from ordinary messages and marks each recorded
-> message with ✍, but it does not check values and sends no alerts yet.
+> **It does not replace a doctor.** It checks recorded readings against safety rules and sends fixed
+> alerts, but those rules are unconfirmed until the doctor's thresholds are set with `/threshold`
+> (alerts say "не подтверждено врачом" until then). Enter the doctor's thresholds as soon as you
+> have them, and call the doctor or emergency services whenever in doubt — don't wait for the bot.
 
 Every new ordinary text message in the health bot's chats (at least 3 characters, not only emoji)
 goes to the model once, on the `fast` tier: `LLM_FAST_MODELS` first, then the rest of `LLM_MODELS`.
@@ -68,6 +70,29 @@ time it cannot place) it asks once, as a reply. If the model is unavailable or i
 unreadable, nothing is recorded and the bot replies "⚠️ Не смог обработать сообщение — ничего не
 записано. …" (at most once per 10 minutes per chat or topic). Edited messages are not read again
 yet: remove a wrong record with `/undo` or `/del` and post it again.
+
+**Safety alerts.** Every newly recorded reading is checked by fixed rules in code (never by the
+model) against the profile's thresholds (`/thresholds`). A dangerous value or symptom gets a fixed
+alert right away, as a reply in the same chat or topic: "⚠️ …" (contact the doctor) or "🚨 …"
+(urgent: contact the doctor or call emergency services, with the profile's emergency phone). Alert
+texts are fixed templates that point to the doctor's plan; they are never written by the model and
+never suggest a medicine or a dose. Each alert names its threshold source: "не подтверждено врачом"
+for the published-guideline defaults, "порог от врача" once an owner has entered the doctor's value
+with `/threshold`. A glucose reading at or above the target for its context is only marked on the
+record (no message). Readings older than 12 hours are recorded without an alert (a new symptom
+posted with an older dangerous blood pressure reading still gets the combination alert). Each reading
+alerts at most once, also when Telegram delivers the message again.
+
+A quick scan of the message text also runs, so that dangerous values written in the supported
+formats are not silently ignored. Supported formats: glucose as a keyword ("сахар", "глюкоза",
+"глюкометр") followed within 30 characters by a number with up to two decimals ("сахар 2.5",
+"глюкометр показал 2.55"); blood pressure as "150/95" or "150 на 95". It runs when the model's
+answer is unusable or the model is unavailable, when the model returns a valid answer with no
+readings and nothing unclear, and for a metric (glucose or blood pressure) the model recorded
+nothing of while recording other readings. Nothing is recorded from the scan: a dangerous value
+gets the fixed alert followed by "Ничего не записано — повторите сообщение позже.", and a value
+that is not plausible (e.g. "сахар 250", most likely another unit) gets the clarification; neither
+is throttled. Readings written any other way get only the failure notice when extraction failed.
 
 Extraction makes one LLM call per text message in the health bot's chats. These calls count toward
 `LLM_CALLS_PER_DAY` and `LLM_CALLS_PER_MINUTE`, which are per family, per UTC day, and shared with
@@ -320,6 +345,11 @@ real bots and a real family.
 - In a private chat with the health bot: "вес 70.5" → ✍ on the message and `/today` shows
   "вес 70.5 кг"; "сахар 400" → "Не понял «400» — уточните единицы (нужно в ммоль/л)."; `/undo` →
   "Удалено: …" and the ✍ disappears.
+- In a private chat with the health bot: "сахар 2.5" → ✍ and "🚨 Глюкоза: 2.5. … Порог 3.0 — не
+  подтверждено врачом. …"; "давление 150/95" → "⚠️ Верхнее давление: 150 — выше порога 140 (не
+  подтверждено врачом). …"; `/threshold glucose.any low_alert 4.0`, then "сахар 3.9" → "⚠️ Глюкоза:
+  3.9 — ниже порога 4.0 (порог от врача). …". With the model off, "сахар 2.5" → the alert followed by
+  "Ничего не записано — повторите сообщение позже."
 - Send `/version` to the role bot → it replies with the running version.
 - Restart the process (or container) and resend a message you already sent before restarting to
   any bot → no duplicate row, no duplicate reply, for every bot independently.

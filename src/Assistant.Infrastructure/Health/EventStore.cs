@@ -49,6 +49,7 @@ public class EventStore : IEventStore
             OccurredAt = e.OccurredAt,
             OccurredAtSource = e.OccurredAtSource,
             Payload = e.PayloadJson,
+            Flags = e.Flags?.ToArray() ?? Array.Empty<string>(),
             SourceMessageId = source.MessageDbId,
             BotId = source.BotId,
             ChatId = source.ChatId,
