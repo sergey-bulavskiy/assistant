@@ -100,6 +100,7 @@ public class HealthAssistant : IHealthAssistant
     private readonly LlmConfig? _config;
     private readonly IRolePrompts _rolePrompts;
     private readonly FailureNoticeThrottle _failureNotices;
+    private readonly AddressedHintThrottle _hints;
     private readonly IClock _clock;
     private readonly BuildInfo _buildInfo;
     private readonly ILogger<HealthAssistant> _logger;
@@ -114,6 +115,7 @@ public class HealthAssistant : IHealthAssistant
         LlmConfig? config,
         IRolePrompts rolePrompts,
         FailureNoticeThrottle failureNotices,
+        AddressedHintThrottle hints,
         IClock clock,
         BuildInfo buildInfo,
         ILogger<HealthAssistant> logger)
@@ -127,10 +129,14 @@ public class HealthAssistant : IHealthAssistant
         _config = config;
         _rolePrompts = rolePrompts;
         _failureNotices = failureNotices;
+        _hints = hints;
         _clock = clock;
         _buildInfo = buildInfo;
         _logger = logger;
     }
+
+    internal const string AddressedHintText =
+        "Слушаю. Запишите показатель (например: сахар 5.8 после обеда) или задайте вопрос.";
 
     public async Task HandleAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
@@ -616,6 +622,7 @@ public class HealthAssistant : IHealthAssistant
             }
         }
 
+        var alertDecided = false;
         // An edit replaces the message's records even when the new text has none left.
         if (valid.Count > 0 || isEdit)
         {
@@ -685,7 +692,7 @@ public class HealthAssistant : IHealthAssistant
             {
                 await UpdateEditReactionAsync(telegramClient, message, replaced, messageDbId, cancellationToken);
             }
-            await SendAlertsAsync(telegramClient, message, familyId, profile, saved, evaluations, messageDbId, cancellationToken);
+            alertDecided = await SendAlertsAsync(telegramClient, message, familyId, profile, saved, evaluations, messageDbId, cancellationToken);
         }
 
         if (problems.Count > 0)
@@ -711,13 +718,22 @@ public class HealthAssistant : IHealthAssistant
 
         LogOutcome(valid.Count > 0 ? "events" : problems.Count > 0 ? "clarify" : "no_events", messageDbId, valid.Count);
 
-        // An answer only for a new message addressed to this bot that the model marked as a question
-        // and that produced nothing else: no record, no clarification, no quick-scan reply. A reading
-        // is never also answered. reply_to_all is never read for this role.
-        if (!isEdit && output.IsQuestion && valid.Count == 0 && problems.Count == 0 && !quickScanSent
+        // An answer for a new message addressed to this bot that the model marked as a question, even
+        // when readings were recorded from the same message (the answer's context then already holds
+        // them). Never after an edit, a clarification, a quick-scan reply or a safety alert: that fixed
+        // reply is the answer. reply_to_all is never read for this role.
+        if (!isEdit && output.IsQuestion && problems.Count == 0 && !quickScanSent && !alertDecided
             && Addressing.IsAddressed(bot, message, text))
         {
             await AnswerQuestionAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
+        }
+        else if (!isEdit && !output.IsQuestion && valid.Count == 0 && problems.Count == 0 && !quickScanSent
+            && Addressing.IsAddressed(bot, message, text)
+            && _hints.TryAcquire(bot.TelegramBotId, message.ChatId, message.TopicId, _clock.UtcNow))
+        {
+            // Extraction succeeded and the addressed message produced nothing at all (a greeting,
+            // chatter): one short fixed hint, throttled per place so chatter does not trigger it every time.
+            await ReplyAsync(telegramClient, message, AddressedHintText, cancellationToken, quote: true);
         }
     }
 
@@ -747,12 +763,14 @@ public class HealthAssistant : IHealthAssistant
     // twice. A failed claim still sends (a duplicate alert is better than a missing one). A failed
     // send is retried once in place; if that fails too it is logged as an Error (rule key and message
     // id only) and the claim row stays, so a redelivery does not send it either. Logs rule key and
-    // level only, never values.
-    private async Task SendAlertsAsync(
+    // level only, never values. Returns whether the rules decided at least one alert for this message,
+    // whether or not it was claimed or delivered (the caller then does not answer the question).
+    private async Task<bool> SendAlertsAsync(
         ITelegramClient telegramClient, IncomingMessage message, long familyId, HealthProfileInfo profile,
         IReadOnlyList<HealthEventInfo> saved, IReadOnlyList<SafetyEvaluation> evaluations, long? messageDbId,
         CancellationToken cancellationToken)
     {
+        var anyDecided = evaluations.Any(e => e.Alert is not null);
         for (var i = 0; i < saved.Count && i < evaluations.Count; i++)
         {
             if (evaluations[i].Alert is not { } decision)
@@ -790,6 +808,8 @@ public class HealthAssistant : IHealthAssistant
 
             _logger.LogWarning("Safety alert {RuleKey} ({Level}) for event {EventId}", decision.RuleKey, decision.Level, eventId);
         }
+
+        return anyDecided;
     }
 
     // One smart call for an addressed question: roles/health/prompt.md plus the runtime block (stage
