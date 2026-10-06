@@ -125,6 +125,74 @@ test family; every message is invented. Use separate bots from CD: one poller pe
    A hand-created role bot needs operator registration in the disposable database; creating
    it alone does not register it with this app.
 
+## Agent runbook: connect and extend
+
+Use the configured MCP tools when exposed in the current session. If absent, inspect the
+client's registered server configuration using its MCP inspection command (for example,
+`codex mcp get telegram_smoke`) or its configuration UI/file. Inspect only nonsecret
+`command`, `args`, `cwd` and tool-selection fields; capture output privately if the command
+could include secrets. Do not dump configuration, `.env`, credentials or session files.
+Read the pinned connector README above and the [official Python SDK client docs](https://github.com/modelcontextprotocol/python-sdk/blob/v1.x/docs/client.md)
+before using its stdio client. Reuse the connector's installed SDK version; this example
+uses the v1 API, so adapt against the installed version's official docs rather than upgrading.
+
+One process may own the Telegram session at a time; another can hit a session/database lock.
+Reuse the active connector. Start a direct SDK client only after confirming its session is
+free; never kill the user's client or ask for a restart as the default workaround.
+A connection-check request authorizes initialization/tool listing, not reads or synthetic sends.
+For an authorized smoke run, send only invented messages within the user-approved test scope.
+Resolve the dedicated allowed chat from private local config in runtime memory only. The private launcher loads `.env`; never display it. A private helper
+may read only allowlist/handle values into memory without printing them or copying them here.
+
+For a connection-only check, save this script outside repositories and use the configured
+Python executable. Supply a private JSON file containing only the inspected `command`,
+`args`, and optional `cwd`: `<configured-python> <private-script> <private-server-json>`.
+Stderr stays beside that file; logs can contain secrets and must not be displayed.
+This lists tools without reading chats, sending messages, or invoking another tool:
+
+```python
+import asyncio, json, sys
+from pathlib import Path
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def check():
+    path = Path(sys.argv[1]).resolve()
+    config = json.loads(path.read_text(encoding="utf-8"))
+    params = StdioServerParameters(command=config["command"],
+        args=config["args"], cwd=config.get("cwd"))
+    allowed = {"get_history", "get_messages", "list_inline_buttons",
+        "wait_for_new_message", "wait_for_settled_message",
+        "send_message", "reply_to_message", "press_inline_button"}
+    with path.with_suffix(".stderr.log").open("a", encoding="utf-8") as log:
+        async with stdio_client(params, errlog=log) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names = {tool.name for tool in (await session.list_tools()).tools}
+                if not allowed <= names:
+                    raise RuntimeError("Required smoke tools unavailable")
+                print("PASS: connection and required tools available")
+try:
+    asyncio.run(asyncio.wait_for(check(), timeout=60))
+except Exception as exc:
+    print("Connection check stopped: " + type(exc).__name__)
+    sys.exit(1)
+```
+
+Direct SDK access bypasses the client's tool filter: call only the eight allowed tools above.
+For smoke runs, discover senders from scoped test-chat history or targeted metadata through
+already permitted tools; never enumerate account chats/contacts or widen permissions.
+An initial bot list can become stale. Do not classify another human as a bot by name;
+stop on ambiguous identities, and mark unknown incoming senders inconclusive.
+Observe all senders for the full windows in Execution, correlate reply IDs, accumulate unique
+message IDs across polls, and reject incomplete history coverage or duplicate/unexpected replies.
+
+To extend coverage, add invented inputs and observable expectations to the table below.
+A private runner may exist beside the configured launcher; inspect its code, not its evidence.
+Extend it privately if present, otherwise use the SDK; never commit local handles or credentials.
+Verify classification changes offline with synthetic messages before an authorized live run.
+Record case labels and generic outcomes as described in Evidence; keep detailed evidence private.
+
 ## Execution
 
 Run sequentially with a unique synthetic marker, such as `SMOKE-ALPHA`.

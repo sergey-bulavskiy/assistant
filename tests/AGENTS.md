@@ -90,6 +90,10 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 - Exception: explicitly authorized, supervised local MCP checks may use an existing account
   with dedicated test bots/chats and synthetic messages (see `Assistant.SmokeTests/TELEGRAM-MCP.md`).
   Keep its session/configuration outside both repositories; never use that session in CI/CD.
+- For direct MCP connection checks or extending supervised cases, follow the agent runbook in
+  `Assistant.SmokeTests/TELEGRAM-MCP.md`. Reuse exposed tools or its SDK fallback; a connection
+  check does not authorize chat reads/sends. Keep one connector per session and all runtime
+  identifiers, credentials and evidence private.
 
 ## Extraction evals (`Assistant.Evals`)
 
