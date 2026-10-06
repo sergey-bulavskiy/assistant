@@ -167,6 +167,9 @@
 
 ## LLM gateway and CLI providers (`Llm/`)
 
+- `ProcessRunner` decodes redirected stdout and stderr explicitly as UTF-8 before any provider
+  parses them. Keep this independent of the host console code page; real CLI content stays out of logs.
+
 - `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
   must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and
   `CODEX_HOME` are optional absolute local paths; production defaults are `/usr/local/bin/codex`
