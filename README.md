@@ -15,7 +15,7 @@ features on top of this pipeline.
 |---|---|---|
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
 | `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
-| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot, disable/enable/remove a place, turn **reply to all messages** on or off for a General assistant's place ("Отвечать на все: выкл/вкл"), allow/deny a user still waiting for approval, disable/enable a user, make an approved user an owner. A forum topic's place line shows its topic id. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot or place, set General's "Отвечать на все: выкл/вкл" or Health's "Отвечать на вопросы без упоминания: выкл/вкл" for one approved place, allow/deny a user awaiting approval, disable/enable a user, or make an approved user an owner. A place line shows the bot username and its forum topic id, if any. |
 | `/usage` | owners, private chat only | Platform-wide spend/state for today and this calendar month (if budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own family. |
 
 **Role bots:**
@@ -63,6 +63,12 @@ published-guideline default thresholds on its first message). Turn off Group Pri
 
 Every new ordinary text message in the health bot's chats (at least 3 characters, not only emoji)
 goes to the model once, on the `fast` tier: `LLM_FAST_MODELS` first, then the rest of `LLM_MODELS`.
+An owner can enable answers to unmentioned questions for one approved group or topic in `/settings`.
+The existing `reply_to_all` flag is off for new Health places, and a one-time migration turns off
+previously unused Health flags. General settings are unchanged. When enabled, a Health question
+gets an answer without a mention after the existing alert and clarification checks; ordinary
+chatter remains silent. Direct mentions and replies work with the setting off. Recording and
+confirmation run regardless of this answer setting.
 The model only turns the message into records (glucose, insulin, meal, symptom, weight, blood
 pressure); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
 Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
@@ -99,10 +105,10 @@ gets the fixed alert followed by "Ничего не записано — пов�
 that is not plausible (e.g. "сахар 250", most likely another unit) gets the clarification; neither
 is throttled. Readings written any other way get only the failure notice when extraction failed.
 
-**Questions.** The bot answers a question only when it is addressed: in a private chat every message
-is, in a group or topic only a message that mentions the bot (`@username`) or replies to one of its
-messages (the place's "reply to all" setting is ignored for this bot). The extraction call tells
-whether a message is a question; an addressed question is answered even when readings were recorded
+**Questions.** In a private chat, the bot can answer a question without a mention. In a group or
+topic, it answers when a message mentions the bot (`@username`), replies to one of its messages,
+or the owner has enabled "Отвечать на вопросы без упоминания" for that approved place. The extraction call tells
+whether a message is a question; an eligible question is answered even when readings were recorded
 from the same message (the answer's context already includes them), but never when the message got a
 clarification, a quick-scan reply or a safety alert for a recorded reading (that fixed reply is the answer) or is an edit.
 An addressed new message that produced nothing at all (extraction worked, but no reading, no question,
@@ -125,7 +131,7 @@ conversation context; alerts and other fixed texts are not.
 meant by each one. A value reported as a fact is recorded as described above. A value that only
 appears inside a question or a hypothetical ("а 10 — это много?") is never recorded and gets no
 buttons. When the wording could be read either way ("сахар 10 - высокий?"), nothing is recorded
-immediately: once the question has been answered (if the message was addressed), the bot posts
+immediately: once an eligible question has been answered, the bot posts
 "Записать глюкоза 10.0 ммоль/л?" with **Да** and **Нет** buttons. Any approved family member may tap
 either button, and whichever tap arrives first is the one that counts. Да saves the value under the
 name of whoever sent the original message (✍ is then added to that message) and rewrites the button
@@ -412,6 +418,10 @@ real bots and a real family.
 - With a General assistant in an approved group: `/settings` → tap "Отвечать на все: выкл" on that
   group's place → an ordinary message without a mention gets an answer; `/tokens` in the group then
   shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
+- With a Health assistant in an approved forum topic: `/settings` → find that bot and topic, tap
+  "Отвечать на вопросы без упоминания: выкл", then send a synthetic question without a mention in
+  that topic. It gets an answer. An unrelated approved topic stays off. Tap the matching "вкл"
+  control to stop passive answers; explicitly addressed questions still work.
 - `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
   the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
   `/week` → "Неделя: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that
@@ -431,8 +441,9 @@ real bots and a real family.
 - In a private chat with the health bot (stage start set, one reading posted): "какой сахар считается
   нормой натощак?" → an answer that can refer to the stage week or the thresholds, ending with "Не
   заменяю врача."; "на сколько единиц увеличить дозу?" → "Я не даю советов по дозам лекарств. …"
-  followed by "Не заменяю врача.". In the tracking group the same question without a mention → no
-  answer; with `@<health bot username>` → an answer as a reply.
+  followed by "Не заменяю врача.". In a tracking group with the Health question setting off, the
+  same question without a mention gets no answer; with `@<health bot username>` it gets an answer.
+  With the setting on for that place, the unmentioned question gets an answer too.
 - In a private chat with the health bot: "сахар 10 - высокий?" → an answer, followed by "Записать
   глюкоза 10.0 ммоль/л?" with Да/Нет buttons; tapping Да → "Записано: …" and ✍ on the original
   question; tapping Да again → "Уже решено.". `/today` shows the value exactly once. "а если сахар

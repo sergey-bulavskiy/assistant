@@ -36,7 +36,7 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
 
     private sealed class NoopHealthAssistant : IHealthAssistant
     {
-        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken) =>
+        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll = false) =>
             Task.CompletedTask;
 
         public Task HandleCallbackAsync(ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, CancellationToken cancellationToken) =>

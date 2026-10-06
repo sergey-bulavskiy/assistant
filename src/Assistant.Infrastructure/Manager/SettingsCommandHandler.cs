@@ -28,6 +28,8 @@ public class SettingsCommandHandler
         "settingsplace_remove",
         "settingsplace_autoreply_on",
         "settingsplace_autoreply_off",
+        "settingsplace_healthquestions_on",
+        "settingsplace_healthquestions_off",
         "member_disable",
         "member_enable",
         "member_makeowner"
@@ -93,19 +95,25 @@ public class SettingsCommandHandler
                 ? new InlineButton("Включить", $"settingsplace_enable:{place.Id}")
                 : new InlineButton("Отключить", $"settingsplace_disable:{place.Id}");
             var buttons = new List<InlineButton> { toggleButton, new InlineButton("Удалить", $"settingsplace_remove:{place.Id}") };
-            // Reply-to-all is a General-assistant feature; the button carries the TARGET state, so
-            // two quick taps on the same button both mean the same thing.
-            if (BotRoles.IsGeneral(bots.Single(b => b.Id == place.BotId).Role))
+            // The button carries the target state, so repeated taps do not flip it back.
+            var placeBot = bots.Single(b => b.Id == place.BotId);
+            if (BotRoles.IsGeneral(placeBot.Role))
             {
                 buttons.Add(place.ReplyToAll
                     ? new InlineButton("Отвечать на все: вкл", $"settingsplace_autoreply_off:{place.Id}")
                     : new InlineButton("Отвечать на все: выкл", $"settingsplace_autoreply_on:{place.Id}"));
             }
+            else if (BotRoles.IsHealth(placeBot.Role))
+            {
+                buttons.Add(place.ReplyToAll
+                    ? new InlineButton("Отвечать на вопросы без упоминания: вкл", $"settingsplace_healthquestions_off:{place.Id}")
+                    : new InlineButton("Отвечать на вопросы без упоминания: выкл", $"settingsplace_healthquestions_on:{place.Id}"));
+            }
 
             // Topics of one chat share its title; the topic id tells them apart.
             var topicSuffix = place.TopicId is { } placeTopicId ? $" (тема {placeTopicId})" : string.Empty;
             await telegramClient.SendTextWithButtonsAsync(
-                chatId, topicId, $"Место «{place.Title}»{topicSuffix}: {statusLabel}", buttons, replyToMessageId: null, cancellationToken);
+                chatId, topicId, $"Место «{place.Title}»{topicSuffix} (@{placeBot.Username}): {statusLabel}", buttons, replyToMessageId: null, cancellationToken);
         }
 
         var members = await _db.FamilyMembers.IgnoreQueryFilters().Where(m => m.FamilyId == familyId).ToListAsync(cancellationToken);
@@ -229,6 +237,8 @@ public class SettingsCommandHandler
             }
             case "settingsplace_autoreply_on":
             case "settingsplace_autoreply_off":
+            case "settingsplace_healthquestions_on":
+            case "settingsplace_healthquestions_off":
             {
                 var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
                 var bot = place is null
@@ -241,17 +251,23 @@ public class SettingsCommandHandler
                 }
 
                 // Server-side too: callback data is guessable, the button alone proves nothing.
-                if (!BotRoles.IsGeneral(bot.Role))
+                var healthQuestions = action.StartsWith("settingsplace_healthquestions_", StringComparison.Ordinal);
+                if (healthQuestions ? !BotRoles.IsHealth(bot.Role) : !BotRoles.IsGeneral(bot.Role))
                 {
-                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Доступно только для бота general.", cancellationToken);
+                    await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId,
+                        healthQuestions ? "Доступно только для бота health." : "Доступно только для бота general.", cancellationToken);
                     return;
                 }
 
-                var turnOn = action == "settingsplace_autoreply_on";
+                var turnOn = action is "settingsplace_autoreply_on" or "settingsplace_healthquestions_on";
                 place.ReplyToAll = turnOn;
                 await _db.SaveChangesAsync(cancellationToken);
                 await telegramClient.AnswerCallbackAsync(
-                    callback.CallbackQueryId, turnOn ? "Готово: отвечаю на все сообщения." : "Готово: отвечаю только на обращения.", cancellationToken);
+                    callback.CallbackQueryId,
+                    healthQuestions
+                        ? turnOn ? "Готово: отвечаю на вопросы без упоминания." : "Готово: отвечаю на вопросы только при обращении."
+                        : turnOn ? "Готово: отвечаю на все сообщения." : "Готово: отвечаю только на обращения.",
+                    cancellationToken);
                 return;
             }
             case "member_disable":

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Assistant.Application.Health;
 
-/// <summary>The consultation answer: one `smart` call for an addressed question with the profile's
+/// <summary>The consultation answer: one `smart` call for an eligible question with the profile's
 /// context, passed through the dose-advice filter and ending with the fixed footer. Never logs the
 /// question, the note or the answer.</summary>
 internal sealed class HealthAnswers
@@ -36,7 +36,7 @@ internal sealed class HealthAnswers
         _logger = logger;
     }
 
-    // One smart call for an addressed question: roles/health/prompt.md plus the runtime block (stage
+    // One smart call for an eligible question: roles/health/prompt.md plus the runtime block (stage
     // week, context note, thresholds, readings of the last 24 hours) and the last few messages of this
     // chat/topic. The answer passes the dose-advice filter (dose advice replaces the whole answer with
     // the fixed refusal) and always ends with the footer. A refusal or failure gets a fixed text, never

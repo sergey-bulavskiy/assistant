@@ -11,7 +11,7 @@ namespace Assistant.Application.Health;
 /// <summary>The `health` role bot: a health tracking assistant for one household member (one profile
 /// per bot, created lazily with the default safety rules). The entry point and dispatcher: commands go
 /// to <see cref="HealthCommands"/>, every other text message (new or edited) to
-/// <see cref="HealthMessagePipeline"/>, which uses <see cref="HealthAnswers"/> for addressed questions.
+/// <see cref="HealthMessagePipeline"/>, which uses <see cref="HealthAnswers"/> for eligible questions.
 /// Never logs message text, model answers or values.</summary>
 public class HealthAssistant : IHealthAssistant
 {
@@ -64,7 +64,7 @@ public class HealthAssistant : IHealthAssistant
     }
 
     public async Task HandleAsync(
-        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+        ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll = false)
     {
         if (bot.FamilyId is not { } familyId)
         {
@@ -113,7 +113,7 @@ public class HealthAssistant : IHealthAssistant
             // /cmd@otherbot (or any other slash text) is silent; everything else may hold readings.
             if (!text.StartsWith('/'))
             {
-                await _pipeline.HandleNewAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken);
+                await _pipeline.HandleNewAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, replyToAll);
             }
 
             return;
