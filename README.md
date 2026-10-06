@@ -72,7 +72,10 @@ confirmation run regardless of this answer setting.
 The model only turns the message into records (glucose, insulin, meal, symptom, weight, blood
 pressure); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
 Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
-time it cannot place) it asks once, as a reply. If the model is unavailable or its answer is
+time it cannot place) it asks once, as a reply. Unrelated numbers, including arithmetic operands,
+are not readings and do not call for a measurement clarification. Bare ambiguous reading reports
+still get a clarification; a message mixing arithmetic and health readings still records the readings.
+If the model is unavailable or its answer is
 unreadable, nothing is recorded and the bot replies "⚠️ Не смог обработать сообщение — ничего не
 записано. …" (at most once per 10 minutes per chat or topic). Editing a message (up to 24 hours after sending it) reads it again, with one more model call:
 readings that did not change stay as they are (same number in `/today`, no repeated alert), changed

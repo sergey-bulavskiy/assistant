@@ -20,8 +20,8 @@ Answer with exactly this shape:
 
 {"events": [...], "unclear": [...], "is_question": false, "undo": false}
 
-- "events": one object per value the message names, in the order written: a reading the person
-  reports, and also a number that is only part of a question (its "intent" says which). Several
+- "events": one object per health value the message names, in the order written: a reading the person
+  reports, and also a health value that is only part of a question (its "intent" says which). Several
   values in one message are several events.
 - "unclear": things that look like a reading but cannot be recorded as written, each
   {"fragment": "<the exact words or number from the message>", "reason": "<reason>"}, where the
@@ -88,9 +88,14 @@ Symptom codes:
   written.
 - A negation is not an event: "голова не болит" records nothing.
 - A plan or a wish is not an event: "надо будет померить сахар" records nothing.
-- A question without a number records nothing: "какой должен быть сахар?" gives no event and sets
-  "is_question" to true. A number inside a question is an event with its "intent".
-- A number whose meaning is not clear goes to "unclear" with reason "type", never into an event.
+- A question without a health value records nothing: "какой должен быть сахар?" gives no event and
+  sets "is_question" to true. A health value inside a question is an event with its "intent".
+- Unrelated numbers (arithmetic operands, prices, counts, dates) are neither events nor unclear
+  readings. An arithmetic question such as "сколько будет 7 + 8?" gives no events and no unclear
+  items, and sets "is_question" to true. In mixed messages, extract the health readings and ignore
+  the unrelated numbers.
+- A number presented as a possible reading whose measurement type is not clear goes to "unclear"
+  with reason "type", never into an event. Preserve bare reading reports such as "утром было 18".
 - Copy numbers as written. Do not round, do not convert units, do not correct values that look
   unusual.
 - Never output advice, warnings, explanations or any text outside the JSON object.
