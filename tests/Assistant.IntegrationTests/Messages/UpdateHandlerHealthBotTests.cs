@@ -165,6 +165,42 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         handler.HandleAsync(bot, telegram, update, CancellationToken.None);
 
     [Fact]
+    public async Task Enabled_health_topic_answers_once_without_enabling_sibling_or_unapproved_topic()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        Db.Places.AddRange(
+            new Assistant.Domain.Places.Place { BotId = bot.BotDbId, ChatId = -100, TopicId = 7, Title = "test topic",
+                Status = Assistant.Domain.Places.PlaceStatus.Approved, ReplyToAll = true, CreatedAt = Now },
+            new Assistant.Domain.Places.Place { BotId = bot.BotDbId, ChatId = -100, TopicId = 8, Title = "test topic",
+                Status = Assistant.Domain.Places.PlaceStatus.Approved, ReplyToAll = false, CreatedAt = Now });
+        await Db.SaveChangesAsync();
+        const string question = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+        _chat.EnqueueResponse(question);
+        _chat.EnqueueResponse("Тестовый ответ.");
+        var enabledMessage = GroupText(MemberId, "какой показатель считается обычным?") with { TopicId = 7 };
+
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId, enabledMessage));
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId, enabledMessage));
+        await HandleUpdateAsync(handler, bot, telegram, new IncomingUpdate(_nextUpdateId + 1, enabledMessage));
+
+        var reply = telegram.SentMessages.ShouldHaveSingleItem();
+        reply.TopicId.ShouldBe(7);
+        reply.Text.ShouldBe("Тестовый ответ.\n\nНе заменяю врача.");
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(2);
+
+        _chat.EnqueueResponse(question);
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId + 2, GroupText(MemberId, "какой показатель считается обычным?") with { TopicId = 8 }));
+        telegram.SentMessages.Count(m => m.Text == "Тестовый ответ.\n\nНе заменяю врача.").ShouldBe(1);
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(3);
+
+        await HandleUpdateAsync(handler, bot, telegram,
+            new IncomingUpdate(_nextUpdateId + 3, GroupText(MemberId, "какой показатель считается обычным?") with { TopicId = 9 }));
+        telegram.SentMessages.Count(m => m.Text == "Тестовый ответ.\n\nНе заменяю врача.").ShouldBe(1);
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(3);
+    }
+
+    [Fact]
     public async Task First_message_creates_the_profile_with_the_default_rules_once()
     {
         var (handler, bot, telegram, _) = await SetupAsync();

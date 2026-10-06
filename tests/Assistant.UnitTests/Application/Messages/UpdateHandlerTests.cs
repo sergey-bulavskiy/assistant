@@ -107,11 +107,11 @@ public class UpdateHandlerTests
 
     private sealed class FakeHealthAssistant : IHealthAssistant
     {
-        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result)> Calls { get; } = new();
+        public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result, bool ReplyToAll)> Calls { get; } = new();
 
-        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken)
+        public Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll = false)
         {
-            Calls.Add((bot, message, storeResult));
+            Calls.Add((bot, message, storeResult, replyToAll));
             return Task.CompletedTask;
         }
 
@@ -412,7 +412,7 @@ public class UpdateHandlerTests
     }
 
     [Fact]
-    public async Task Health_bot_group_message_never_reads_the_reply_to_all_flag()
+    public async Task Health_bot_group_message_receives_the_approved_place_flag()
     {
         var health = new FakeHealthAssistant();
         var (handler, _, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), healthAssistant: health);
@@ -420,8 +420,8 @@ public class UpdateHandlerTests
 
         await handler.HandleAsync(RoleBot with { Role = "health" }, telegram, new IncomingUpdate(41, Message(userId: 111, chatType: "group")), CancellationToken.None);
 
-        approvals.ReplyToAllCalls.ShouldBe(0);
-        health.Calls.ShouldHaveSingleItem();
+        approvals.ReplyToAllCalls.ShouldBe(1);
+        health.Calls.ShouldHaveSingleItem().ReplyToAll.ShouldBeTrue();
     }
 
     [Fact]

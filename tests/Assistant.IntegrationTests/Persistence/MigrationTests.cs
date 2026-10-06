@@ -1,5 +1,8 @@
 using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
+using Assistant.Domain.Bots;
+using Assistant.Domain.Families;
+using Assistant.Domain.Places;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -67,6 +70,40 @@ public class MigrationTests : IntegrationTestBase
         (await Db.Database.SqlQueryRaw<int>(
             "SELECT count(*)::int AS \"Value\" FROM information_schema.columns WHERE table_name = 'places' AND column_name = 'reply_to_all' AND is_nullable = 'NO' AND column_default = 'false'")
             .SingleAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Health_topic_setting_migration_clears_existing_health_once_and_keeps_general()
+    {
+        var now = DateTimeOffset.Parse("2030-02-07T10:00:00Z");
+        var family = new Family { Name = "test family", CreatedAt = now };
+        Db.Families.Add(family);
+        await Db.SaveChangesAsync();
+        var health = new Bot { FamilyId = family.Id, TelegramBotId = 111, Username = "test_health_bot",
+            Role = "\t HEALTH \n", TokenEncrypted = Array.Empty<byte>(), Status = BotStatus.Active, CreatedAt = now };
+        var general = new Bot { FamilyId = family.Id, TelegramBotId = 222, Username = "test_general_bot",
+            Role = "general", TokenEncrypted = Array.Empty<byte>(), Status = BotStatus.Active, CreatedAt = now };
+        Db.Bots.AddRange(health, general);
+        await Db.SaveChangesAsync();
+        var healthPlace = new Place { BotId = health.Id, ChatId = -100, TopicId = 7, Title = "test topic",
+            Status = PlaceStatus.Approved, ReplyToAll = true, CreatedAt = now };
+        var generalPlace = new Place { BotId = general.Id, ChatId = -100, TopicId = 8, Title = "test topic",
+            Status = PlaceStatus.Approved, ReplyToAll = true, CreatedAt = now };
+        Db.Places.AddRange(healthPlace, generalPlace);
+        await Db.SaveChangesAsync();
+
+        await Db.Database.ExecuteSqlRawAsync("DELETE FROM \"__EFMigrationsHistory\" WHERE migration_id = '20261006115330_HealthTopicQuestionsDefaultOff'");
+        await Db.Database.MigrateAsync();
+        await Db.Entry(healthPlace).ReloadAsync();
+        await Db.Entry(generalPlace).ReloadAsync();
+        healthPlace.ReplyToAll.ShouldBeFalse();
+        generalPlace.ReplyToAll.ShouldBeTrue();
+
+        healthPlace.ReplyToAll = true;
+        await Db.SaveChangesAsync();
+        await Db.Database.MigrateAsync();
+        await Db.Entry(healthPlace).ReloadAsync();
+        healthPlace.ReplyToAll.ShouldBeTrue();
     }
 
     [Fact]

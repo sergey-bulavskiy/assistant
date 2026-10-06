@@ -298,7 +298,7 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
     private async Task<IReadOnlyList<InlineButton>> PlaceButtonsAsync(ManagerUpdateHandler handler, FakeTelegramClient telegram, long updateId)
     {
         await handler.HandleAsync(ManagerBot, telegram, Command(updateId, 111, "/settings"), CancellationToken.None);
-        return telegram.SentButtons.Single(m => m.Text.StartsWith("Место «test chat»")).Buttons;
+        return telegram.SentButtons.Single(m => m.Text.StartsWith("Место «test chat»") && !m.Text.Contains("тема 7")).Buttons;
     }
 
     [Fact]
@@ -346,6 +346,42 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Health_place_has_distinct_question_control_and_owner_can_switch_it()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await SetBotRoleAsync(" health ");
+
+        var buttons = await PlaceButtonsAsync(handler, telegram, 1);
+        buttons[2].Label.ShouldBe("Отвечать на вопросы без упоминания: выкл");
+        buttons[2].CallbackData.ShouldBe($"settingsplace_healthquestions_on:{_placeId}");
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(2, 111, $"settingsplace_healthquestions_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeTrue();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-2" && c.Text == "Готово: отвечаю на вопросы без упоминания.");
+
+        telegram.ClearSent();
+        buttons = await PlaceButtonsAsync(handler, telegram, 3);
+        buttons[2].Label.ShouldBe("Отвечать на вопросы без упоминания: вкл");
+        buttons[2].CallbackData.ShouldBe($"settingsplace_healthquestions_off:{_placeId}");
+
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(4, 111, $"settingsplace_healthquestions_off:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Health_question_control_rejects_another_role_and_non_owner()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(1, 111, $"settingsplace_healthquestions_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+
+        await SetBotRoleAsync("health");
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(2, 222, $"settingsplace_healthquestions_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-2" && c.Text == "У вас нет прав.");
+    }
+
+    [Fact]
     public async Task Settings_adds_the_topic_number_to_a_topic_places_line_only()
     {
         var (handler, telegram) = await SetupAsync();
@@ -355,8 +391,8 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         await handler.HandleAsync(ManagerBot, telegram, Command(1, 111, "/settings"), CancellationToken.None);
 
         var lines = telegram.SentButtons.Select(m => m.Text).ToList();
-        lines.ShouldContain("Место «test chat»: активно");
-        lines.ShouldContain("Место «test chat» (тема 7): активно");
+        lines.ShouldContain("Место «test chat» (@test_role_bot): активно");
+        lines.ShouldContain("Место «test chat» (тема 7) (@test_role_bot): активно");
     }
 
     [Fact]

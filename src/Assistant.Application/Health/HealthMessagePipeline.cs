@@ -90,8 +90,8 @@ internal sealed class HealthMessagePipeline
     /// <summary>A new text message that is not a command.</summary>
     public Task HandleNewAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        StoreResult storeResult, CancellationToken cancellationToken) =>
-        ExtractAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken);
+        StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll) =>
+        ExtractAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, replyToAll: replyToAll);
 
     // An edit into a text without readings (too short or emoji only, no model call): the message's
     // records are deleted and its reaction is cleared.
@@ -126,7 +126,7 @@ internal sealed class HealthMessagePipeline
     private async Task ExtractAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
         StoreResult storeResult, CancellationToken cancellationToken, bool isEdit = false,
-        IReadOnlyCollection<string>? alreadyAlertedRuleKeys = null)
+        IReadOnlyCollection<string>? alreadyAlertedRuleKeys = null, bool replyToAll = false)
     {
         var messageDbId = storeResult.MessageDbId;
         if (!ExtractionPrompt.ShouldExtract(text))
@@ -364,13 +364,13 @@ internal sealed class HealthMessagePipeline
             recordIndexes.Count > 0 ? "events" : toAsk.Count > 0 ? "pending" : problems.Count > 0 ? "clarify" : "no_events",
             messageDbId, recordIndexes.Count);
 
-        // An answer for a new message addressed to this bot that the model marked as a question, even
+        // An answer for a new message that the model marked as a question, even
         // when readings were recorded from the same message (the answer's context then already holds
         // them). Never after an edit, a clarification, a quick-scan reply or an alert for a recorded
         // value: that fixed reply is the answer. An alert for a value that was not saved does not stop
-        // the answer. reply_to_all is never read for this role.
+        // the answer. The approved place setting also permits passive questions.
         if (!isEdit && output.IsQuestion && problems.Count == 0 && !quickScanSent && !alertDecided
-            && Addressing.IsAddressed(bot, message, text))
+            && (Addressing.IsAddressed(bot, message, text) || replyToAll))
         {
             await _answers.AnswerQuestionAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
         }

@@ -111,8 +111,8 @@ public class UpdateHandler
                 return;
             }
 
-            // Only the General assistant reads the flag; the row exists and is Approved here.
-            if (BotRoles.IsGeneral(bot.Role))
+            // Use this approved place's own setting, never a parent or sibling topic's setting.
+            if (BotRoles.IsGeneral(bot.Role) || BotRoles.IsHealth(bot.Role))
             {
                 replyToAll = await _approvals.GetPlaceReplyToAllAsync(placeId, cancellationToken);
             }
@@ -141,10 +141,9 @@ public class UpdateHandler
             return;
         }
 
-        // reply_to_all is never read for the health role (it would answer every message).
         if (BotRoles.IsHealth(bot.Role))
         {
-            await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken);
+            await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
             return;
         }
 

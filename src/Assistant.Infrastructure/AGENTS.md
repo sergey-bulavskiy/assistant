@@ -109,11 +109,11 @@
   live in `SettingsCommandHandler`. A new settings callback must be added to its `CallbackActions`
   set, or the dispatcher answers "Пока не реализовано". Every owner re-check goes through
   `ManagerOwnership.IsApprovedOwnerAsync`.
-- The reply-to-all buttons carry the **target** state (`settingsplace_autoreply_on:<id>` /
-  `settingsplace_autoreply_off:<id>`), so two quick taps on one button can't flip it back. The
-  callback also rejects a place whose bot is not `general` (`BotRoles.IsGeneral`, the same rule
-  `UpdateHandler` routes by). `places.reply_to_all` is per row: a topic's row never inherits the
-  chat-wide row's flag.
+- General reply-to-all buttons use `settingsplace_autoreply_on/off:<id>`; Health question buttons
+  use `settingsplace_healthquestions_on/off:<id>`. Both carry the **target** state, so repeated taps
+  do not flip it back. Each callback checks the bot's matching role and the owner's family.
+  `places.reply_to_all` is per row: a topic never inherits the chat-wide row's flag. The
+  `HealthTopicQuestionsDefaultOff` migration clears existing Health flags once; new rows default off.
 - Role-bot owner checks (`IFamilyOwnership` → `FamilyOwnership`) reuse
   `ManagerOwnership.IsApprovedOwnerAsync`. Removing a bot in `/settings` deletes its places but
   leaves a health bot's profile and rules (health data is never deleted implicitly).

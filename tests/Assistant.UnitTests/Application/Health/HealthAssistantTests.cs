@@ -72,8 +72,8 @@ public class HealthAssistantTests
 
     private void Answer(string json) => _gateway.NextResult = LlmResult.Answered(json, "haiku");
 
-    private Task HandleAsync(IncomingMessage message, StoreOutcome outcome = StoreOutcome.Stored, IClock? clock = null, long messageDbId = 1) =>
-        CreateAssistant(clock).HandleAsync(Bot, _telegram, message, new StoreResult(outcome, messageDbId), CancellationToken.None);
+    private Task HandleAsync(IncomingMessage message, StoreOutcome outcome = StoreOutcome.Stored, IClock? clock = null, long messageDbId = 1, bool replyToAll = false) =>
+        CreateAssistant(clock).HandleAsync(Bot, _telegram, message, new StoreResult(outcome, messageDbId), CancellationToken.None, replyToAll);
 
     private string SingleReply() => _telegram.Sent.ShouldHaveSingleItem().Text;
 
@@ -1864,6 +1864,31 @@ public class HealthAssistantTests
         _messages.OutgoingMessages.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task Approved_topic_question_is_answered_without_a_mention_when_enabled()
+    {
+        AskAndAnswer("Тестовый ответ.");
+        var message = Msg("какой сахар считается нормой?", "group", topicId: 7);
+
+        await CreateAssistant().HandleAsync(Bot, _telegram, message, new StoreResult(StoreOutcome.Stored, 1), CancellationToken.None, replyToAll: true);
+
+        _gateway.Requests.Count.ShouldBe(2);
+        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, "Тестовый ответ." + Footer, (int?)message.MessageId) });
+        _messages.OutgoingMessages.ShouldHaveSingleItem().TopicId.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task Enabled_topic_does_not_answer_non_question_chatter()
+    {
+        Answer(NoEventsJson);
+
+        await CreateAssistant().HandleAsync(Bot, _telegram, Msg("всем привет", "group", topicId: 7),
+            new StoreResult(StoreOutcome.Stored, 1), CancellationToken.None, replyToAll: true);
+
+        _gateway.Requests.Count.ShouldBe(1);
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData("@test_health_bot какой сахар считается нормой?")]
     [InlineData("какой сахар считается нормой, @TEST_HEALTH_BOT?")]
@@ -2332,6 +2357,37 @@ public class HealthAssistantTests
         _telegram.Reactions.ShouldBe(new[] { (111L, message.MessageId, (string?)WritingHand) });
         _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "Тестовый ответ." + Footer });
         _pending.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Enabled_topic_mixed_intents_keep_record_answer_and_confirmation_separate()
+    {
+        ExtractThenAnswer(IntentJson(true, ("record", 5.2), ("question_only", 9.0), ("unsure", 10)));
+        var message = Msg("сахар 5.2, 9, и 10?", "group", topicId: 7);
+
+        await HandleAsync(message, replyToAll: true);
+
+        _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem();
+        _pending.Added.ShouldHaveSingleItem().Record.Events.ShouldHaveSingleItem();
+        _telegram.Sent.Select(s => s.Text).ShouldContain("Тестовый ответ." + Footer);
+        _telegram.ButtonMessages.ShouldHaveSingleItem().TopicId.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task Enabled_topic_answer_is_suppressed_by_saved_alert_but_not_unsaved_alert()
+    {
+        Answer(IntentJson(true, ("record", 2.5)));
+        await HandleAsync(Msg("сахар 2.5, что делать?", "group", topicId: 7), replyToAll: true);
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(UrgentLow25);
+        _gateway.Requests.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Enabled_topic_answers_after_an_unsaved_alert()
+    {
+        ExtractThenAnswer(IntentJson(true, ("question_only", 2.5)));
+        await HandleAsync(Msg("а 2.5 — это мало?", "group", topicId: 7), replyToAll: true);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer });
     }
 
     [Fact]
