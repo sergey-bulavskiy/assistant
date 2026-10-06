@@ -21,6 +21,7 @@ public sealed record ExtractedEvent
     public string? Description { get; init; }
     public string? Code { get; init; }
     public string? Text { get; init; }
+    public string[]? Tags { get; init; }
     public decimal? Kg { get; init; }
     public decimal? Systolic { get; init; }
     public decimal? Diastolic { get; init; }

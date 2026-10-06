@@ -10,6 +10,21 @@ public class FakeEventStore : IEventStore
 
     public List<HealthEventInfo> ActiveEvents { get; } = new();
 
+    public List<HealthEventInfo> Notes { get; } = new();
+    public (long FamilyId, long ProfileId, string? Tag, DateTimeOffset Now, int Limit)? LastNotesQuery { get; private set; }
+
+    public Task<IReadOnlyList<HealthEventInfo>> GetNotesAsync(
+        long familyId, long profileId, string? normalizedTag, DateTimeOffset nowUtc, int limit,
+        CancellationToken cancellationToken)
+    {
+        LastNotesQuery = (familyId, profileId, normalizedTag, nowUtc, limit);
+        IReadOnlyList<HealthEventInfo> result = Notes
+            .Where(note => normalizedTag is null
+                || HealthEventPayloads.TryDeserialize<NotePayload>(note.PayloadJson)?.Tags.Contains(normalizedTag) == true)
+            .OrderByDescending(note => note.OccurredAt).ThenByDescending(note => note.Id).Take(limit).ToArray();
+        return Task.FromResult(result);
+    }
+
     public (long FamilyId, long ProfileId, DateTimeOffset From, DateTimeOffset To)? LastRange { get; private set; }
 
     public List<DeleteCall> DeleteCalls { get; } = new();

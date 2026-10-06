@@ -17,6 +17,8 @@ public sealed record WeightPayload(decimal Kg);
 
 public sealed record BloodPressurePayload(int Systolic, int Diastolic, int? Pulse);
 
+public sealed record NotePayload(string Text, string[] Tags);
+
 /// <summary>events.payload JSON: snake_case property names, Cyrillic kept readable.</summary>
 public static class HealthEventPayloads
 {

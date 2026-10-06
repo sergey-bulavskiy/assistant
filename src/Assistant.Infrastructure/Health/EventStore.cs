@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Assistant.Application.Common;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
@@ -65,6 +66,32 @@ public class EventStore : IEventStore
             .Where(e => e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null
                 && e.OccurredAt >= fromUtc && e.OccurredAt < toUtc)
             .OrderBy(e => e.OccurredAt).ThenBy(e => e.Id)
+            .Select(e => new HealthEventInfo(e.Id, e.Type, e.OccurredAt, e.Payload, e.SourceMessageId))
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<HealthEventInfo>> GetNotesAsync(
+        long familyId, long profileId, string? normalizedTag, DateTimeOffset nowUtc, int limit,
+        CancellationToken cancellationToken)
+    {
+        EnsureFamilyScope(familyId);
+        if (limit is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(limit));
+
+        var query = _db.Events.AsNoTracking()
+            .Where(e => e.FamilyId == familyId && e.ProfileId == profileId
+                && e.Type == HealthEventTypes.Note && e.DeletedAt == null);
+        if (normalizedTag is not null)
+        {
+            if (!HealthNoteTags.TryNormalize(normalizedTag, out var checkedTag) || checkedTag != normalizedTag)
+                throw new ArgumentException("Tag must be normalized.", nameof(normalizedTag));
+            var filter = JsonSerializer.Serialize(new { tags = new[] { normalizedTag } });
+            var now = nowUtc.ToUniversalTime();
+            var from = now.AddDays(-90);
+            query = query.Where(e => e.OccurredAt >= from && e.OccurredAt <= now
+                && EF.Functions.JsonContains(e.Payload, filter));
+        }
+
+        return await query.OrderByDescending(e => e.OccurredAt).ThenByDescending(e => e.Id).Take(limit)
             .Select(e => new HealthEventInfo(e.Id, e.Type, e.OccurredAt, e.Payload, e.SourceMessageId))
             .ToListAsync(cancellationToken);
     }

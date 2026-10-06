@@ -4,6 +4,42 @@ namespace Assistant.UnitTests.Application.Health;
 
 public class HealthEventValidatorTests
 {
+    [Fact]
+    public void Note_normalizes_text_and_unicode_tags_and_uses_shared_time()
+    {
+        var result = Validate(new ExtractedEvent
+        {
+            Type = "note", Text = "  short observation  ", Tags = new[] { "  WALK  ", "walk", "Прогулка" },
+            Day = -1, Time = "09:30"
+        });
+        result.Problem.ShouldBeNull();
+        result.Event.ShouldNotBeNull();
+        result.Event.OccurredAt.ShouldBe(new DateTimeOffset(2030, 2, 6, 9, 30, 0, TimeSpan.Zero));
+        result.Event.OccurredAtSource.ShouldBe("stated");
+        var payload = HealthEventPayloads.TryDeserialize<NotePayload>(result.Event.PayloadJson);
+        payload.ShouldNotBeNull();
+        payload.Text.ShouldBe("short observation");
+        payload.Tags.ShouldBe(new[] { "walk", "прогулка" });
+    }
+
+    [Fact]
+    public void Note_rejects_invalid_text_or_tags()
+    {
+        var invalid = new[]
+        {
+            new ExtractedEvent { Type = "note", Text = " ", Tags = new[] { "walk" } },
+            new ExtractedEvent { Type = "note", Text = new string('x', 501), Tags = new[] { "walk" } },
+            new ExtractedEvent { Type = "note", Text = "x" },
+            new ExtractedEvent { Type = "note", Text = "x", Tags = Array.Empty<string>() },
+            new ExtractedEvent { Type = "note", Text = "x", Tags = new[] { "a", "b", "c", "d", "e", "f" } },
+            new ExtractedEvent { Type = "note", Text = "x", Tags = new[] { new string('a', 33) } },
+            new ExtractedEvent { Type = "note", Text = "x", Tags = new[] { "bad-tag" } },
+            new ExtractedEvent { Type = "note", Text = "x", Tags = new[] { "tag2" } }
+        };
+        foreach (var input in invalid)
+            ShouldBeProblem(Validate(input), null, "value");
+    }
+
     private static readonly DateTimeOffset Sent = new(2030, 2, 7, 10, 0, 0, TimeSpan.Zero);
 
     private static EventValidation Validate(ExtractedEvent e, string zone = "UTC", DateTimeOffset? sent = null) =>

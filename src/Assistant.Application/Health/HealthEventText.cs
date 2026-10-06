@@ -21,6 +21,9 @@ public static class HealthEventText
         HealthEventTypes.Symptom => HealthEventPayloads.TryDeserialize<SymptomPayload>(e.PayloadJson) is { } s ? Symptom(s) : e.Type,
         HealthEventTypes.Weight => HealthEventPayloads.TryDeserialize<WeightPayload>(e.PayloadJson) is { } w ? Weight(w) : e.Type,
         HealthEventTypes.BloodPressure => HealthEventPayloads.TryDeserialize<BloodPressurePayload>(e.PayloadJson) is { } b ? BloodPressure(b) : e.Type,
+        HealthEventTypes.Note => HealthEventPayloads.TryDeserialize<NotePayload>(e.PayloadJson) is { Tags: not null, Text: not null } note
+            ? $"заметка: {note.Text} {string.Join(" ", note.Tags.Select(tag => "#" + tag))}"
+            : e.Type,
         _ => e.Type
     };
 

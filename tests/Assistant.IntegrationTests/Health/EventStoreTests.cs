@@ -71,6 +71,89 @@ public class EventStoreTests : IntegrationTestBase
 
     private static NewHealthEvent Weight(string at = "2030-02-07T08:00:00Z") => NewEvent("weight", "{\"kg\":60}", at);
 
+    private static NewHealthEvent Note(DateTimeOffset at, string[] tags, string text) =>
+        new(HealthEventTypes.Note, at, OccurredAtSources.Stated,
+            HealthEventPayloads.Serialize(new NotePayload(text, tags)));
+
+    [Fact]
+    public async Task GetNotes_without_tag_has_no_age_cutoff()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var source = Source(await AddMessageAsync(1));
+        var old = (await AddAsync(profile.Id, source,
+            Note(Now.AddDays(-120), new[] { "walk" }, "older observation"))).Single();
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            (await store.GetNotesAsync(1, profile.Id, null, Now, 10, CancellationToken.None))
+                .ShouldHaveSingleItem().Id.ShouldBe(old.Id);
+            (await store.GetNotesAsync(1, profile.Id, "walk", Now, 20, CancellationToken.None))
+                .ShouldBeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task Note_edit_and_undo_follow_existing_event_lifecycle()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var source = Source(await AddMessageAsync(1));
+        var original = (await AddAsync(profile.Id, source,
+            Note(Now.AddMinutes(-10), new[] { "walk" }, "first observation"))).Single();
+        var replacement = await ReplaceAsync(profile.Id, source,
+            Note(Now.AddMinutes(-5), new[] { "rest" }, "revised observation"));
+        replacement.Deleted.Single().Id.ShouldBe(original.Id);
+        replacement.Events.Single().Id.ShouldNotBe(original.Id);
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            (await store.GetNotesAsync(1, profile.Id, "walk", Now, 20, CancellationToken.None)).ShouldBeEmpty();
+            (await store.GetNotesAsync(1, profile.Id, "rest", Now, 20, CancellationToken.None))
+                .ShouldHaveSingleItem().Id.ShouldBe(replacement.Events.Single().Id);
+            var undone = await store.DeleteLatestOfUserAsync(1, profile.Id, 1001, -100, 7, 111,
+                Now.AddHours(-1), EventDeleteReasons.Undo, CancellationToken.None);
+            undone.Events.Single().Id.ShouldBe(replacement.Events.Single().Id);
+            (await store.GetNotesAsync(1, profile.Id, null, Now, 10, CancellationToken.None)).ShouldBeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task GetNotes_filters_exact_tags_range_scope_and_deletion_before_limit()
+    {
+        var profile = await AddProfileAsync(1, 10);
+        var otherProfile = await AddProfileAsync(1, 11);
+        var source = Source(await AddMessageAsync(1));
+        var recent = Enumerable.Range(1, 23)
+            .Select(day => Note(Now.AddDays(-day), new[] { "walk" }, $"note-{day:D2}"))
+            .ToArray();
+        var saved = await AddAsync(profile.Id, source, recent);
+        var atNow = (await AddAsync(profile.Id, source, Note(Now, new[] { "walk" }, "now"))).Single();
+        var boundary = (await AddAsync(profile.Id, source, Note(Now.AddDays(-90), new[] { "edge" }, "boundary"))).Single();
+        await AddAsync(profile.Id, source,
+            Note(Now.AddDays(-90).AddTicks(-10), new[] { "edge" }, "too old"),
+            Note(Now.AddTicks(10), new[] { "walk", "edge" }, "future"),
+            Note(Now.AddDays(-1), new[] { "walking" }, "wrong tag"),
+            Weight());
+        await AddAsync(otherProfile.Id, source, Note(Now.AddMinutes(-1), new[] { "walk" }, "other profile"));
+        var deleted = (await AddAsync(profile.Id, source, Note(Now.AddMinutes(-2), new[] { "walk" }, "deleted"))).Single();
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            await store.DeleteByIdAsync(1, profile.Id, deleted.Id, EventDeleteReasons.Del, CancellationToken.None);
+            var all = await store.GetNotesAsync(1, profile.Id, null, Now, 10, CancellationToken.None);
+            all.Count.ShouldBe(10);
+            all[0].PayloadJson.ShouldContain("future");
+            all.ShouldNotContain(n => n.Id == deleted.Id);
+            all.ShouldNotContain(n => n.Type != HealthEventTypes.Note);
+            var tagged = await store.GetNotesAsync(1, profile.Id, "walk", Now, 20, CancellationToken.None);
+            tagged.Select(n => n.Id).ShouldBe(new[] { atNow.Id }.Concat(saved.Take(19).Select(n => n.Id)));
+            tagged.ShouldNotContain(n => n.Id == deleted.Id);
+            var edge = await store.GetNotesAsync(1, profile.Id, "edge", Now, 20, CancellationToken.None);
+            edge.Select(n => n.Id).ShouldBe(new[] { boundary.Id });
+            await Should.ThrowAsync<ArgumentOutOfRangeException>(() =>
+                store.GetNotesAsync(1, profile.Id, null, Now, 21, CancellationToken.None));
+        }
+    }
+
     private async Task<IReadOnlyList<HealthEventInfo>> AddAsync(
         long profileId, HealthEventSource source, params NewHealthEvent[] events)
     {
@@ -460,6 +543,8 @@ public class EventStoreTests : IntegrationTestBase
                 store.AddAsync(1, profile.Id, Source(m1), new[] { Weight() }, CancellationToken.None));
             await Should.ThrowAsync<InvalidOperationException>(() =>
                 store.GetActiveAsync(1, profile.Id, from, to, CancellationToken.None));
+            await Should.ThrowAsync<InvalidOperationException>(() =>
+                store.GetNotesAsync(1, profile.Id, null, Now, 10, CancellationToken.None));
             await Should.ThrowAsync<InvalidOperationException>(() =>
                 store.DeleteLatestOfUserAsync(1, profile.Id, 1001, -100, 7, 111, from, "undo", CancellationToken.None));
             await Should.ThrowAsync<InvalidOperationException>(() =>

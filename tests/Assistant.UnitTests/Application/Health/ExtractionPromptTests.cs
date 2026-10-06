@@ -16,7 +16,7 @@ public class ExtractionPromptTests
             "- Time zone: Europe/Berlin\n" +
             "- Current local date and time: 2030-02-07 11:00 (Thursday)\n" +
             "- The message was sent at local time: 2030-02-07 10:58 (Thursday)\n" +
-            "- Event types: glucose, insulin, meal, symptom, weight, blood_pressure\n" +
+            "- Event types: glucose, insulin, meal, symptom, weight, blood_pressure, note\n" +
             "- glucose.context: fasting, before_meal, after_meal_1h, after_meal_2h, bedtime, night, other\n" +
             "- glucose.unit: mmol/L, mg/dL\n" +
             "- insulin.kind: long, short, unknown\n" +

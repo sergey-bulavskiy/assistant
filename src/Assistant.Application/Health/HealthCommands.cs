@@ -8,7 +8,7 @@ using Assistant.Domain.Health;
 namespace Assistant.Application.Health;
 
 /// <summary>The health bot's deterministic `/…` commands: profile and thresholds (owner-only
-/// changes), /today, /week, /undo, /del, /version and /start. No model call.</summary>
+/// changes), /today, /notes, /week, /undo, /del, /version and /start. No model call.</summary>
 internal sealed class HealthCommands
 {
     private const int MaxPhoneLength = 100;
@@ -25,6 +25,7 @@ internal sealed class HealthCommands
         "Я никогда не советую лекарства и их дозы. Можно задать вопрос: в личном чате просто напишите его, " +
         "в группе — упомяните меня или ответьте на моё сообщение.\n" +
         "/today — записи за сегодня\n" +
+        "/notes — последние заметки или /notes <тег>\n" +
         "/undo — отменить вашу последнюю запись\n" +
         "/del — удалить записи (в ответ на сообщение) или /del <номер>\n" +
         "/week — текущая неделя\n" +
@@ -52,6 +53,8 @@ internal sealed class HealthCommands
         "/threshold <правило> default — вернуть значения по умолчанию. Правила и поля: /thresholds.";
 
     private const string TodayEmptyText = "Сегодня записей нет.";
+    private const string NotesUsageText = "Формат: /notes или /notes <тег> (до 32 букв).";
+    private const string NotesEmptyText = "Заметок нет.";
     internal const string NothingToUndoText = "Нечего отменять.";
     private const string EventNotFoundText = "Не нашёл такую запись.";
     private const string DeleteUsageText =
@@ -102,6 +105,10 @@ internal sealed class HealthCommands
 
             case "today":
                 await _replies.ReplyAsync(telegramClient, message, await DescribeTodayAsync(familyId, profile, cancellationToken), cancellationToken);
+                return;
+
+            case "notes":
+                await NotesAsync(telegramClient, message, familyId, profile, args, cancellationToken);
                 return;
 
             case "undo":
@@ -296,6 +303,32 @@ internal sealed class HealthCommands
         var zone = ProfileTimeZone.Find(profile.TimeZone);
         return $"Сегодня, {today.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)}:\n" +
                string.Join("\n", events.Select(e => HealthEventText.Line(e, zone)));
+    }
+
+    private async Task NotesAsync(
+        ITelegramClient telegramClient, IncomingMessage message, long familyId, HealthProfileInfo profile,
+        string? args, CancellationToken cancellationToken)
+    {
+        string? tag = null;
+        if (args is not null)
+        {
+            var parts = args.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 1 || !HealthNoteTags.TryNormalize(parts[0], out tag))
+            {
+                await _replies.ReplyAsync(telegramClient, message, NotesUsageText, cancellationToken);
+                return;
+            }
+        }
+
+        var now = _clock.UtcNow.ToUniversalTime();
+        var notes = await _events.GetNotesAsync(familyId, profile.Id, tag, now, tag is null ? 10 : 20, cancellationToken);
+        var zone = ProfileTimeZone.Find(profile.TimeZone);
+        var text = notes.Count == 0 ? NotesEmptyText
+            : "Заметки:\n" + string.Join("\n", notes.Select(note =>
+                $"#{note.Id.ToString(CultureInfo.InvariantCulture)} "
+                + TimeZoneInfo.ConvertTime(note.OccurredAt, zone).ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
+                + " " + HealthEventText.Describe(note)));
+        await _replies.ReplyAsync(telegramClient, message, text, cancellationToken);
     }
 
     private async Task UndoAsync(
