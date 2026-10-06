@@ -11,6 +11,7 @@ using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Health;
 using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Llm.ClaudeCli;
+using Assistant.Infrastructure.Llm.CodexCli;
 using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Roles;
@@ -109,7 +110,8 @@ public static class InfrastructureServiceCollectionExtensions
             OAuthToken = claudeCliOAuthToken
         };
 
-        var llmParseResult = LlmConfigParser.Parse(llmOptions, LlmProviderValidation.Create(claudeCliOptionsForValidation));
+        var llmParseResult = LlmConfigParser.Parse(llmOptions, LlmProviderValidation.Create(claudeCliOptionsForValidation,
+            LlmProviderValidation.RequiresSubscriptionOnly(llmOptions.ModelsRaw, llmOptions.FastModelsRaw)));
         var llmEnabled = llmParseResult.IsEnabled;
         var llmConfig = llmParseResult.Config;
         var llmStartupErrors = new List<string>(llmParseResult.Errors);
@@ -206,6 +208,14 @@ public static class InfrastructureServiceCollectionExtensions
             };
             services.AddSingleton(claudeCliOptions);
             services.AddSingleton<IProcessRunner, ProcessRunner>();
+            services.AddSingleton(new CodexCliOptions
+            {
+                ExecutablePath = configuration["CODEX_CLI_PATH"] ?? "/usr/local/bin/codex",
+                HomeDirectory = configuration["CODEX_HOME"] ?? "/home/app/.codex",
+                MaxOutputTokens = llmConfig.MaxOutputTokens,
+                CallTimeoutSeconds = llmConfig.CallTimeoutSeconds
+            });
+            services.AddSingleton<CodexCliChatClient>();
             services.AddSingleton<IChatClient>(sp => new ClaudeCliChatClient(
                 sp.GetRequiredService<IProcessRunner>(),
                 sp.GetRequiredService<ClaudeCliOptions>(),
@@ -215,7 +225,8 @@ public static class InfrastructureServiceCollectionExtensions
             {
                 var clients = new Dictionary<string, IChatClient>
                 {
-                    [LlmProviderValidation.ClaudeCliPrefix] = sp.GetRequiredService<IChatClient>()
+                    [LlmProviderValidation.ClaudeCliPrefix] = sp.GetRequiredService<IChatClient>(),
+                    [LlmProviderValidation.CodexCliPrefix] = sp.GetRequiredService<CodexCliChatClient>()
                 };
 
                 // One shared HttpClient per provider (not per entry): the M3b execution notes
@@ -285,12 +296,15 @@ public static class InfrastructureServiceCollectionExtensions
 
                 return availability;
             });
-            services.AddHostedService(sp => new ClaudeCliInstallerHostedService(
-                sp.GetRequiredService<IProcessRunner>(),
-                sp.GetRequiredService<ClaudeCliOptions>(),
-                sp.GetRequiredService<IModelAvailability>(),
-                claudeCliModelNames,
-                sp.GetRequiredService<ILogger<ClaudeCliInstallerHostedService>>()));
+            if (claudeCliModelNames.Length > 0)
+            {
+                services.AddHostedService(sp => new ClaudeCliInstallerHostedService(
+                    sp.GetRequiredService<IProcessRunner>(),
+                    sp.GetRequiredService<ClaudeCliOptions>(),
+                    sp.GetRequiredService<IModelAvailability>(),
+                    claudeCliModelNames,
+                    sp.GetRequiredService<ILogger<ClaudeCliInstallerHostedService>>()));
+            }
             services.AddSingleton(new ConcurrentCallGate(llmConfig.MaxConcurrentCalls));
             services.AddScoped<IBudgetGuard, BudgetGuard>();
             services.AddScoped<IBudgetNoticeSender, BudgetNoticeSender>();

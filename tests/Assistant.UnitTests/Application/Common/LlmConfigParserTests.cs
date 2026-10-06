@@ -425,4 +425,18 @@ public class LlmConfigParserTests
         result.Config!.Models.Select(m => m.Name).ShouldBe(new[] { "sonnet" });
         result.Errors.ShouldContain(e => e.Contains("OPENAI_API_KEY"));
     }
+    [Fact]
+    public void Subscription_price_is_zero_even_when_a_nonzero_price_is_configured()
+    {
+        var options = Valid();
+        options.ModelsRaw = "codex-cli:synthetic";
+        options.FastModelsRaw = "codex-cli:synthetic";
+        options.PricesRaw = "synthetic=3/15";
+
+        var result = LlmConfigParser.Parse(options, AlwaysValid());
+
+        result.IsEnabled.ShouldBeTrue();
+        result.Config!.Prices["synthetic"].ShouldBe(new ModelPrice(0m, 0m));
+        result.Config.FastModels.Single().ProviderPrefix.ShouldBe("codex-cli");
+    }
 }

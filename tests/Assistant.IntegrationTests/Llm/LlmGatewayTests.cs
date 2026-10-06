@@ -625,4 +625,84 @@ public class LlmGatewayTests : IntegrationTestBase
         var rows = await Db.LlmCalls.Where(c => c.FamilyId == 29).ToListAsync();
         rows.ShouldBeEmpty();
     }
+    [Fact]
+    public async Task Cancelled_subscription_attempt_preserves_source_and_zero_cost_without_fallback()
+    {
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry("codex-cli", ModelA) });
+        var client = new ScriptedChatClient();
+        client.EnqueueHang();
+        var gateway = CreateGatewayWithProviders(config, new Dictionary<string, IChatClient> { ["codex-cli"] = client });
+        var request = MakeRequest(familyId: 43) with { ChatId = -100, TopicId = 7, TriggerMessageId = 555 };
+        using var cts = new CancellationTokenSource();
+        var callTask = gateway.CompleteAsync(request, cts.Token);
+        await client.HangStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(async () => await callTask);
+
+        var row = (await Db.LlmCalls.Where(c => c.FamilyId == 43).ToListAsync()).ShouldHaveSingleItem();
+        row.Provider.ShouldBe("codex-cli");
+        row.Outcome.ShouldBe(LlmCallOutcome.Failed);
+        row.Cost.ShouldBe(0m);
+        row.ChatId.ShouldBe(-100);
+        row.TopicId.ShouldBe(7);
+        row.TriggerMessageId.ShouldBe(555);
+        row.BotId.ShouldBe(request.BotId);
+        row.Tier.ShouldBe(request.Tier);
+        client.RequestedModelIds.ShouldHaveSingleItem();
+    }
+    [Theory]
+    [InlineData("smart")]
+    [InlineData("fast")]
+    public async Task Subscription_tiers_ignore_stale_legacy_preference_and_never_call_legacy_after_limits(string tier)
+    {
+        var models = new[] { new ModelCatalogEntry("codex-cli", ModelA), new ModelCatalogEntry("codex-cli", ModelB) };
+        var config = MakeConfig(models: models, fastModels: new[] { models[1] });
+        var client = new ScriptedChatClient();
+        client.EnqueueException(new ModelLimitReachedException("synthetic quota", LlmLimitScope.Provider));
+        var legacy = new ScriptedChatClient();
+        legacy.EnqueueResponse("must never be sent");
+        var gateway = CreateGatewayWithProviders(config, new Dictionary<string, IChatClient>
+        {
+            ["codex-cli"] = client,
+            ["claude-cli"] = legacy
+        });
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 44, tier: tier, preferredModel: "legacy-model"), CancellationToken.None);
+
+        result.IsAnswer.ShouldBeFalse();
+        client.RequestedModelIds.ShouldHaveSingleItem().ShouldBe(tier == "fast" ? ModelB : ModelA);
+        legacy.RequestedModelIds.ShouldBeEmpty();
+        var row = (await Db.LlmCalls.Where(c => c.FamilyId == 44).ToListAsync()).ShouldHaveSingleItem();
+        row.Outcome.ShouldBe(LlmCallOutcome.LimitReached);
+        row.Provider.ShouldBe("codex-cli");
+        row.Cost.ShouldBe(0m);
+    }
+    [Theory]
+    [InlineData("smart")]
+    [InlineData("fast")]
+    public async Task Successful_subscription_tiers_preserve_usage_source_and_zero_cost(string tier)
+    {
+        var models = new[] { new ModelCatalogEntry("codex-cli", ModelA), new ModelCatalogEntry("codex-cli", ModelB) };
+        var config = MakeConfig(models: models, fastModels: new[] { models[1] });
+        var client = new ScriptedChatClient();
+        client.EnqueueResponse("synthetic answer", 23, 11);
+        var gateway = CreateGatewayWithProviders(config, new Dictionary<string, IChatClient> { ["codex-cli"] = client });
+        var request = MakeRequest(familyId: 45, tier: tier, preferredModel: "legacy-model") with { ChatId = -100, TopicId = 7, TriggerMessageId = 555 };
+
+        var result = await gateway.CompleteAsync(request, CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        result.ModelName.ShouldBe(tier == "fast" ? ModelB : ModelA);
+        var row = (await Db.LlmCalls.Where(c => c.FamilyId == 45).ToListAsync()).ShouldHaveSingleItem();
+        row.Outcome.ShouldBe(LlmCallOutcome.Ok);
+        row.InputTokens.ShouldBe(23);
+        row.OutputTokens.ShouldBe(11);
+        row.Cost.ShouldBe(0m);
+        row.ChatId.ShouldBe(-100);
+        row.TopicId.ShouldBe(7);
+        row.TriggerMessageId.ShouldBe(555);
+        row.BotId.ShouldBe(request.BotId);
+        row.Tier.ShouldBe(tier);
+    }
 }

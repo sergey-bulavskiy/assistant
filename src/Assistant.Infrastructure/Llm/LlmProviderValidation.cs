@@ -9,12 +9,22 @@ namespace Assistant.Infrastructure.Llm;
 /// and the entry is dropped (spec §8.9).</summary>
 public static class LlmProviderValidation
 {
+    public const string CodexCliPrefix = "codex-cli";
     public const string ClaudeCliPrefix = "claude-cli";
     public const string AnthropicPrefix = "anthropic";
     public const string OpenAiPrefix = "openai";
 
-    public static Func<string, string?> Create(ClaudeCliOptions claudeCliOptions) => provider => provider switch
+    public static bool RequiresSubscriptionOnly(string modelsRaw, string fastModelsRaw) =>
+        modelsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Concat(fastModelsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Any(entry => string.Equals(entry.Split(':', 2)[0], CodexCliPrefix, StringComparison.OrdinalIgnoreCase));
+
+    public static Func<string, string?> Create(ClaudeCliOptions claudeCliOptions, bool subscriptionOnly = false) => provider =>
+        subscriptionOnly && !string.Equals(provider, CodexCliPrefix, StringComparison.OrdinalIgnoreCase)
+            ? "is disabled while codex-cli is configured; remove codex-cli from both model chains for manual rollback"
+            : provider switch
     {
+        CodexCliPrefix => null,
         ClaudeCliPrefix => string.IsNullOrWhiteSpace(claudeCliOptions.OAuthToken)
             ? "needs a non-empty CLAUDE_CODE_OAUTH_TOKEN"
             : null,

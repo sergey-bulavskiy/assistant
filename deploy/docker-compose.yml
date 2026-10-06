@@ -25,11 +25,11 @@ services:
       TELEGRAM_MANAGER_BOT_TOKEN: ${TELEGRAM_MANAGER_BOT_TOKEN}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       ConnectionStrings__Assistant: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=postgres;Password=${POSTGRES_PASSWORD}
-      # LLM_MODELS and CLAUDE_CODE_OAUTH_TOKEN have no default here on purpose -- the LLM stays off
-      # until the owner sets both in .env (README "Set up the General assistant"). Every *limit*
+      # LLM_MODELS has no default: model access stays off until explicitly configured and logged in.
+      # See README "Set up the General assistant". Every *limit*
       # below does get a default matching .env.example, since the app itself still requires them
       # (LlmConfigParser turns the whole config off if any limit is missing/invalid) -- an .env that
-      # only sets LLM_MODELS/CLAUDE_CODE_OAUTH_TOKEN still gets a working LLM.
+      # only sets LLM_MODELS still receives valid limits.
       LLM_MODELS: ${LLM_MODELS:-}
       LLM_CALLS_PER_MINUTE: ${LLM_CALLS_PER_MINUTE:-10}
       LLM_CALLS_PER_DAY: ${LLM_CALLS_PER_DAY:-200}
@@ -59,6 +59,7 @@ services:
       LLM_BUDGET_HARD_PERCENT: ${LLM_BUDGET_HARD_PERCENT:-120}
     volumes:
       - claude-home:/home/app/.claude-home
+      - codex-home:/home/app/.codex
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -72,3 +73,4 @@ services:
 volumes:
   postgres-data:
   claude-home:
+  codex-home:

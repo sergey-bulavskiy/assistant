@@ -16,3 +16,13 @@
 - A new named volume (e.g. `claude-home`) or new env var in `docker-compose.yml` only takes effect
   after `git pull` + `docker compose -f deploy/docker-compose.yml up -d` on the host: Watchtower only
   replaces the `app` image on the *existing* container, it never re-reads the compose file itself.
+- `codex-home` holds private ChatGPT CLI authentication at `/home/app/.codex`; never inspect,
+  print, copy into a repository or bake its contents into an image. Supported interactive login
+  uses a one-off container with the entrypoint overridden, so it does not start a second poller.
+  The image creates this directory with application ownership before mounting a new volume.
+- Codex CLI is pinned to `0.160.1` in the Linux amd64 image with a verified artifact checksum.
+  No deployment version override exists. Confirm isolation, account/model access and the live
+  extraction eval bar before activation; packaging alone is not proof of a usable provider.
+- Subscription activation configures both model chains with `codex-cli` only. Retained Claude/API
+  adapters are deliberate manual rollback; remove Codex entries from both chains before restoring
+  a legacy provider. Count-only General override audits must never return runtime identifiers.

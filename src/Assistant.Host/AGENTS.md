@@ -8,8 +8,11 @@
   `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_CLI_VERSION` for the General assistant (all optional;
   empty/invalid `LLM_*` means LLM is off, logged once at startup, never a crash — see
   `src/Assistant.Infrastructure/AGENTS.md`'s LLM section; `CLAUDE_CLI_VERSION` falls back to this
-  build's pinned default). `GIT_SHA` / `BUILD_TIME` are baked in by the Dockerfile; `HOME`/
-  `CLAUDE_HOME` are fixed container paths, not owner-configurable. A new setting needs: validation, an
+  build's pinned default). ChatGPT subscription auth uses the private Codex home volume, not an
+  API key or env token. Codex CLI `0.160.1` is pinned in the Linux amd64 image. `GIT_SHA` /
+  `BUILD_TIME` are baked in by the Dockerfile; `HOME`/`CLAUDE_HOME` and the production `CODEX_HOME`
+  are fixed container paths. Optional local `CODEX_CLI_PATH`/`CODEX_HOME` must be absolute; the CLI
+  version is mandatory and has no override. The compose deployment uses image defaults. A new setting needs: validation, an
   entry in `deploy/.env.example` and `deploy/docker-compose.yml` if required in production, and a
   README update.
 - `BotOptions` are validated before migrations run, so bad config fails fast.

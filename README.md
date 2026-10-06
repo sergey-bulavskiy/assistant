@@ -3,7 +3,7 @@
 A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
 **role bots** for it; role bots quietly record the messages of approved people in approved chats
 into PostgreSQL, one role bot -- the **General assistant** -- can also answer with a real LLM
-(the Claude Code CLI on a Claude subscription) once configured, and a **health** role bot keeps a household member's tracking profile and safety
+(a CLI subscription provider or a deliberately configured API provider) once configured, and a **health** role bot keeps a household member's tracking profile and safety
 thresholds. Later milestones add more assistant
 features on top of this pipeline.
 
@@ -231,7 +231,7 @@ IMAGE_TAG=latest
 ```
 
 To also enable the General assistant now (optional, can be done later — step 6): set
-`CLAUDE_CODE_OAUTH_TOKEN` and `LLM_MODELS`. Every other `LLM_*` limit already has a working default
+`LLM_MODELS`, `LLM_FAST_MODELS`, and complete supported provider login. Every other `LLM_*` limit already has a working default
 from `deploy/docker-compose.yml` — leave them unset unless you have a reason to override one in
 `.env` (see `deploy/.env.example`).
 
@@ -265,61 +265,76 @@ admin also works.)
 
 ## 6. Set up the General assistant (optional)
 
-Skip this section if you don't want an LLM-backed bot yet — every `LLM_*` variable is optional and
-the rest of the bots work with none of them set. Steps in this exact order (spec §8.11):
+Empty `LLM_MODELS` keeps model access off. General replies and Health text extraction use the same
+gateway, with separate smart and fast chains. The Linux amd64 image includes pinned Codex CLI
+`0.160.1` at `/usr/local/bin/codex`; its private authentication volume is `codex-home`, mounted at
+`/home/app/.codex`. Packaging does not prove account access, disabled tools or extraction quality.
+Local runs can set absolute `CODEX_CLI_PATH` and `CODEX_HOME`; the CLI must still be exactly the
+pinned native binary. Production compose uses the image paths and private auth volume.
+Confirm these before switching an existing deployment; changing the home deployment requires the
+owner's explicit approval.
 
-1. On a desktop with a browser, generate a Claude Code CLI auth token (requires a Claude
-   subscription, not an API key):
+1. Create a General bot with `/newbot general`; turn off Group Privacy for group use.
+2. After deploying the reviewed image and compose changes, complete supported ChatGPT login in
+   a one-off container with the application entrypoint overridden. The existing desktop session
+   does not establish login inside this volume. Enable device authentication for the account if
+   needed, complete the browser approval privately, then check status without reading credentials:
 
    ```bash
-   claude setup-token
+   docker compose -f deploy/docker-compose.yml run --rm --no-deps --entrypoint /usr/local/bin/codex app login --device-auth -c 'cli_auth_credentials_store="file"' -c 'forced_login_method="chatgpt"'
+   docker compose -f deploy/docker-compose.yml run --rm --no-deps --entrypoint /usr/local/bin/codex app login status
    ```
 
-   This prints a token to your terminal without saving it anywhere — copy it somewhere you'll paste
-   it into `deploy/.env` in step 3.
-2. Send `/newbot general` to the manager bot (same flow as any other role bot). If this bot will be
-   used in groups, also turn off **Group Privacy** for it in BotFather (the manager bot's own
-   creation flow doesn't do this for you) — otherwise it never sees group messages to check for a
-   mention/reply.
-3. Put the token from step 1 and at least `LLM_MODELS` into `deploy/.env`, e.g.:
+   These supported pinned-release commands still require actual deployment account access.
+   Keep the displayed device authorization code private. Do not inspect or print credentials,
+   use API-key login for this switch, or start another app poller.
+3. Prove one synthetic ordinary reply and structured extraction with effective tool/context
+   isolation, through the existing gateway. Verify the selected fast model with the live extraction
+   evals: at least 90% of all cases and every critical case must pass. See
+   [the eval guide](tests/Assistant.Evals/README.md). Select an available model from this evidence;
+   no identifier is implied by this example:
 
-   ```
-   CLAUDE_CODE_OAUTH_TOKEN=<the token from step 1>
-   LLM_MODELS=claude-cli:sonnet,claude-cli:haiku
+   ```text
+   LLM_MODELS=codex-cli:<verified-model>
+   LLM_FAST_MODELS=codex-cli:<verified-model>
    ```
 
-   The first `LLM_MODELS` entry is tried first; later ones are the fallback chain when one runs out
-   of usage limits. Every other `LLM_*` variable (rate/day caps, context size, timeouts) already has
-   a working default from `deploy/docker-compose.yml`, and `CLAUDE_CLI_VERSION` (the pinned CLI
-   version) defaults inside the app itself — see `deploy/.env.example` to override any of them.
-4. Pull the updated `deploy/docker-compose.yml` (it now mounts a `claude-home` volume and reads the
-   new variables) and run:
+   Both chains must contain only ChatGPT subscription entries. A Codex entry in either raw chain
+   disables Claude/API entries; remove Codex from both chains for deliberate manual rollback.
+   General preferences outside the active catalog are ignored. Health has no preferred-model
+   override. Do not mistake a stale saved preference for an active fallback.
+4. Recreate compose after approved configuration/login preparation:
 
    ```bash
    docker compose -f deploy/docker-compose.yml up -d
    ```
 
-   **This manual step matters even if Watchtower is already running**: Watchtower only replaces the
-   image on the *existing* container — it does not pick up new environment variables or new volume
-   mounts from a changed compose file. The `claude-home` volume and every `LLM_*`/`CLAUDE_CLI_VERSION`
-   variable only take effect after this explicit `docker compose up -d`.
+   Watchtower replaces the existing image; it cannot apply new environment variables or volume
+   mounts. Never run two pollers against the same bot token. Verify the running image, one actual
+   Telegram reply and provider/model/outcome metadata before calling the deployment switched.
 
-**Notes:**
-- The General assistant runs the Claude Code CLI (`claude -p`) as its model provider — this is a
-  deliberate exception to this project's normal "no coding-agent tooling as a runtime dependency"
-  stance, chosen because it works on a Claude subscription with no separate API billing. Direct
-  Anthropic/OpenAI API providers are also available behind the same interface, with no change to how
-  `/model`/`/new` or any role-bot code works — see "Set up API providers and budgets" below.
-- The CLI itself is **not** part of this (public) image — it's proprietary software, so a background
-  service installs the pinned version (`CLAUDE_CLI_VERSION`) into its own dedicated volume the first
-  time the container starts with a `claude-cli:` entry configured. Until that finishes (usually a few
-  seconds), `/model` shows every `claude-cli` model as unavailable; check the container logs for
-  `claude-cli install failed` if it doesn't clear up shortly — a persistent failure most often means
-  the container can't reach `claude.ai` to run the installer.
+Subscription calls retain call/token/attempt accounting with zero monetary `Cost`; this does not
+mean unlimited quota or represent subscription charges. Auth, process or quota failure reports
+unavailability and waits. It never automatically invokes Claude or a paid API. Raw CLI event
+streams can contain private content and must never enter ordinary logs or traces. This adapter
+scope is text only; photo support needs separate verification and a later request-contract change.
+For Codex, `LLM_MAX_OUTPUT_TOKENS` is an instruction target rather than a verified hard generation
+cap. The adapter rejects final text above eight characters per configured token and bounds final
+file bytes/process streams; timeout and cancellation limit execution separately.
+
+For a count-only audit of General preferences, privately query `chat_settings` for the number of
+non-null `preferred_model` values outside the final configured model list. Do not return rows,
+chat/topic identifiers or settings contents. No reset is required for safe routing; an optional
+runtime reset needs approval and an operator-managed private backup if exact rollback is desired.
+
+Claude remains available for deliberate manual rollback. Generate its subscription token with
+`claude setup-token`, set `CLAUDE_CODE_OAUTH_TOKEN` and legacy model entries in both chains, then
+recreate compose. Its proprietary CLI is installed at startup into `claude-home` only when active;
+`CLAUDE_CLI_VERSION` retains the reviewed pinned default. Paid rollback prerequisites follow below.
 
 ## 7. Set up API providers and budgets (optional)
 
-Skip this if `claude-cli` (the previous section) is enough for now — every variable here is optional
+These providers are for deliberate manual rollback from subscription-only access; every variable is optional
 and empty by default.
 
 1. **Before putting a key in `.env`:** create a dedicated API key used only by this app (not a key
