@@ -13,6 +13,107 @@ namespace Assistant.UnitTests.Application.Health;
 
 public class HealthAssistantTests
 {
+    [Fact]
+    public async Task Notes_stop_after_a_failed_second_part()
+    {
+        _events.Notes.AddRange(Enumerable.Range(1, 20).Select(i => new HealthEventInfo(i, "note", Now.AddMinutes(-i),
+            HealthEventPayloads.Serialize(new NotePayload($"marker-{i:D2}-" + new string('x', 300), new[] { "walk" })), i)));
+        _telegram.ThrowOnSendNumber = 2;
+        await HandleAsync(Msg("/notes walk", "group", topicId: 7));
+        _telegram.Sent.Count.ShouldBe(1);
+        _telegram.Sent.Single().Text.ShouldContain("marker-01-");
+        _telegram.Sent.Single().Text.ShouldNotContain("marker-20-");
+    }
+
+    [Fact]
+    public async Task Notes_command_is_available_to_an_approved_non_owner_without_a_model_call()
+    {
+        _ownership.OwnerUserIds.Clear();
+        _events.Notes.Add(new HealthEventInfo(5, "note", Now.AddDays(-1),
+            HealthEventPayloads.Serialize(new NotePayload("short observation", new[] { "walk" })), 9));
+
+        await HandleAsync(Msg("/notes", userId: 222));
+
+        _telegram.Sent.Single().Text.ShouldContain("заметка: short observation #walk");
+        _gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Notes_tag_is_normalized_extra_arguments_are_rejected_and_long_reply_is_split()
+    {
+        await HandleAsync(Msg("/notes WALK"));
+        _events.LastNotesQuery!.Value.Tag.ShouldBe("walk");
+        _events.LastNotesQuery.Value.Limit.ShouldBe(20);
+        _telegram.Sent.Clear();
+
+        await HandleAsync(Msg("/notes bad-tag extra"));
+        _telegram.Sent.Single().Text.ShouldBe("Формат: /notes или /notes <тег> (до 32 букв).");
+        _gateway.Requests.ShouldBeEmpty();
+        _telegram.Sent.Clear();
+
+        _events.Notes.AddRange(Enumerable.Range(1, 20).Select(i => new HealthEventInfo(i, "note", Now.AddMinutes(-i),
+            HealthEventPayloads.Serialize(new NotePayload($"marker-{i:D2}-" + new string('x', 300), new[] { "walk" })), i)));
+        await HandleAsync(Msg("/notes walk", "group", topicId: 7));
+
+        _telegram.Sent.Count.ShouldBeGreaterThan(1);
+        _telegram.Sent.ShouldAllBe(part => part.Text.Length <= 4096);
+        var complete = string.Concat(_telegram.Sent.Select(part => part.Text));
+        complete.ShouldContain("marker-01-");
+        complete.ShouldContain("marker-20-");
+        _telegram.Sent.ShouldAllBe(part => part.TopicId == 7 && part.ReplyToMessageId != null);
+    }
+
+    [Fact]
+    public async Task Today_note_list_splits_long_fixed_reply()
+    {
+        _events.ActiveEvents.AddRange(Enumerable.Range(1, 20).Select(i => new HealthEventInfo(i, "note", Now,
+            HealthEventPayloads.Serialize(new NotePayload($"marker-{i:D2}-" + new string('x', 300), new[] { "walk" })), i)));
+        await HandleAsync(Msg("/today", "group", topicId: 7));
+        _telegram.Sent.Count.ShouldBeGreaterThan(1);
+        _telegram.Sent.ShouldAllBe(part => part.Text.Length <= 4096 && part.TopicId == 7);
+        var text = string.Join("\n", _telegram.Sent.Select(part => part.Text));
+        foreach (var i in Enumerable.Range(1, 20)) text.ShouldContain($"marker-{i:D2}-");
+    }
+
+    [Fact]
+    public async Task Note_record_uses_existing_event_and_reaction_path()
+    {
+        Answer("""{"events":[{"type":"note","intent":"record","day":0,"time":null,"text":"short observation","tags":["Walk"]}],"unclear":[],"is_question":false,"undo":false}""");
+        var message = Msg("short observation", "group");
+        await HandleAsync(message);
+        var call = _events.Added.ShouldHaveSingleItem();
+        call.Source.MessageDbId.ShouldBe(1);
+        var note = call.Events.ShouldHaveSingleItem();
+        note.Type.ShouldBe("note");
+        var payload = HealthEventPayloads.TryDeserialize<NotePayload>(note.PayloadJson)!;
+        payload.Text.ShouldBe("short observation");
+        payload.Tags.ShouldBe(new[] { "walk" });
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _alerts.Claims.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Mixed_note_and_reading_are_both_recorded()
+    {
+        Answer("""{"events":[{"type":"note","intent":"record","text":"short observation","tags":["walk"]},{"type":"glucose","intent":"record","value":5.6}],"unclear":[],"is_question":false}""");
+        await HandleAsync(Msg("short observation; glucose 5.6", "group"));
+        _events.Added.ShouldHaveSingleItem().Events.Select(e => e.Type).ShouldBe(new[] { "note", "glucose" });
+    }
+
+    [Theory]
+    [InlineData("question_only", false)]
+    [InlineData("unsure", true)]
+    public async Task Note_intent_uses_existing_confirmation_policy(string intent, bool pending)
+    {
+        Answer("{\"events\":[{\"type\":\"note\",\"intent\":\"" + intent
+            + "\",\"text\":\"short observation\",\"tags\":[\"walk\"]}],\"unclear\":[],\"is_question\":false}");
+        await HandleAsync(Msg("short observation", "group"));
+        _events.Added.ShouldBeEmpty();
+        _pending.Added.Count.ShouldBe(pending ? 1 : 0);
+        _telegram.ButtonMessages.Count.ShouldBe(pending ? 1 : 0);
+        if (pending) _pending.Added.Single().Record.Events.ShouldHaveSingleItem().Type.ShouldBe("note");
+    }
+
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2030-02-07T10:00:00Z");
     private static readonly ReceivingBot Bot = new(BotDbId: 1, TelegramBotId: 999, Username: "test_health_bot", FamilyId: 42, Role: "health");
 

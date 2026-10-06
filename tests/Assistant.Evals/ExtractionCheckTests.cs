@@ -4,6 +4,29 @@ namespace Assistant.Evals;
 
 public class ExtractionCheckTests
 {
+    [Fact]
+    public void Note_case_accepts_valid_model_tags_but_rejects_invalid_note_payloads()
+    {
+        var c = Case("""{"events":[{"type":"note","intent":"record"}],"unclear":[],"is_question":false,"alert":null}""");
+        const string answer = """{"events":[{"type":"note","intent":"record","text":"short observation","tags":["walking"]}],"unclear":[],"is_question":false}""";
+        ShouldPass(Check(c, answer));
+        ShouldPass(Check(c, answer.Replace("walking", "stroll", StringComparison.Ordinal)));
+        ShouldFailWith(Check(c, answer.Replace("[\"walking\"]", "[]", StringComparison.Ordinal)), "missing event");
+        ShouldFailWith(Check(c, answer.Replace("walking", "walk2", StringComparison.Ordinal)), "missing event");
+        ShouldFailWith(Check(c, answer.Replace("short observation", "  ", StringComparison.Ordinal)), "missing event");
+        ShouldFailWith(Check(c, answer.Replace("short observation", new string('x', 501), StringComparison.Ordinal)), "missing event");
+    }
+
+    [Fact]
+    public void Note_tags_must_match_in_order_and_content()
+    {
+        const string answer = """{"events":[{"type":"note","day":0,"time":null,"intent":"record","text":"felt more energetic after a short walk","tags":["walk","energy"]}],"unclear":[],"is_question":false}""";
+        static string Expected(string tags) => $$"""{"events":[{"type":"note","intent":"record","text":"felt more energetic after a short walk","tags":{{tags}}}],"unclear":[],"alert":null}""";
+        ShouldPass(Check(Case(Expected("[\"walk\",\"energy\"]")), answer));
+        foreach (var tags in new[] { "[\"energy\",\"walk\"]", "[\"walk\"]", "[\"walk\",\"energy\",\"rest\"]", "[\"walk\",\"rest\"]" })
+            ShouldFailWith(Check(Case(Expected(tags)), answer), "missing event");
+    }
+
     private const string Fasting54 =
         """{"events":[{"type":"glucose","value":5.4,"context":"fasting"}],"unclear":[],"is_question":false}""";
 

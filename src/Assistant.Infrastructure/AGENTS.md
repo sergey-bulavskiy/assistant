@@ -38,6 +38,8 @@
   `HealthEventValidator` before saving; Postgres reformats jsonb text, so tests parse it. `bot_id` is
   the Telegram bot id and `source_message_id` is `messages.id`; `/del` as a reply finds the source
   through `messages`. Pass only offset-0 `DateTimeOffset` values (Npgsql rejects others).
+  The `note` payload holds validated `{text,tags}` with text at most 500 characters and one to five
+  normalized letter-only tags.
 - An edited message's events are replaced by `EventStore.ReplaceMessageEventsAsync` with one
   `SaveChanges` (a failure keeps the earlier events). An unchanged event (same type, `occurred_at`
   and payload, compared with `HealthEventPayloads.SameJson` because Postgres reformats jsonb) keeps
@@ -164,6 +166,9 @@
   group can restrict reactions further, so callers fall back and never fail on a reaction.
 
 ## LLM gateway and CLI providers (`Llm/`)
+
+- `ProcessRunner` decodes redirected stdout and stderr explicitly as UTF-8 before any provider
+  parses them. Keep this independent of the host console code page; real CLI content stays out of logs.
 
 - `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
   must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and

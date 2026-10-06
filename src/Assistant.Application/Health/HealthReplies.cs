@@ -5,8 +5,8 @@ using Microsoft.Extensions.Logging;
 namespace Assistant.Application.Health;
 
 /// <summary>Telegram sends shared by the parts of the health assistant: fixed-text replies, the ✍
-/// reaction and clearing it. A failed send or reaction never throws; it is logged by exception type
-/// only.</summary>
+/// reaction and clearing it. A send failure returns false and a reaction failure is ignored;
+/// both log only the exception type. Cancellation during a send propagates.</summary>
 internal sealed class HealthReplies
 {
     private readonly ILogger _logger;
@@ -26,20 +26,23 @@ internal sealed class HealthReplies
             telegramClient, message.ChatId, message.TopicId, text,
             quote || message.ChatType != "private" ? message.MessageId : null, cancellationToken);
 
-    /// <summary>One fixed text to a chat/topic, optionally as a reply. False when the send failed.</summary>
+    /// <summary>Fixed text to a chat/topic, optionally as a reply. False when a part failed.</summary>
     public async Task<bool> SendAsync(
         ITelegramClient telegramClient, long chatId, int? topicId, string text, int? replyToMessageId, CancellationToken cancellationToken)
     {
-        try
+        foreach (var part in ReplySplitter.Split(text))
         {
-            await telegramClient.SendTextAsync(chatId, topicId, text, replyToMessageId, cancellationToken);
-            return true;
+            try
+            {
+                await telegramClient.SendTextAsync(chatId, topicId, part, replyToMessageId, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError("failed to send health reply: {ExceptionType}", ex.GetType().Name);
+                return false;
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError("failed to send health reply: {ExceptionType}", ex.GetType().Name);
-            return false;
-        }
+        return true;
     }
 
     // ✍, or 👍 once if the chat refuses ✍. A failed reaction never undoes the recorded events.

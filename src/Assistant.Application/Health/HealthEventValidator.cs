@@ -33,6 +33,7 @@ public static class HealthEventValidator
             HealthEventTypes.Symptom => Symptom(extracted),
             HealthEventTypes.Weight => Weight(extracted),
             HealthEventTypes.BloodPressure => BloodPressure(extracted),
+            HealthEventTypes.Note => Note(extracted),
             _ => Bad(null, UnclearReasons.Type)
         };
         if (check.Problem is not null || check.Json is null)
@@ -56,6 +57,17 @@ public static class HealthEventValidator
     private static PayloadCheck Bad(string? fragment, string reason) => new(null, Unclear(fragment, reason));
 
     private static ExtractedUnclear Unclear(string? fragment, string reason) => new() { Fragment = fragment, Reason = reason };
+
+    private static PayloadCheck Note(ExtractedEvent e)
+    {
+        var text = e.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || text.Length > 500
+            || !HealthNoteTags.TryNormalizeMany(e.Tags, out var tags))
+        {
+            return Bad(null, UnclearReasons.Value);
+        }
+        return Ok(new NotePayload(text, tags));
+    }
 
     private static PayloadCheck Glucose(ExtractedEvent e)
     {

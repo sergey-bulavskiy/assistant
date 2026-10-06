@@ -4,6 +4,19 @@ namespace Assistant.UnitTests.Application.Health;
 
 public class HealthEventTextTests
 {
+    [Fact]
+    public void Note_description_uses_russian_label_and_hash_tags()
+    {
+        HealthEventText.Describe(Info(1, "note", "{\"text\":\"short observation\",\"tags\":[\"walk\",\"energy\"]}"))
+            .ShouldBe("заметка: short observation #walk #energy");
+    }
+
+    [Fact]
+    public void Note_description_falls_back_to_type_when_payload_is_incomplete()
+    {
+        HealthEventText.Describe(Info(1, "note", "{\"text\":\"short observation\"}")).ShouldBe("note");
+    }
+
     private static HealthEventInfo Info(long id, string type, string json, string at = "2030-02-07T08:30:00Z") =>
         new(id, type, DateTimeOffset.Parse(at), json, null);
 

@@ -5,6 +5,17 @@ namespace Assistant.UnitTests.Application.Health;
 public class ExtractionParserTests
 {
     [Fact]
+    public void Parses_note_text_tags_and_intent()
+    {
+        var output = ExtractionParser.Parse("""{"events":[{"type":"NOTE","text":"short observation","tags":["Walk","Energy"],"intent":"record"}],"is_question":false}""");
+        var note = output!.Events.ShouldHaveSingleItem();
+        note.Type.ShouldBe("note");
+        note.Text.ShouldBe("short observation");
+        note.Tags.ShouldBe(new[] { "Walk", "Energy" });
+        note.Intent.ShouldBe("record");
+    }
+
+    [Fact]
     public void Parses_events_unclear_and_is_question()
     {
         var json = """

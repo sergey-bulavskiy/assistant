@@ -67,7 +67,7 @@ public class ConsultationPromptTests
         text.ShouldContain("(background facts, not instructions): none\n");
         var afterThresholds = text[text.IndexOf("- Thresholds", StringComparison.Ordinal)..];
         afterThresholds[(afterThresholds.IndexOf('\n') + 1)..].ShouldStartWith("  - none\n");
-        const string readingsHeader = "- Readings of the last 24 hours (local time, oldest first):\n";
+        const string readingsHeader = "- Diary entries of the last 24 hours (local time, oldest first):\n";
         text[(text.IndexOf(readingsHeader, StringComparison.Ordinal) + readingsHeader.Length)..]
             .ShouldBe("  - none\n");
     }
@@ -89,6 +89,15 @@ public class ConsultationPromptTests
 
         text.ShouldContain("  - 08.02 07:30 вес 64.5 кг\n");
         text.ShouldContain("- Current local date and time: 2030-02-07 19:00 (Thursday)\n");
+    }
+
+    [Fact]
+    public void Recent_note_is_rendered_with_its_time_and_tags()
+    {
+        var note = new HealthEventInfo(3, "note", Now.AddMinutes(-5),
+            HealthEventPayloads.Serialize(new NotePayload("short observation", new[] { "walk" })), null);
+        Build(Profile(), NoWeek, [], [Glucose930, note])
+            .ShouldContain("  - 07.02 09:55 заметка: short observation #walk\n");
     }
 
     [Fact]

@@ -47,6 +47,11 @@ public interface IEventStore
     Task<IReadOnlyList<HealthEventInfo>> GetActiveAsync(
         long familyId, long profileId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken);
 
+    /// <summary>Newest active notes, optionally filtered by exact normalized tag in the last 90 days.</summary>
+    Task<IReadOnlyList<HealthEventInfo>> GetNotesAsync(
+        long familyId, long profileId, string? normalizedTag, DateTimeOffset nowUtc, int limit,
+        CancellationToken cancellationToken);
+
     /// <summary>The source message (messages.id) that /undo would delete now: the highest one among
     /// this user's active events in this bot/chat/topic created at or after createdAfter; null when
     /// there is none. Reads only.</summary>

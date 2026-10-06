@@ -40,7 +40,7 @@ internal sealed class HealthAnswers
     }
 
     // One smart call for an eligible question: roles/health/prompt.md plus the runtime block (stage
-    // week, context note, thresholds, readings of the last 24 hours) and the last few messages of this
+    // week, context note, thresholds, readings and notes of the last 24 hours) and the last few messages of this
     // chat/topic. The answer passes the dose-advice filter (dose advice replaces the whole answer with
     // the fixed refusal) and always ends with the footer. A refusal or failure gets a fixed text, never
     // silence, and is not stored. Logs the outcome only, never the question, the note or the answer.

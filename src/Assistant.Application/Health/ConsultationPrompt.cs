@@ -5,7 +5,7 @@ namespace Assistant.Application.Health;
 
 /// <summary>What goes to the model for one answer to an addressed question: roles/health/prompt.md
 /// plus a runtime block rendered by code: time zone and local now, the stage week, the owner's
-/// context note, the profile's thresholds with their source labels and the active readings of the
+/// context note, the profile's thresholds with their source labels and the active readings and notes of the
 /// last 24 hours. Only this profile's data. Never the emergency phone.</summary>
 public static class ConsultationPrompt
 {
@@ -39,7 +39,7 @@ public static class ConsultationPrompt
         builder.Append("- Thresholds (glucose in mmol/L, blood pressure in mm Hg; \"врач\" = entered from the doctor's values, ")
             .Append("\"не подтверждено врачом\" = published-guideline default, not confirmed by the doctor):\n");
         AppendItems(builder, rules.Select(SafetyRuleText.Format));
-        builder.Append("- Readings of the last 24 hours (local time, oldest first):\n");
+        builder.Append("- Diary entries of the last 24 hours (local time, oldest first):\n");
         AppendItems(builder, readings.TakeLast(MaxReadings).Select(r => ReadingLine(r, zone)));
         return builder.ToString();
     }

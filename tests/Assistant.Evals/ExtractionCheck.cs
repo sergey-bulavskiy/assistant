@@ -132,15 +132,25 @@ public static class ExtractionCheck
         return true;
     }
 
-    private static bool SameValue(JsonNode? want, JsonElement got) => want switch
+    private static bool SameValue(JsonNode? want, JsonElement got)
     {
-        null => got.ValueKind == JsonValueKind.Null,
-        JsonValue value when value.GetValueKind() == JsonValueKind.Number =>
-            got.ValueKind == JsonValueKind.Number && got.GetDecimal() == value.GetValue<decimal>(),
-        JsonValue value when value.GetValueKind() == JsonValueKind.String =>
-            got.ValueKind == JsonValueKind.String && got.GetString() == value.GetValue<string>(),
-        _ => false
-    };
+        if (want is JsonArray expectedArray)
+        {
+            if (got.ValueKind != JsonValueKind.Array) return false;
+            var actualArray = got.EnumerateArray().ToArray();
+            return expectedArray.Count == actualArray.Length
+                && expectedArray.Select((item, index) => SameValue(item, actualArray[index])).All(x => x);
+        }
+        return want switch
+        {
+            null => got.ValueKind == JsonValueKind.Null,
+            JsonValue value when value.GetValueKind() == JsonValueKind.Number =>
+                got.ValueKind == JsonValueKind.Number && got.GetDecimal() == value.GetValue<decimal>(),
+            JsonValue value when value.GetValueKind() == JsonValueKind.String =>
+                got.ValueKind == JsonValueKind.String && got.GetString() == value.GetValue<string>(),
+            _ => false
+        };
+    }
 
     private static void CompareUnclear(EvalCase evalCase, List<string> unclear, List<string> problems)
     {

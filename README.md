@@ -69,8 +69,11 @@ previously unused Health flags. General settings are unchanged. When enabled, a 
 gets an answer without a mention after the existing alert and clarification checks; ordinary
 chatter remains silent. Direct mentions and replies work with the setting off. Recording and
 confirmation run regardless of this answer setting.
-The model only turns the message into records (glucose, insulin, meal, symptom, weight, blood
-pressure); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
+The model turns the message into records (glucose, insulin, meal, symptom, weight, blood
+pressure, or a note); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
+The model can also record short observations as notes in the person's words, with one to five
+model-selected tags. A note appears in `/today` as `заметка: … #tag`, gets the same ✍ reaction,
+and can be edited, undone or deleted like another record. Notes do not trigger safety alerts.
 Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
 time it cannot place) it asks once, as a reply. Unrelated numbers, including arithmetic operands,
 are not readings and do not call for a measurement clarification. Bare ambiguous reading reports
@@ -120,7 +123,7 @@ no clarification or alert, e.g. a greeting) gets one short fixed hint as a reply
 (in memory); the hint also fires on any addressed group reply to the bot (e.g. a thank-you after an answer), under the same throttle; very short or emoji-only texts are not extracted and get no hint. If extraction fails on an addressed question, only the
 failure notice is sent, no answer. The answer is a second model call on the `smart` tier
 (`LLM_MODELS` order) with the profile's context: the stage week, the context note (`/setnote`), the
-thresholds with their source and the readings of the last 24 hours, plus the last few messages of the
+thresholds with their source and the readings and notes of the last 24 hours, plus the last few messages of the
 chat. Answers never contain dose advice: besides the instruction in the prompt, a fixed filter in
 code replaces any answer that looks like dose advice with "Я не даю советов по дозам лекарств. Это
 вопрос к врачу — …". The filter is conservative and may over-refuse a harmless answer: it also
@@ -173,6 +176,7 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 | `/profile` | any approved member | Stage start date, stage week, time zone, emergency phone, context note, thresholds summary. |
 | `/thresholds` | any approved member | Every safety rule with its values and source: "врач" (entered with `/threshold`) or "не подтверждено врачом" (published-guideline defaults). |
 | `/today` | any approved member | Today's records (the profile's local day), oldest first, each with its number (`#12`). |
+| `/notes` or `/notes <tag>` | any approved member | Last 10 notes across all dates, or up to 20 notes with the exact tag from the past 90 days, newest first; dates use the profile's time zone. |
 | `/undo` | any approved member | Deletes the records of your latest recorded message in this chat or topic (up to 24 hours old). |
 | `/del` | any approved member | As a reply to a message: deletes the records made from it. `/del 12` deletes record #12. |
 | `/setstart ДД.ММ.ГГГГ` | owners | Sets the stage start date (not in the future, at most 300 days ago). |
@@ -491,6 +495,8 @@ real bots and a real family.
 - In a private chat with the health bot: "вес 70.5" → ✍ on the message and `/today` shows
   "вес 70.5 кг"; "сахар 400" → "Не понял «400» — уточните единицы (нужно в ммоль/л)."; `/undo` →
   "Удалено: …" and the ✍ disappears.
+- In a private Health chat, send "После прогулки легче сосредоточиться"; check ✍ and a "заметка:"
+  line in `/today`. `/notes` shows the note; `/notes прогулка` finds it if the model chose that tag.
 - In a private chat with the health bot: "сахар 2.5" → ✍ and "🚨 Глюкоза: 2.5. … Порог 3.0 — не
   подтверждено врачом. …"; "давление 150/95" → "⚠️ Верхнее давление: 150 — выше порога 140 (не
   подтверждено врачом). …"; `/threshold glucose.any low_alert 4.0`, then "сахар 3.9" → "⚠️ Глюкоза:

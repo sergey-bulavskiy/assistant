@@ -1,6 +1,6 @@
 namespace Assistant.Domain.Health;
 
-/// <summary>One recorded health reading (events table). Family-scoped; soft-deleted only.
+/// <summary>One recorded health diary event (reading or note; events table). Family-scoped; soft-deleted only.
 /// Payload is a jsonb document (one Application payload record per Type). BotId is the Telegram bot
 /// id (as messages.bot_id); SourceMessageId is messages.id of the message it was read from.</summary>
 public class HealthEvent

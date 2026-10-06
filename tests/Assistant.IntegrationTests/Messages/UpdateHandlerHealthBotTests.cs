@@ -30,6 +30,20 @@ namespace Assistant.IntegrationTests.Messages;
 /// (scripted chat client).</summary>
 public class UpdateHandlerHealthBotTests : IntegrationTestBase
 {
+    [Fact]
+    public async Task Approved_non_owner_can_retrieve_persisted_notes()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        _chat.EnqueueResponse("""{"events":[{"type":"note","intent":"record","text":"short observation","tags":["walk"]}],"unclear":[],"is_question":false}""");
+        await SendAsync(handler, bot, telegram, OwnerId, "short observation");
+        var note = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync(e => e.Type == "note");
+        telegram.ClearSent();
+        await SendAsync(handler, bot, telegram, MemberId, "/notes walk");
+        var reply = telegram.SentMessages.ShouldHaveSingleItem().Text;
+        reply.ShouldContain($"#{note.Id} 07.02.2030 10:00 заметка: short observation #walk");
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+    }
+
     private const long OwnerId = 111;
     private const long MemberId = 222;
     private const long OtherOwnerId = 333;
@@ -1043,7 +1057,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
         var answerCall = _chat.RequestedMessages[^1];
-        answerCall[0].Text.ShouldContain("- Readings of the last 24 hours (local time, oldest first):\n  - none\n");
+        answerCall[0].Text.ShouldContain("- Diary entries of the last 24 hours (local time, oldest first):\n  - none\n");
         answerCall[0].Text.ShouldNotContain("глюкоза 7.8");
         answerCall.ShouldAllBe(m => m.Text != "сахар 7.8 в 9:30");
     }
