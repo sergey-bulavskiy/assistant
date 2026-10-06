@@ -86,7 +86,10 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   the bot's literal Russian texts and button labels: change them together with `ManagerUpdateHandler`,
   `SettingsCommandHandler`, `ApprovalService` and `ReplyPolicy`.
 - One poller per bot token: don't run it locally with the same bots/groups while CD's smoke job runs.
-- Synthetic data only, like every other test; the account and bots are throwaway.
+- Synthetic data only, like every other test; automated smoke accounts and bots are throwaway.
+- Exception: explicitly authorized, supervised local MCP checks may use an existing account
+  with dedicated test bots/chats and synthetic messages (see `Assistant.SmokeTests/TELEGRAM-MCP.md`).
+  Keep its session/configuration outside both repositories; never use that session in CI/CD.
 
 ## Extraction evals (`Assistant.Evals`)
 

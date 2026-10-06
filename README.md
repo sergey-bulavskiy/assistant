@@ -398,6 +398,10 @@ locally and enabling the gate: `tests/Assistant.SmokeTests/README.md`. It does n
 bot through `/newbot`, an unknown user's approval or promoting a second owner; the manual
 checklist below does.
 
+Optional [supervised local Telegram MCP checks](tests/Assistant.SmokeTests/TELEGRAM-MCP.md)
+use an existing account with dedicated test bots/chats and synthetic messages; they do not change
+the automated suite or CD gate.
+
 Manual checklist, for after setup and after any release that changes bot behaviour. It creates
 real bots and a real family.
 
