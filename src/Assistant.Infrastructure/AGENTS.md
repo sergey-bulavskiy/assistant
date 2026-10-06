@@ -59,6 +59,38 @@
   delete a `pending_records` row directly, and never change its status anywhere outside
   `TryResolveAsync`.
 
+## Private diagnostic traces (`Diagnostics/`)
+
+- Capture starts only after the existing role-bot authorization gates. A trace identifies a bot
+  and update, so edits remain distinct while linking to the same stored source. Each model request
+  uses a local attempt UUID, with the result linked to the actual successfully saved `llm_calls.id`; failed bookkeeping
+  leaves that link null. A pre-call refusal has no provider attempt or call ID.
+- Every trace write uses a fresh scope/context and a bounded timeout. Trace persistence must never
+  poison the business context, change a reply, or fail the update. Admission, expiry and oldest-first
+  cap eviction share a PostgreSQL transaction advisory lock; do not replace it with a process-only
+  lock. Accounted bytes include serialized event detail and a 1,024-byte metadata reserve per trace
+  and event, not PostgreSQL physical files.
+  Appending cannot recreate an evicted or expired trace. Expiry cleanup commits bounded batches,
+  so a later timeout cannot roll back earlier progress. Cleanup continues with capture disabled.
+- Only closed trace DTOs may be persisted. Redact known configured credentials and runtime bot
+  tokens centrally; never serialize headers, arbitrary options/response metadata, exception messages,
+  hidden reasoning or raw CLI events. Register role tokens through `TelegramClientFactory` without
+  recording their value. Trace reads never participate in conversation context.
+- A model response, application disposition and text send are separate events. Replaced text is
+  `not sent`; sends record attempted text and actual Telegram result per part. Allowlisted transport
+  operations distinguish new text, text with buttons and edits; an edit includes its target message
+  ID before transport. Content-free attempt/delivery linkage survives the text budget, still subject
+  to the finite event/storage cap. A timeout/cancelled
+  send has unknown delivery. Confirmation resolution links pending/source/actor identities and must
+  follow the existing conditional business transaction. Do not change Health policy for diagnostics.
+- `Assistant.TraceExport` is a separate local tool, with no polling, migrations or host endpoint.
+  Use a read-only database transaction, fixed export DTO and an explicit absolute destination
+  outside repositories; never print captured content or overwrite an existing file. Report actual
+  retained coverage, truncation and cap evictions. Derive bounded timestamp-only gap observations
+  from stored incoming originals/latest edits in the selected context and observation window;
+  never reconstruct content or infer switch-state periods or causes from missing traces. Exported timelines do
+  not claim exhaustive callback/reaction capture or guaranteed 60-day coverage.
+
 ## Bot polling (`Bots/`)
 
 - Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,

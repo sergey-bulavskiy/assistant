@@ -23,5 +23,13 @@
   instance before starting another against the same bot.
 - `/health` reports polling health (`PollingHealth`); `--healthcheck` is the container
   HEALTHCHECK entry point and calls `/health` on port 8080.
+- Private debug capture uses `DEBUG_TRACES_ENABLED` (default `false`),
+  `DEBUG_TRACES_RETENTION_DAYS` (1–60; default 60), `DEBUG_TRACES_MAX_DETAIL_BYTES`
+  (1024–262144; default 262144), `DEBUG_TRACES_MAX_STORAGE_BYTES`
+  (1048576–104857600; default 104857600), and `DEBUG_TRACES_MAX_EVENTS`
+  (16–512; default 256). Invalid settings disable capture with a fixed warning, never crash
+  startup. Cleanup runs at startup and hourly even with capture off. Logs may report operational
+  categories only; captured content belongs exclusively in the private trace tables and explicit
+  local export. The gateway sees parsed final responses only, never raw provider process streams.
 - Bot polling itself (`BotPollingCoordinator`, one worker per bot) lives in
   `src/Assistant.Infrastructure/Bots`; see that folder's guide.

@@ -1,4 +1,5 @@
 using Assistant.Application.Telegram;
+using Assistant.Infrastructure.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Telegram.Bot;
 
@@ -11,14 +12,17 @@ namespace Assistant.Infrastructure.Telegram;
 public class TelegramClientFactory : ITelegramClientFactory
 {
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly TraceSecretRegistry? _traceSecrets;
 
-    public TelegramClientFactory(IHttpClientFactory httpClientFactory)
+    public TelegramClientFactory(IHttpClientFactory httpClientFactory, TraceSecretRegistry? traceSecrets = null)
     {
         _httpClientFactory = httpClientFactory;
+        _traceSecrets = traceSecrets;
     }
 
     public ITelegramClient Create(string token)
     {
+        _traceSecrets?.Add(token);
         var httpClient = _httpClientFactory.CreateClient("telegram");
         var client = new TelegramBotClient(new TelegramBotClientOptions(token), httpClient);
         return new TelegramClientAdapter(client);

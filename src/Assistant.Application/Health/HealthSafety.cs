@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Telegram;
 using Microsoft.Extensions.Logging;
 
@@ -16,9 +17,11 @@ internal sealed class HealthSafety
     private readonly IClock _clock;
     private readonly HealthReplies _replies;
     private readonly ILogger _logger;
+    private readonly ITraceSession _trace;
 
     public HealthSafety(
-        IHealthProfileStore profiles, IEventStore events, ISafetyAlertStore safetyAlerts, IClock clock, HealthReplies replies, ILogger logger)
+        IHealthProfileStore profiles, IEventStore events, ISafetyAlertStore safetyAlerts, IClock clock, HealthReplies replies, ILogger logger,
+        ITraceSession? trace = null)
     {
         _profiles = profiles;
         _events = events;
@@ -26,6 +29,7 @@ internal sealed class HealthSafety
         _clock = clock;
         _replies = replies;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     /// <summary>One SafetyEvaluation per event, in order (deterministic code, never the model). The
@@ -107,6 +111,7 @@ internal sealed class HealthSafety
             }
 
             var alertText = SafetyAlertText.Format(decision, profile.EmergencyPhone);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "completed", "fixed_alert"));
             if (!await _replies.SendAsync(telegramClient, chatId, topicId, alertText, replyToMessageId, cancellationToken)
                 && !await _replies.SendAsync(telegramClient, chatId, topicId, alertText, replyToMessageId, cancellationToken))
             {

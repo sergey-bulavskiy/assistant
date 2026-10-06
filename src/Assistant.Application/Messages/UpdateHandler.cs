@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Application.Manager;
@@ -24,6 +25,7 @@ public class UpdateHandler
     private readonly BuildInfo _buildInfo;
     private readonly IClock _clock;
     private readonly ILogger<UpdateHandler> _logger;
+    private readonly ITraceSession _trace;
 
     public UpdateHandler(
         IMessageStore store,
@@ -35,7 +37,8 @@ public class UpdateHandler
         IOptions<BotOptions> options,
         BuildInfo buildInfo,
         IClock clock,
-        ILogger<UpdateHandler> logger)
+        ILogger<UpdateHandler> logger,
+        ITraceSession? trace = null)
     {
         _store = store;
         _approvals = approvals;
@@ -47,6 +50,7 @@ public class UpdateHandler
         _buildInfo = buildInfo;
         _clock = clock;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     public async Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingUpdate update, CancellationToken cancellationToken)
@@ -73,8 +77,17 @@ public class UpdateHandler
         // A button tap: handled first, then the offset advances (a failure retries the update).
         if (update.CallbackQuery is { } callback)
         {
-            await HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
-            await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
+            try
+            {
+                await HandleCallbackAsync(bot, telegramClient, callback, update.UpdateId, cancellationToken);
+                await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("interaction", "completed", "normal"));
+            }
+            catch
+            {
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("interaction", "failed", "normal"));
+                throw;
+            }
             return;
         }
 
@@ -135,31 +148,55 @@ public class UpdateHandler
         var result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
         _logger.LogInformation("update {UpdateId} processed with outcome {Outcome}", update.UpdateId, result.Outcome);
 
-        if (BotRoles.IsGeneral(bot.Role))
-        {
-            await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
-            return;
-        }
+        await TraceSafety.StartAsync(_trace, new TraceStart(
+            Guid.NewGuid(), bot.FamilyId.Value, bot.TelegramBotId, message.ChatId, message.TopicId,
+            update.UpdateId, result.MessageDbId, message.IsEdit, message.Text, message.Kind.ToString().ToLowerInvariant(),
+            _buildInfo.Sha));
 
-        if (BotRoles.IsHealth(bot.Role))
+        telegramClient = TraceSafety.Wrap(_trace, telegramClient);
+        if (result.Outcome is StoreOutcome.AlreadyProcessed or StoreOutcome.Duplicate or StoreOutcome.OffsetOnly)
         {
-            await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
-            return;
-        }
-
-        var reply = ReplyPolicy.Decide(message, result, bot.Username, () => VersionText.Format(_buildInfo, _clock.UtcNow));
-        if (reply is null)
-        {
-            return;
+            var reason = result.Outcome switch
+            {
+                StoreOutcome.AlreadyProcessed => "already_processed",
+                StoreOutcome.Duplicate => "duplicate",
+                _ => "offset_only"
+            };
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", reason));
         }
 
         try
         {
-            await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, replyToMessageId: null, cancellationToken);
+            if (BotRoles.IsGeneral(bot.Role))
+            {
+                await _generalAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
+            }
+            else if (BotRoles.IsHealth(bot.Role))
+            {
+                await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
+            }
+            else
+            {
+                var reply = ReplyPolicy.Decide(message, result, bot.Username, () => VersionText.Format(_buildInfo, _clock.UtcNow));
+                if (reply is not null)
+                {
+                    try
+                    {
+                        await telegramClient.SendTextAsync(message.ChatId, message.TopicId, reply, replyToMessageId: null, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError("failed to send reply: {ExceptionType}", ex.GetType().Name);
+                    }
+                }
+            }
+
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("interaction", "completed", "normal"));
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogError("failed to send reply: {ExceptionType}", ex.GetType().Name);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("interaction", "failed", "normal"));
+            throw;
         }
     }
 
@@ -168,7 +205,7 @@ public class UpdateHandler
     // tapping user must be an approved member of the bot's family (any member, not only owners), and
     // outside private chats the place (chat/topic) must be approved.
     private async Task HandleCallbackAsync(
-        ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, CancellationToken cancellationToken)
+        ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, long updateId, CancellationToken cancellationToken)
     {
         if (!BotRoles.IsHealth(bot.Role) || bot.FamilyId is not { } familyId)
         {
@@ -187,6 +224,10 @@ public class UpdateHandler
             return;
         }
 
+        await TraceSafety.StartAsync(_trace, new TraceStart(
+            Guid.NewGuid(), familyId, bot.TelegramBotId, callback.MessageChatId, callback.MessageTopicId,
+            updateId, null, false, null, "callback", _buildInfo.Sha));
+        telegramClient = TraceSafety.Wrap(_trace, telegramClient);
         await _healthAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
     }
 

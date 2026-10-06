@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -25,6 +26,7 @@ public class GeneralAssistantTests
     private readonly FakeTelegramClient _telegram = new();
     private readonly BuildInfo _buildInfo = new("abcdef1234", null, Now.AddHours(-1));
     private readonly FixedClock _clock = new(Now);
+    private readonly FakeTraceSession _trace = new();
     private long _nextUpdateId = 1;
     private int _nextMessageId = 100;
 
@@ -45,7 +47,7 @@ public class GeneralAssistantTests
     };
 
     private GeneralAssistant CreateAssistant(LlmConfig? config = null, bool llmOff = false) =>
-        new(_store, _gateway, _chatSettings, _usageQuery, llmOff ? null : config ?? Config(), _clock, _buildInfo, NullLogger<GeneralAssistant>.Instance);
+        new(_store, _gateway, _chatSettings, _usageQuery, llmOff ? null : config ?? Config(), _clock, _buildInfo, NullLogger<GeneralAssistant>.Instance, _trace);
 
     private IncomingMessage Msg(
         string? text,
@@ -81,7 +83,7 @@ public class GeneralAssistantTests
         IncomingMessage message, GeneralAssistant? assistant = null, CancellationToken cancellationToken = default, bool replyToAll = false)
     {
         var result = await _store.StoreAsync(BotTelegramId, _nextUpdateId++, message, CancellationToken.None);
-        await (assistant ?? CreateAssistant()).HandleAsync(Bot, _telegram, message, result, cancellationToken, replyToAll);
+        await (assistant ?? CreateAssistant()).HandleAsync(Bot, _trace.Wrap(_telegram), message, result, cancellationToken, replyToAll);
         return result;
     }
 
@@ -103,6 +105,33 @@ public class GeneralAssistantTests
         stored.ChatType.ShouldBe("private");
         stored.TelegramMessageId.ShouldBe(1);
         stored.Text.ShouldBe("test answer");
+    }
+
+    [Theory]
+    [InlineData(false, "failed")]
+    [InlineData(true, "unknown")]
+    public async Task Split_answer_stops_after_a_failed_part_and_traces_each_transport_outcome(bool timeout, string finalOutcome)
+    {
+        var attemptId = Guid.NewGuid();
+        var answer = new string('x', ReplySplitter.TelegramMaxMessageLength * 2 + 50);
+        var parts = ReplySplitter.Split(answer);
+        await _trace.StartAsync(new TraceStart(Guid.NewGuid(), FamilyId, BotTelegramId, PrivateChatId, null,
+            1, 1, false, "synthetic question", "text"), CancellationToken.None);
+        _gateway.NextResult = LlmResult.Answered(answer, "sonnet") with { TraceAttemptId = attemptId };
+        _telegram.ThrowOnSendNumber = 2;
+        _telegram.SendFailure = timeout ? new TimeoutException("simulated timeout") : new InvalidOperationException("simulated send failure");
+
+        await HandleAsync(Msg("synthetic question"));
+
+        var deliveries = _trace.Events.Where(e => e.Stage == "delivery").ToList();
+        deliveries.Select(e => e.Outcome).ShouldBe(new[] { "attempted", "sent", "attempted", finalOutcome });
+        deliveries.Select(e => e.PartIndex).ShouldBe(new int?[] { 1, 1, 2, 2 });
+        deliveries.ShouldAllBe(e => e.PartCount == parts.Count && e.AttemptId == attemptId);
+        deliveries[0].Text.ShouldBe(parts[0]);
+        deliveries[2].Text.ShouldBe(parts[1]);
+        deliveries.Last().Sent.ShouldBe(timeout ? null : false);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { parts[0] });
+        _store.OutgoingMessages.Select(s => s.Text).ShouldBe(new[] { parts[0] });
     }
 
     [Fact]

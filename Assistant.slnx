@@ -4,6 +4,7 @@
     <Project Path="src/Assistant.Domain/Assistant.Domain.csproj" />
     <Project Path="src/Assistant.Host/Assistant.Host.csproj" />
     <Project Path="src/Assistant.Infrastructure/Assistant.Infrastructure.csproj" />
+    <Project Path="src/Assistant.TraceExport/Assistant.TraceExport.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Assistant.Evals/Assistant.Evals.csproj" />

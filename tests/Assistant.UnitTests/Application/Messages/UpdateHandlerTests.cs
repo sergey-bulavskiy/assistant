@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Application.Manager;
@@ -133,7 +134,8 @@ public class UpdateHandlerTests
         CreateHandler(new FakeGeneralAssistant());
 
     private static (UpdateHandler Handler, FakeMessageStore Store, FakeTelegramClient Telegram, FakeApprovalService Approvals, FakeManagerUpdateHandler Manager) CreateHandler(
-        IGeneralAssistant generalAssistant, FakeMessageStore? messageStore = null, IHealthAssistant? healthAssistant = null)
+        IGeneralAssistant generalAssistant, FakeMessageStore? messageStore = null, IHealthAssistant? healthAssistant = null,
+        ITraceSession? trace = null)
     {
         var store = messageStore ?? new FakeMessageStore();
         var telegram = new FakeTelegramClient();
@@ -143,7 +145,7 @@ public class UpdateHandlerTests
         var options = Options.Create(new BotOptions { ManagerToken = "test-token", TokenEncryptionKey = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=" });
         var buildInfo = new BuildInfo("abcdef1", null, DateTimeOffset.UtcNow);
         var clock = new FixedClock(DateTimeOffset.UtcNow);
-        var handler = new UpdateHandler(store, approvals, currentFamily, manager, generalAssistant, healthAssistant ?? new FakeHealthAssistant(), options, buildInfo, clock, NullLogger<UpdateHandler>.Instance);
+        var handler = new UpdateHandler(store, approvals, currentFamily, manager, generalAssistant, healthAssistant ?? new FakeHealthAssistant(), options, buildInfo, clock, NullLogger<UpdateHandler>.Instance, trace);
         return (handler, store, telegram, approvals, manager);
     }
 
@@ -196,6 +198,162 @@ public class UpdateHandlerTests
 
         store.Calls.Single().Message.ShouldBeNull();
         telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Trace_starts_only_after_authorization_and_records_actual_delivery()
+    {
+        var trace = new FakeTraceSession();
+        var (handler, _, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), trace: trace);
+        approvals.NextPlaceStatus = PlaceStatus.Pending;
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(10, Message(chatType: "group")), CancellationToken.None);
+
+        trace.Starts.ShouldBeEmpty();
+        trace.Events.ShouldBeEmpty();
+
+        approvals.NextPlaceStatus = PlaceStatus.Approved;
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(11, Message()), CancellationToken.None);
+
+        var start = trace.Starts.ShouldHaveSingleItem();
+        start.UpdateId.ShouldBe(11);
+        start.SourceMessageId.ShouldNotBeNull();
+        var attempted = trace.Events.Single(e => e.Stage == "delivery" && e.Outcome == "attempted");
+        var sent = trace.Events.Single(e => e.Stage == "delivery" && e.Outcome == "sent");
+        attempted.Text.ShouldBe(telegram.Sent.Single().Text);
+        attempted.Operation.ShouldBe("send_text");
+        attempted.TelegramMessageId.ShouldBeNull();
+        sent.TelegramMessageId.ShouldBe(1);
+        trace.Events.Last().Outcome.ShouldBe("completed");
+    }
+
+    [Fact]
+    public async Task Pending_member_message_never_starts_a_trace()
+    {
+        var trace = new FakeTraceSession();
+        var (handler, store, telegram, approvals, _) = CreateHandler(new FakeGeneralAssistant(), trace: trace);
+        approvals.NextMemberStatus = FamilyMemberStatus.Pending;
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(30, Message()), CancellationToken.None);
+
+        trace.Starts.ShouldBeEmpty();
+        trace.Events.ShouldBeEmpty();
+        store.Calls.ShouldHaveSingleItem().Message.ShouldBeNull();
+        telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Health_callback_trace_starts_only_after_member_and_place_checks()
+    {
+        var callback = new CallbackQueryInfo("synthetic-callback", 222, "rec_yes:1", -100, 7, 4, "supergroup");
+        var health = new FakeHealthAssistant();
+        var rejectedTrace = new FakeTraceSession();
+        var (rejectedHandler, _, rejectedTelegram, rejectedApprovals, _) = CreateHandler(
+            new FakeGeneralAssistant(), healthAssistant: health, trace: rejectedTrace);
+        rejectedApprovals.FoundMemberStatus = FamilyMemberStatus.Pending;
+
+        await rejectedHandler.HandleAsync(RoleBot with { Role = "health" }, rejectedTelegram,
+            new IncomingUpdate(31, null, callback), CancellationToken.None);
+
+        rejectedTrace.Starts.ShouldBeEmpty();
+        rejectedTrace.Events.ShouldBeEmpty();
+        health.Callbacks.ShouldBeEmpty();
+
+        var rejectedPlaceTrace = new FakeTraceSession();
+        var (rejectedPlaceHandler, _, rejectedPlaceTelegram, rejectedPlaceApprovals, _) = CreateHandler(
+            new FakeGeneralAssistant(), healthAssistant: health, trace: rejectedPlaceTrace);
+        rejectedPlaceApprovals.FoundPlaceStatus = PlaceStatus.Pending;
+
+        await rejectedPlaceHandler.HandleAsync(RoleBot with { Role = "health" }, rejectedPlaceTelegram,
+            new IncomingUpdate(33, null, callback), CancellationToken.None);
+
+        rejectedPlaceTrace.Starts.ShouldBeEmpty();
+        rejectedPlaceTrace.Events.ShouldBeEmpty();
+        health.Callbacks.ShouldBeEmpty();
+
+        var approvedTrace = new FakeTraceSession();
+        var (approvedHandler, _, approvedTelegram, _, _) = CreateHandler(
+            new FakeGeneralAssistant(), healthAssistant: health, trace: approvedTrace);
+
+        await approvedHandler.HandleAsync(RoleBot with { Role = "health" }, approvedTelegram,
+            new IncomingUpdate(32, null, callback), CancellationToken.None);
+
+        var start = approvedTrace.Starts.ShouldHaveSingleItem();
+        start.UpdateId.ShouldBe(32);
+        start.SourceMessageId.ShouldBeNull();
+        start.Kind.ShouldBe("callback");
+        health.Callbacks.ShouldHaveSingleItem().ShouldBe(callback);
+        approvedTrace.Events.ShouldContain(e => e.Stage == "interaction" && e.Outcome == "completed");
+    }
+
+    [Fact]
+    public async Task Authorized_duplicate_is_traced_as_skip_without_delivery()
+    {
+        var trace = new FakeTraceSession();
+        var store = new FakeMessageStore();
+        store.SetNextResult(new StoreResult(StoreOutcome.Duplicate, 7));
+        var (handler, _, telegram, _, _) = CreateHandler(new FakeGeneralAssistant(), messageStore: store, trace: trace);
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(12, Message()), CancellationToken.None);
+
+        trace.Events.ShouldContain(e => e.Stage == "decision" && e.Outcome == "skipped" && e.ReasonCode == "duplicate");
+        trace.Events.ShouldNotContain(e => e.Stage == "delivery");
+        telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Edit_has_a_new_trace_for_the_original_stored_message()
+    {
+        var trace = new FakeTraceSession();
+        var (handler, store, telegram, _, _) = CreateHandler(new FakeGeneralAssistant(), trace: trace);
+        var original = Message();
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(21, original), CancellationToken.None);
+        var sourceId = trace.Starts.Single().SourceMessageId;
+        store.SetNextResult(new StoreResult(StoreOutcome.Updated, sourceId));
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(22, original with { IsEdit = true, Text = "edited synthetic text" }), CancellationToken.None);
+
+        trace.Starts.Select(s => s.UpdateId).ShouldBe(new long?[] { 21, 22 });
+        trace.Starts.Select(s => s.SourceMessageId).ShouldBe(new[] { sourceId, sourceId });
+        trace.Starts.Select(s => s.TraceId).Distinct().Count().ShouldBe(2);
+        trace.Starts[1].IsEdit.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Trace_writer_failure_does_not_change_successful_send()
+    {
+        var trace = new FakeTraceSession { ThrowOnRecord = true };
+        var (handler, _, telegram, _, _) = CreateHandler(new FakeGeneralAssistant(), trace: trace);
+
+        await handler.HandleAsync(RoleBot, telegram, new IncomingUpdate(13, Message()), CancellationToken.None);
+
+        telegram.Sent.Count.ShouldBe(1);
+        trace.Starts.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Split_text_delivery_records_each_part_and_timeout_as_unknown()
+    {
+        var trace = new FakeTraceSession();
+        await trace.StartAsync(new TraceStart(Guid.NewGuid(), 42, 999, 111, null, 20, 1, false, "synthetic", "text"), CancellationToken.None);
+        var telegram = new FakeTelegramClient { ThrowOnSendNumber = 2, SendFailure = new TimeoutException("simulated timeout") };
+        var decorated = trace.Wrap(telegram);
+
+        using (TracingTelegramClient.ForPart(1, 2))
+        {
+            await decorated.SendTextAsync(111, null, "part one", null, CancellationToken.None);
+        }
+        using (TracingTelegramClient.ForPart(2, 2))
+        {
+            await Should.ThrowAsync<TimeoutException>(() => decorated.SendTextAsync(111, null, "part two", null, CancellationToken.None));
+        }
+
+        trace.Events.Select(e => e.Outcome).ShouldBe(new[] { "attempted", "sent", "attempted", "unknown" });
+        trace.Events.Select(e => e.PartIndex).ShouldBe(new int?[] { 1, 1, 2, 2 });
+        trace.Events.Select(e => e.PartCount).ShouldBe(new int?[] { 2, 2, 2, 2 });
+        trace.Events.Last().Sent.ShouldBeNull();
+        telegram.Sent.Select(s => s.Text).ShouldBe(new[] { "part one" });
     }
 
     [Fact]

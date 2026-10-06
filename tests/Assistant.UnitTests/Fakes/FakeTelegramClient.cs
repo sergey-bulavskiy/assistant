@@ -25,6 +25,8 @@ public class FakeTelegramClient : ITelegramClient
 
     public bool ThrowOnSend { get; set; }
 
+    public Exception? SendFailure { get; set; }
+
     public bool ThrowOnChatAction { get; set; }
 
     /// <summary>When set, SendTextAsync throws for this 1-based call number only (earlier and later
@@ -47,7 +49,7 @@ public class FakeTelegramClient : ITelegramClient
         _sendCalls++;
         if (ThrowOnSend || _sendCalls == ThrowOnSendNumber)
         {
-            throw new InvalidOperationException("simulated send failure");
+            throw SendFailure ?? new InvalidOperationException("simulated send failure");
         }
 
         Sent.Add((chatId, topicId, text, replyToMessageId));
@@ -83,7 +85,7 @@ public class FakeTelegramClient : ITelegramClient
         _sendCalls++;
         if (ThrowOnSend || _sendCalls == ThrowOnSendNumber)
         {
-            throw new InvalidOperationException("simulated send failure");
+            throw SendFailure ?? new InvalidOperationException("simulated send failure");
         }
 
         var messageId = _nextSentMessageId++;
