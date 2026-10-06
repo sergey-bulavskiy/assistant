@@ -4,6 +4,23 @@ namespace Assistant.UnitTests.Application.Health;
 
 public class ExtractionRepliesTests
 {
+    [Theory]
+    [InlineData("7.8", "type", "Вычисли 7,8 + 2,5", false)]
+    [InlineData("3", "type", "2 + 3 + 4", false)]
+    [InlineData("4", "type", "9 - 4", true)]
+    [InlineData("4", "type", "9 − 4", true)]
+    [InlineData("7", "type", "17 + 8", true)]
+    [InlineData("7", "type", "7.8 + 2", true)]
+    [InlineData("120", "type", "120/80", true)]
+    [InlineData("2030", "type", "2030-02-07", true)]
+    [InlineData("7", "unit", "7 + 8", true)]
+    [InlineData("7", "value", "7 + 8", true)]
+    [InlineData("7", "time", "7 + 8", true)]
+    public void Only_unknown_type_arithmetic_operands_are_excluded(string fragment, string reason, string text, bool expected)
+    {
+        ExtractionReplies.ShouldClarify(new ExtractedUnclear { Fragment = fragment, Reason = reason }, text).ShouldBe(expected);
+    }
+
     [Fact]
     public void Failure_notice_is_the_fixed_text()
     {

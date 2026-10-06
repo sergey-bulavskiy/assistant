@@ -704,6 +704,22 @@ public class HealthAssistantTests
         _telegram.Sent.ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData("сколько будет 7 + 8? Ответь только цифрой.", "7")]
+    [InlineData("Вычисли 12 × 3.", "12")]
+    [InlineData("Чему равно 9 ÷ 3?", "3")]
+    public async Task Arithmetic_operands_do_not_get_a_measurement_clarification(string text, string fragment)
+    {
+        Answer($"{{\"events\":[],\"unclear\":[{{\"fragment\":\"{fragment}\",\"reason\":\"type\"}}],\"is_question\":true}}");
+
+        await HandleAsync(Msg(text, "group"));
+
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+        _pending.Rows.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Unclear_item_gets_one_clarification_reply()
     {
@@ -716,6 +732,35 @@ public class HealthAssistantTests
         _telegram.Sent.ShouldHaveSingleItem()
             .ShouldBe((111L, (int?)null, "Не понял «18» — уточните единицы (нужно в ммоль/л).", (int?)message.MessageId));
         _telegram.Reactions.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Arithmetic_does_not_block_recording_a_reading_in_the_same_message()
+    {
+        Answer("{\"events\":[{\"type\":\"weight\",\"intent\":\"record\",\"kg\":68.4}],\"unclear\":[{\"fragment\":\"7\",\"reason\":\"type\"}],\"is_question\":true}");
+        var message = Msg("Вес 68.4. Сколько будет 7 + 8?", "group");
+
+        await HandleAsync(message);
+
+        _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem().PayloadJson.ShouldBe("{\"kg\":68.4}");
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _telegram.Sent.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("утром было 18", "18")]
+    [InlineData("Утром было 7 - 8", "7")]
+    [InlineData("Утром было 7 − 8", "8")]
+    [InlineData("Утром было 7. А сколько будет 7 + 8?", "7")]
+    [InlineData("Утром было 7.8. Сколько будет 7 + 8?", "7.8")]
+    public async Task Ambiguous_readings_still_get_a_clarification(string text, string fragment)
+    {
+        Answer($"{{\"events\":[],\"unclear\":[{{\"fragment\":\"{fragment}\",\"reason\":\"type\"}}],\"is_question\":false}}");
+
+        await HandleAsync(Msg(text, "group"));
+
+        SingleReply().ShouldContain($"«{fragment}»");
         _events.Added.ShouldBeEmpty();
     }
 

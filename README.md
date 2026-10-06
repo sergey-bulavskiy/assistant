@@ -72,7 +72,10 @@ confirmation run regardless of this answer setting.
 The model only turns the message into records (glucose, insulin, meal, symptom, weight, blood
 pressure); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
 Otherwise it stays silent. If a reading cannot be recorded (an unknown unit, an implausible value, a
-time it cannot place) it asks once, as a reply. If the model is unavailable or its answer is
+time it cannot place) it asks once, as a reply. Unrelated numbers, including arithmetic operands,
+are not readings and do not call for a measurement clarification. Bare ambiguous reading reports
+still get a clarification; a message mixing arithmetic and health readings still records the readings.
+If the model is unavailable or its answer is
 unreadable, nothing is recorded and the bot replies "⚠️ Не смог обработать сообщение — ничего не
 записано. …" (at most once per 10 minutes per chat or topic). Editing a message (up to 24 hours after sending it) reads it again, with one more model call:
 readings that did not change stay as they are (same number in `/today`, no repeated alert), changed
@@ -450,6 +453,10 @@ and export it to a private absolute path. Check request/attempt/source linkage a
 delivery result; a replaced answer must show its original as `not sent`. Check an edit and a
 confirmation remain distinct. Disable capture afterward and confirm cleanup still runs. This
 check is not part of ordinary Telegram smoke and does not authorize capture in the home app.
+
+Optional [supervised local Telegram MCP checks](tests/Assistant.SmokeTests/TELEGRAM-MCP.md)
+use an existing account with dedicated test bots/chats and synthetic messages; they do not change
+the automated suite or CD gate.
 
 Manual checklist, for after setup and after any release that changes bot behaviour. It creates
 real bots and a real family.

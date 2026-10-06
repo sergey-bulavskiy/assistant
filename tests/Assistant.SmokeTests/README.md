@@ -10,6 +10,9 @@ promotion need a second real user; the integration tests cover them (`ApprovalSe
 It is **opt-in**: a plain `dotnet test` skips it. Once the gate is enabled (below), CD runs it
 against the just-built `sha-` image and promotes `latest` only if it passes.
 
+For optional supervised local checks with an existing account, see
+[Telegram MCP smoke checks](TELEGRAM-MCP.md). That workflow is separate from this suite and CD.
+
 ## Enabling the CD gate
 
 The gate is off by default: while the repository variable `SMOKE_ENABLED` is unset, CD skips the
