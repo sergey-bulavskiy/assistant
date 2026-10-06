@@ -131,7 +131,26 @@
   only the emoji Telegram allows (✍ U+270D without a variation selector, and 👍, are allowed); a
   group can restrict reactions further, so callers fall back and never fail on a reaction.
 
-## LLM gateway and the Claude Code CLI provider (`Llm/`)
+## LLM gateway and CLI providers (`Llm/`)
+
+- `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
+  must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and
+  `CODEX_HOME` are optional absolute local paths; production defaults are `/usr/local/bin/codex`
+  and `/home/app/.codex`. Never read/log credential files or pass API credentials to CLI children.
+- Each Codex call uses a fresh temporary workspace, ephemeral execution, ignored user config/rules,
+  replaced system/model instructions and a reduced pinned model catalog. Shell, MCP/plugin/app,
+  web, collaboration and other unwanted capabilities must remain disabled. A read-only sandbox
+  alone is insufficient. Unexpected tool/events fail the call; raw JSON events stay in memory
+  and never enter ordinary logs, response metadata or traces. Temporary files are cleaned up.
+- Codex final output must agree with `--output-last-message`; only final answer, token usage and
+  sanitized failure categories leave the adapter. `LLM_MAX_OUTPUT_TOKENS` is an instruction target
+  for this pinned CLI, not a verified hard generation limit. Final text is rejected above
+  eight characters per configured token (file bytes are bounded at four times that), with bounded
+  process streams and timeout/cancellation as separate limits. Do not promise a hard token cap.
+- A `codex-cli` entry in either raw chain excludes legacy providers before validation. Both active
+  chains must be subscription-only; stale General model preferences outside the active name-only
+  catalog are ignored. Remove Codex from both chains for explicit manual rollback. Subscription
+  price is forced to zero regardless of `LLM_PRICES`; token/call accounting is not quota accounting.
 
 - `ClaudeCliChatClient` runs `claude -p` as a child process, once per call, through `IProcessRunner`
   (never the real CLI in tests — `FakeProcessRunner` stands in). Its exact argument list is spec

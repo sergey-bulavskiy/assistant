@@ -57,4 +57,30 @@ public class LlmProviderValidationTests
         error.ShouldNotBeNull();
         error.ShouldNotContain(whitespaceToken);
     }
+    [Theory]
+    [InlineData("codex-cli:synthetic", "")]
+    [InlineData("claude-cli:legacy", "CODEX-CLI:synthetic")]
+    [InlineData("codex-cli:", "")]
+    public void Subscription_entry_in_either_raw_chain_disables_legacy_providers(string models, string fastModels)
+    {
+        var subscriptionOnly = LlmProviderValidation.RequiresSubscriptionOnly(models, fastModels);
+        var validate = LlmProviderValidation.Create(new ClaudeCliOptions { OAuthToken = "test-token" }, subscriptionOnly);
+
+        subscriptionOnly.ShouldBeTrue();
+        validate("codex-cli").ShouldBeNull();
+        validate("claude-cli").ShouldNotBeNull().ShouldContain("disabled");
+        validate("openai").ShouldNotBeNull().ShouldContain("disabled");
+        validate("anthropic").ShouldNotBeNull().ShouldContain("disabled");
+    }
+
+    [Fact]
+    public void Removing_subscription_entries_allows_deliberate_legacy_rollback()
+    {
+        var subscriptionOnly = LlmProviderValidation.RequiresSubscriptionOnly("claude-cli:synthetic", "claude-cli:synthetic");
+        var validate = LlmProviderValidation.Create(new ClaudeCliOptions { OAuthToken = "test-token" }, subscriptionOnly);
+
+        subscriptionOnly.ShouldBeFalse();
+        validate("claude-cli").ShouldBeNull();
+        validate("openai").ShouldBeNull();
+    }
 }

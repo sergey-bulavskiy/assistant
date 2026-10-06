@@ -50,6 +50,13 @@ EVALS_LIVE=1 EVALS_LLM_MODELS=anthropic:<model> ANTHROPIC_API_KEY=… LLM_PRICES
   runs: a run is one short call per case.
 - `claude-cli:<model>` needs `CLAUDE_CODE_OAUTH_TOKEN` and the pinned CLI already installed at
   `$CLAUDE_HOME/.local/bin/claude` (Linux, macOS or WSL); the eval never installs it.
+- `codex-cli:<model>` uses the pinned Codex CLI `0.160.1` and supported saved ChatGPT login in
+  `CODEX_HOME` (the production image uses `/usr/local/bin/codex` and `/home/app/.codex`). The eval
+  accepts an absolute local `CODEX_CLI_PATH` pointing to the pinned native binary.
+  It never installs the CLI or performs login. Do not use an API key as subscription proof or inspect
+  credential files. Select only a model verified for ordinary and structured isolated calls.
+  Set `EVALS_LLM_MODELS=codex-cli:<verified-model>` with `EVALS_LIVE=1`; paid prices/budgets are
+  unnecessary for this zero-money provider. A desktop result does not establish deployment login.
 - Output: `PASS <id>` / `FAIL <id> (critical): …` per case and a totals line.
 - Pass bar: the test fails unless at least 90% of the cases and every critical case pass. This is
   the bar for using a model as the `fast` model of the health role.

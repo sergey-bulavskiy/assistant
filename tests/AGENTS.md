@@ -38,6 +38,11 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   are tested only against fake `IChatClient`/`ILlmGateway` implementations
   (`Assistant.IntegrationTests/Llm/ScriptedChatClient.cs`, `Assistant.UnitTests/Fakes/FakeLlmGateway.cs`).
   A `CLAUDE_CODE_OAUTH_TOKEN` is never required to build or run this repo's test suite.
+- Codex adapter tests use fake process results, never a real subscription or network. Real Codex
+  execution is confined to explicit synthetic feasibility/live eval runs. Native binary
+  `CODEX_CLI_PATH` and persisted ChatGPT `CODEX_HOME` are prerequisites; the eval never installs
+  or logs in. Test final/event agreement, disabled capabilities, sanitized auth/limit failures,
+  cancellation, output bounds and cleanup. No credential file or raw CLI event stream is test output.
 - No test for the Anthropic/OpenAI providers ever reaches the network — both are exercised only
   through a fake `HttpMessageHandler` returning canned 429/other responses
   (`AnthropicChatClientFactoryTests`, `OpenAiChatClientFactoryTests`). Neither an `ANTHROPIC_API_KEY`

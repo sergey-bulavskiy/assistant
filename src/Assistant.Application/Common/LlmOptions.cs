@@ -37,7 +37,7 @@ public class LlmOptions
 // Application never learns what the prefix means or which provider it names.
 public record ModelCatalogEntry(string ProviderPrefix, string Name);
 
-// Per-million-token USD price for one catalog entry (spec §10.2). claude-cli entries are always
+// Per-million-token USD price for one catalog entry (spec §10.2). claude-cli and codex-cli entries are always
 // forced to 0/0 regardless of any LLM_PRICES text naming them.
 public record ModelPrice(decimal InputUsdPerMillion, decimal OutputUsdPerMillion);
 
@@ -121,8 +121,9 @@ public static class LlmConfigParser
 
         var models = ParseModels(options, validateProvider, prices, budget, budgetProblem, entryErrors);
 
-        // Spec: claude-cli entries are priced 0 regardless of any LLM_PRICES text naming them.
-        foreach (var entry in models.Where(m => string.Equals(m.ProviderPrefix, LlmProviderClaudeCliPrefix, StringComparison.OrdinalIgnoreCase)))
+        // Subscription CLI entries are priced 0 regardless of any LLM_PRICES text naming them.
+        foreach (var entry in models.Where(m => string.Equals(m.ProviderPrefix, LlmProviderClaudeCliPrefix, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(m.ProviderPrefix, "codex-cli", StringComparison.OrdinalIgnoreCase)))
         {
             prices[entry.Name] = new ModelPrice(0m, 0m);
         }

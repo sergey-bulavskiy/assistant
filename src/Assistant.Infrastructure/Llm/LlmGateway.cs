@@ -357,9 +357,9 @@ public class LlmGateway : ILlmGateway
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The CALLER cancelled (e.g. process shutdown), not our own per-call timeout below. For a
-            // zero-price entry nothing billable could have happened, so there's nothing to record --
-            // propagate immediately, as before. For a PAID entry the provider may already be doing
+            // The CALLER cancelled (e.g. process shutdown), not our own per-call timeout below.
+            // Cancellation for a zero-price legacy entry propagates immediately. Codex retains the dispatched attempt
+            // for source accounting even though its monetary cost is zero. A PAID entry may be doing
             // billable work that we'll never see the usage for, so the attempt is still charged the
             // pre-call estimate -- recorded with CancellationToken.None (detaching the row on failure,
             // same as every other RecordCallAsync call) since the caller's own token is already
@@ -367,7 +367,7 @@ public class LlmGateway : ILlmGateway
             // result to return, and the caller's own cancellation handling is responsible for whatever
             // happens next.
             stopwatch.Stop();
-            if (!LlmCostCalculator.IsZero(price))
+            if (!LlmCostCalculator.IsZero(price) || candidate.ProviderPrefix == LlmProviderValidation.CodexCliPrefix)
             {
                 await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
             }
