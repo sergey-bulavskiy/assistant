@@ -193,7 +193,7 @@ internal sealed class HealthMessagePipeline
         // An edit corrects a record, so there an unsure value counts as a record (edits never ask).
         var valid = new List<NewHealthEvent>();
         var intents = new List<string>();
-        var problems = new List<ExtractedUnclear>(output.Unclear);
+        var problems = output.Unclear.Where(problem => ExtractionReplies.ShouldClarify(problem, text)).ToList();
         foreach (var extracted in output.Events)
         {
             var validation = HealthEventValidator.Validate(extracted, message.SentAt, profile.TimeZone);
