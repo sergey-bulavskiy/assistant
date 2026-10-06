@@ -12,6 +12,10 @@ against the just-built `sha-` image and promotes `latest` only if it passes.
 
 For optional supervised local checks with an existing account, see
 [Telegram MCP smoke checks](TELEGRAM-MCP.md). That workflow is separate from this suite and CD.
+It covers supervised settings, reply-to-all/topic isolation and restart observations, plus
+optional synthetic Health recording, `/today` and verified removal. Health inputs require
+private proof of a dedicated bot/profile bound to an isolated disposable database first;
+a dedicated test group alone is insufficient. These checks do not extend the automated gate.
 
 ## Enabling the CD gate
 

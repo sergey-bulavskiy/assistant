@@ -94,6 +94,8 @@ Every test must be able to fail for a real bug. No tests that check nothing.
   `Assistant.SmokeTests/TELEGRAM-MCP.md`. Reuse exposed tools or its SDK fallback; a connection
   check does not authorize chat reads/sends. Keep one connector per session and all runtime
   identifiers, credentials and evidence private.
+  Before any supervised Health input, establish the runbook's private proof that the dedicated
+  bot/profile is bound to an isolated disposable database; a dedicated group is insufficient.
 
 ## Extraction evals (`Assistant.Evals`)
 
