@@ -1,5 +1,6 @@
 using Assistant.Application.Families;
 using Assistant.Domain.Bots;
+using Assistant.Domain.Diagnostics;
 using Assistant.Domain.Families;
 using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
@@ -46,6 +47,12 @@ public class AssistantDbContext : DbContext
 
     public DbSet<LlmCall> LlmCalls => Set<LlmCall>();
 
+    public DbSet<DebugTrace> DebugTraces => Set<DebugTrace>();
+
+    public DbSet<DebugTraceEvent> DebugTraceEvents => Set<DebugTraceEvent>();
+
+    public DbSet<DebugTraceCoverage> DebugTraceCoverage => Set<DebugTraceCoverage>();
+
     public DbSet<HealthProfile> HealthProfiles => Set<HealthProfile>();
 
     public DbSet<SafetyRule> SafetyRules => Set<SafetyRule>();
@@ -77,6 +84,8 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<Bot>().HasQueryFilter(b => _currentFamily.FamilyId == null || b.FamilyId == null || b.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<ChatSetting>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<LlmCall>().HasQueryFilter(c => _currentFamily.FamilyId == null || c.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<DebugTrace>().HasQueryFilter(t => _currentFamily.FamilyId == null || t.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<DebugTraceEvent>().HasQueryFilter(e => _currentFamily.FamilyId == null || e.FamilyId == _currentFamily.FamilyId);
         // Health tables: the same family filter. Their store additionally fails closed when
         // ICurrentFamily is unset or another family (HealthProfileStore).
         modelBuilder.Entity<HealthProfile>().HasQueryFilter(p => _currentFamily.FamilyId == null || p.FamilyId == _currentFamily.FamilyId);

@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -21,10 +22,11 @@ internal sealed class HealthAnswers
     private readonly IRolePrompts _rolePrompts;
     private readonly IClock _clock;
     private readonly ILogger _logger;
+    private readonly ITraceSession _trace;
 
     public HealthAnswers(
         IHealthProfileStore profiles, IEventStore events, IMessageStore messages, ILlmGateway gateway, LlmConfig? config,
-        IRolePrompts rolePrompts, IClock clock, ILogger logger)
+        IRolePrompts rolePrompts, IClock clock, ILogger logger, ITraceSession? trace = null)
     {
         _profiles = profiles;
         _events = events;
@@ -34,6 +36,7 @@ internal sealed class HealthAnswers
         _rolePrompts = rolePrompts;
         _clock = clock;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     // One smart call for an eligible question: roles/health/prompt.md plus the runtime block (stage
@@ -48,6 +51,7 @@ internal sealed class HealthAnswers
         var instructions = _rolePrompts.Find(BotRoles.Health, AnswerInstructionsFile);
         if (_config is null || instructions is null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "not_configured"));
             LogAnswer($"refused:{LlmRefusalReason.NotConfigured}", messageDbId);
             await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.NotConfiguredText, storeAsContext: false, cancellationToken);
             return;
@@ -91,6 +95,7 @@ internal sealed class HealthAnswers
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "provider_failure"));
             _logger.LogError("health answer failed: {ExceptionType}", ex.GetType().Name);
             LogAnswer("failed", messageDbId);
             await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.FailedText, storeAsContext: false, cancellationToken);
@@ -99,25 +104,50 @@ internal sealed class HealthAnswers
 
         if (!result.IsAnswer)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", result.RefusalReason switch
+            {
+                LlmRefusalReason.NotConfigured => "not_configured",
+                LlmRefusalReason.RateLimited => "rate_limited",
+                LlmRefusalReason.DailyCapReached => "daily_cap",
+                LlmRefusalReason.BudgetExhausted => "budget_exhausted",
+                LlmRefusalReason.AllModelsUnavailable => "all_models_unavailable",
+                _ => "provider_failure"
+            }, AttemptId: result.TraceAttemptId));
             LogAnswer($"refused:{result.RefusalReason}", messageDbId);
-            await SendAnswerAsync(
-                bot, telegramClient, message, GeneralAssistant.RefusalText(result, _clock.UtcNow), storeAsContext: false, cancellationToken);
+            using (TracingTelegramClient.ForAttempt(result.TraceAttemptId))
+            {
+                await SendAnswerAsync(
+                    bot, telegramClient, message, GeneralAssistant.RefusalText(result, _clock.UtcNow), storeAsContext: false, cancellationToken);
+            }
             return;
         }
 
         if (string.IsNullOrWhiteSpace(result.Text))
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "empty_response",
+                AttemptId: result.TraceAttemptId));
             LogAnswer("empty", messageDbId);
             await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.FailedText, storeAsContext: false, cancellationToken);
             return;
         }
 
         // The deterministic filter is the enforcement (D7); the prompt rule alone is not trusted. The
-        // model's own text of a replaced answer is never sent, stored or logged.
+        // model's own text of a replaced answer is never sent, logged or stored as conversation
+        // context; opted-in private diagnostics mark it not sent.
         var blocked = DoseAdviceFilter.ContainsDoseAdvice(result.Text);
         var answer = blocked ? DoseAdviceFilter.RefusalText : result.Text.Trim();
+        if (blocked)
+        {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "not_sent", "dose_advice_replaced",
+                AttemptId: result.TraceAttemptId, Text: result.Text, Sent: false));
+        }
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "generated", blocked ? "dose_advice_replaced" : "normal",
+            AttemptId: result.TraceAttemptId, Text: $"{answer}\n\n{HealthAssistant.AnswerFooter}"));
         LogAnswer(blocked ? "dose_advice_replaced" : "answered", messageDbId);
-        await SendAnswerAsync(bot, telegramClient, message, $"{answer}\n\n{HealthAssistant.AnswerFooter}", storeAsContext: true, cancellationToken);
+        using (TracingTelegramClient.ForAttempt(result.TraceAttemptId))
+        {
+            await SendAnswerAsync(bot, telegramClient, message, $"{answer}\n\n{HealthAssistant.AnswerFooter}", storeAsContext: true, cancellationToken);
+        }
     }
 
     private StageWeekResult CurrentWeek(HealthProfileInfo profile) =>
@@ -131,8 +161,11 @@ internal sealed class HealthAnswers
     {
         var isGroup = message.ChatType != "private";
         var isFirstPart = true;
-        foreach (var part in ReplySplitter.Split(text))
+        var parts = ReplySplitter.Split(text).ToArray();
+        for (var index = 0; index < parts.Length; index++)
         {
+            var part = parts[index];
+            using var partScope = TracingTelegramClient.ForPart(index + 1, parts.Length);
             int sentMessageId;
             try
             {

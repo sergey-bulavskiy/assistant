@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Application.Llm;
@@ -7,6 +8,7 @@ using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Infrastructure.Bots;
 using Assistant.Infrastructure.Common;
+using Assistant.Infrastructure.Diagnostics;
 using Assistant.Infrastructure.Families;
 using Assistant.Infrastructure.Health;
 using Assistant.Infrastructure.Llm;
@@ -37,6 +39,16 @@ public static class InfrastructureServiceCollectionExtensions
                 ?? throw new InvalidOperationException("Connection string 'ConnectionStrings:Assistant' is not configured.");
             AssistantDbContext.Configure(options, connectionString);
         });
+
+        // Private diagnostics use a separate context and transaction for every bounded write.
+        // Cleanup stays active when capture is off, so disabling it never extends retention.
+        services.AddSingleton(TraceOptions.Parse(configuration));
+        services.AddSingleton(new TraceSecretRegistry(configuration));
+        services.AddSingleton<TraceCaptureState>();
+        services.AddSingleton<TraceRedactor>();
+        services.AddSingleton<DebugTraceWriter>();
+        services.AddScoped<ITraceSession, TraceSession>();
+        services.AddHostedService<TraceCleanupService>();
 
         services.AddScoped<IMessageStore, MessageStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();

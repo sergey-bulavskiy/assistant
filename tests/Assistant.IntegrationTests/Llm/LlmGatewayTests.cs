@@ -1,5 +1,7 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
+using Assistant.Application.Telegram;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Llm;
 using Assistant.Infrastructure.Persistence;
@@ -14,6 +16,20 @@ namespace Assistant.IntegrationTests.Llm;
 
 public class LlmGatewayTests : IntegrationTestBase
 {
+    private sealed class CapturingTraceSession : ITraceSession
+    {
+        public bool Enabled => true;
+        public Guid? TraceId => Guid.Empty;
+        public List<TraceEventData> Events { get; } = new();
+        public Task StartAsync(TraceStart start, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task RecordAsync(TraceEventData data, CancellationToken cancellationToken)
+        {
+            Events.Add(data);
+            return Task.CompletedTask;
+        }
+        public ITelegramClient Wrap(ITelegramClient inner) => inner;
+    }
+
     private const string Provider = "fake";
     private const string ModelA = "model-a";
     private const string ModelB = "model-b";
@@ -56,7 +72,8 @@ public class LlmGatewayTests : IntegrationTestBase
         ModelAvailability? availability = null,
         Assistant.Application.Common.IClock? clock = null,
         AssistantDbContext? db = null,
-        ConcurrentCallGate? concurrencyGate = null) =>
+        ConcurrentCallGate? concurrencyGate = null,
+        ITraceSession? trace = null) =>
         new(
             config,
             new ModelCatalog(config),
@@ -67,13 +84,15 @@ public class LlmGatewayTests : IntegrationTestBase
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
             new NoopBudgetNoticeDispatcher(),
-            NullLogger<LlmGateway>.Instance);
+            NullLogger<LlmGateway>.Instance,
+            trace);
 
     private LlmGateway CreateGatewayWithProviders(
         LlmConfig config,
         IReadOnlyDictionary<string, IChatClient> clientsByProvider,
         ModelAvailability? availability = null,
-        Assistant.Application.Common.IClock? clock = null) =>
+        Assistant.Application.Common.IClock? clock = null,
+        ITraceSession? trace = null) =>
         new(
             config,
             new ModelCatalog(config),
@@ -84,7 +103,8 @@ public class LlmGatewayTests : IntegrationTestBase
             new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, Db, clock ?? new SystemClock()),
             new NoopBudgetNoticeDispatcher(),
-            NullLogger<LlmGateway>.Instance);
+            NullLogger<LlmGateway>.Instance,
+            trace);
 
     /// <summary>An <see cref="AssistantDbContext"/> whose <c>SaveChangesAsync</c> always fails, to
     /// exercise the gateway's "recording failed, answer must still be returned" path without a real
@@ -188,11 +208,12 @@ public class LlmGatewayTests : IntegrationTestBase
     public async Task Limit_on_first_candidate_falls_back_to_second_and_marks_first_unavailable()
     {
         var config = MakeConfig();
+        var trace = new CapturingTraceSession();
         var client = new ScriptedChatClient();
         client.EnqueueException(new ModelLimitReachedException("limit", LlmLimitScope.Model));
         client.EnqueueResponse("fallback answer");
         var availability = new ModelAvailability(new SystemClock());
-        var gateway = CreateGateway(config, client, availability);
+        var gateway = CreateGateway(config, client, availability, trace: trace);
 
         var result = await gateway.CompleteAsync(MakeRequest(familyId: 12), CancellationToken.None);
 
@@ -207,7 +228,51 @@ public class LlmGatewayTests : IntegrationTestBase
         rows[1].Outcome.ShouldBe(LlmCallOutcome.Ok);
         rows[1].Model.ShouldBe(ModelB);
 
+        var requests = trace.Events.Where(e => e.Stage == "model_request").ToList();
+        var results = trace.Events.Where(e => e.Stage == "model_result").ToList();
+        requests.Count.ShouldBe(2);
+        requests.Select(e => e.AttemptId).Distinct().Count().ShouldBe(2);
+        requests.Select(e => e.Options?.Model).ShouldBe(new[] { ModelA, ModelB });
+        requests.ShouldAllBe(e => e.Options != null && e.Options.Provider == Provider && e.Options.Tier == LlmConfig.SmartTier);
+        requests.ShouldAllBe(e => e.Messages != null && e.Messages[0].Text == "system" && e.Messages[1].Text == "hello");
+        results.Select(e => e.AttemptId).ShouldBe(requests.Select(e => e.AttemptId));
+        results.Select(e => e.LlmCallId).ShouldBe(rows.Select(r => (long?)r.Id));
+        results.Select(e => e.Outcome).ShouldBe(new[] { "failed", "ok" });
+        result.TraceAttemptId.ShouldBe(requests[1].AttemptId);
+
         availability.IsAvailable(ModelA).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("anthropic", true)]
+    [InlineData("openai", true)]
+    [InlineData("codex-cli", false)]
+    public async Task Captured_request_matches_effective_provider_message_authorship(string provider, bool foldsAuthor)
+    {
+        var trace = new CapturingTraceSession();
+        var inner = new ScriptedChatClient();
+        inner.EnqueueResponse("synthetic answer");
+        var client = foldsAuthor ? new AuthorFoldingChatClient(inner) : (IChatClient)inner;
+        var config = MakeConfig(models: new[] { new ModelCatalogEntry(provider, ModelA) });
+        var gateway = CreateGatewayWithProviders(config, new Dictionary<string, IChatClient>
+        {
+            [$"{provider}:{ModelA}"] = client
+        }, trace: trace);
+        var request = MakeRequest(familyId: provider == "anthropic" ? 61 : provider == "openai" ? 62 : 63) with
+        {
+            Messages = new[] { new LlmMessage(LlmMessageRole.User, "synthetic question", "member_a") }
+        };
+
+        var result = await gateway.CompleteAsync(request, CancellationToken.None);
+
+        result.IsAnswer.ShouldBeTrue();
+        var captured = trace.Events.Single(e => e.Stage == "model_request").Messages![1];
+        var actual = inner.RequestedMessages.Single()[1];
+        var expected = foldsAuthor ? "[member_a]: synthetic question" : "synthetic question";
+        captured.Text.ShouldBe(expected);
+        captured.Text.ShouldBe(actual.Text);
+        captured.Author.ShouldBe(foldsAuthor ? null : "member_a");
+        captured.Author.ShouldBe(actual.AuthorName);
     }
 
     [Fact]
@@ -606,6 +671,7 @@ public class LlmGatewayTests : IntegrationTestBase
     public async Task Db_failure_recording_a_successful_answer_still_returns_answered()
     {
         var config = MakeConfig(models: new[] { new ModelCatalogEntry(Provider, ModelA) });
+        var trace = new CapturingTraceSession();
         var client = new ScriptedChatClient();
         client.EnqueueResponse("answer despite db failure");
 
@@ -613,7 +679,7 @@ public class LlmGatewayTests : IntegrationTestBase
         AssistantDbContext.Configure(options, ConnectionString);
         await using var failingDb = new FailingSaveDbContext(options.Options);
 
-        var gateway = CreateGateway(config, client, db: failingDb);
+        var gateway = CreateGateway(config, client, db: failingDb, trace: trace);
 
         var result = await gateway.CompleteAsync(MakeRequest(familyId: 29), CancellationToken.None);
 
@@ -624,6 +690,11 @@ public class LlmGatewayTests : IntegrationTestBase
         // failed, as scripted -- while the gateway still returned the answer to the caller.
         var rows = await Db.LlmCalls.Where(c => c.FamilyId == 29).ToListAsync();
         rows.ShouldBeEmpty();
+        var request = trace.Events.Single(e => e.Stage == "model_request");
+        var response = trace.Events.Single(e => e.Stage == "model_result");
+        response.AttemptId.ShouldBe(request.AttemptId);
+        response.LlmCallId.ShouldBeNull();
+        response.Text.ShouldBe("answer despite db failure");
     }
     [Fact]
     public async Task Cancelled_subscription_attempt_preserves_source_and_zero_cost_without_fallback()

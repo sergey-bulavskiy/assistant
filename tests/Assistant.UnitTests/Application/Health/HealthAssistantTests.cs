@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Health;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
@@ -29,6 +30,7 @@ public class HealthAssistantTests
     private readonly FailureNoticeThrottle _throttle = new();
     private readonly AddressedHintThrottle _hints = new();
     private readonly CapturingLogger _log = new();
+    private readonly FakeTraceSession _trace = new();
     private int _nextMessageId = 100;
 
     private const string NoEventsJson = "{\"events\":[],\"unclear\":[],\"is_question\":false}";
@@ -60,7 +62,7 @@ public class HealthAssistantTests
 
     private HealthAssistant CreateAssistant(IClock? clock = null, bool llmOff = false) =>
         new(_profiles, _ownership, _events, _alerts, _pending, _messages, _gateway, llmOff ? null : Config(), _prompts, _throttle, _hints,
-            clock ?? new FixedClock(Now), new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log);
+            clock ?? new FixedClock(Now), new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log, _trace);
 
     private IncomingMessage Msg(
         string? text, string chatType = "private", long userId = 111, int? topicId = null, MessageKind kind = MessageKind.Text,
@@ -73,7 +75,7 @@ public class HealthAssistantTests
     private void Answer(string json) => _gateway.NextResult = LlmResult.Answered(json, "haiku");
 
     private Task HandleAsync(IncomingMessage message, StoreOutcome outcome = StoreOutcome.Stored, IClock? clock = null, long messageDbId = 1, bool replyToAll = false) =>
-        CreateAssistant(clock).HandleAsync(Bot, _telegram, message, new StoreResult(outcome, messageDbId), CancellationToken.None, replyToAll);
+        CreateAssistant(clock).HandleAsync(Bot, _trace.Wrap(_telegram), message, new StoreResult(outcome, messageDbId), CancellationToken.None, replyToAll);
 
     private string SingleReply() => _telegram.Sent.ShouldHaveSingleItem().Text;
 
@@ -1767,6 +1769,44 @@ public class HealthAssistantTests
     private void AskOnly() => _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
 
     [Fact]
+    public async Task Replaced_health_answer_is_marked_not_sent_and_only_replacement_is_delivered()
+    {
+        const string rejected = "Increase the dose by 2 units.";
+        var extractionAttempt = Guid.NewGuid();
+        var answerAttempt = Guid.NewGuid();
+        await _trace.StartAsync(new TraceStart(Guid.NewGuid(), 42, 999, 111, null, 1, 1, false, "synthetic question", "text"), CancellationToken.None);
+        var firstQuestion = Msg("synthetic question");
+        var firstSource = await _messages.StoreAsync(999, 1, firstQuestion, CancellationToken.None);
+        _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku") with { TraceAttemptId = extractionAttempt });
+        _gateway.Results.Enqueue(LlmResult.Answered(rejected, "sonnet") with { TraceAttemptId = answerAttempt });
+
+        await HandleAsync(firstQuestion, messageDbId: firstSource.MessageDbId!.Value);
+
+        var extraction = _trace.Events.Single(e => e.Stage == "extraction" && e.Outcome == "ok");
+        extraction.AttemptId.ShouldBe(extractionAttempt);
+        var notSent = _trace.Events.Single(e => e.Stage == "answer" && e.Outcome == "not_sent");
+        notSent.AttemptId.ShouldBe(answerAttempt);
+        notSent.Text.ShouldBe(rejected);
+        notSent.Sent.ShouldBe(false);
+        _trace.Events.ShouldNotContain(e => e.Stage == "delivery" && e.Text == rejected);
+        _trace.Events.ShouldContain(e => e.Stage == "delivery" && e.Outcome == "sent"
+            && e.AttemptId == answerAttempt && e.Text == DoseRefusal + Footer);
+        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
+        _messages.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
+
+        var secondQuestion = Msg("second synthetic question");
+        var secondSource = await _messages.StoreAsync(999, 2, secondQuestion, CancellationToken.None);
+        _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("safe synthetic answer", "sonnet"));
+
+        await HandleAsync(secondQuestion, messageDbId: secondSource.MessageDbId!.Value);
+
+        var nextAnswerRequest = _gateway.Requests.Last();
+        nextAnswerRequest.Messages.ShouldContain(m => m.Text.Contains(DoseRefusal, StringComparison.Ordinal));
+        nextAnswerRequest.Messages.ShouldNotContain(m => m.Text.Contains(rejected, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Private_question_gets_a_smart_answer_with_the_footer()
     {
         AskAndAnswer("Тестовый ответ.");
@@ -2456,7 +2496,35 @@ public class HealthAssistantTests
         new("cbq-" + data, userId, data, chatId, promptId, 7, "supergroup");
 
     private Task TapAsync(CallbackQueryInfo tap, IClock? clock = null) =>
-        CreateAssistant(clock).HandleCallbackAsync(Bot, _telegram, tap, CancellationToken.None);
+        CreateAssistant(clock).HandleCallbackAsync(Bot, _trace.Wrap(_telegram), tap, CancellationToken.None);
+
+    [Fact]
+    public async Task Confirmation_outcome_links_pending_source_and_actor_across_interactions()
+    {
+        await _trace.StartAsync(new TraceStart(Guid.NewGuid(), 42, 999, -100, 7, 1, 1, false, "synthetic reading", "text"), CancellationToken.None);
+        var (_, promptId) = await AskInGroupAsync();
+
+        var requested = _trace.Events.Single(e => e.Stage == "confirmation" && e.Outcome == "requested");
+        requested.PendingRecordId.ShouldBe(1);
+        requested.RelatedSourceMessageId.ShouldBe(1);
+        requested.ActorId.ShouldBe(111);
+        _trace.Events.ShouldContain(e => e.Stage == "delivery" && e.Operation == "send_text_with_buttons"
+            && e.Outcome == "sent" && e.TelegramMessageId == promptId);
+
+        await _trace.StartAsync(new TraceStart(Guid.NewGuid(), 42, 999, -100, 7, 2, null, false, null, "callback"), CancellationToken.None);
+        await TapAsync(Tap("rec_yes:1", promptId, userId: 222));
+
+        var accepted = _trace.Events.Single(e => e.Stage == "confirmation" && e.Outcome == "accepted");
+        accepted.PendingRecordId.ShouldBe(requested.PendingRecordId);
+        accepted.RelatedSourceMessageId.ShouldBe(requested.RelatedSourceMessageId);
+        accepted.ActorId.ShouldBe(222);
+        var editAttempt = _trace.Events.Single(e => e.Stage == "delivery" && e.Operation == "edit_text"
+            && e.Outcome == "attempted");
+        editAttempt.TelegramMessageId.ShouldBe(promptId);
+        _trace.Events.ShouldContain(e => e.Stage == "delivery" && e.Operation == "edit_text"
+            && e.Outcome == "sent" && e.TelegramMessageId == promptId);
+        _pending.Rows[1].Status.ShouldBe("accepted");
+    }
 
     [Fact]
     public async Task Da_saves_the_values_for_the_original_sender_and_marks_the_message()

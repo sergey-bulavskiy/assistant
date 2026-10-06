@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -34,11 +35,12 @@ internal sealed class HealthMessagePipeline
     private readonly HealthAnswers _answers;
     private readonly HealthConfirmations _confirmations;
     private readonly ILogger _logger;
+    private readonly ITraceSession _trace;
 
     public HealthMessagePipeline(
         IHealthProfileStore profiles, IEventStore events, ILlmGateway gateway, IRolePrompts rolePrompts, FailureNoticeThrottle failureNotices,
         AddressedHintThrottle hints, IClock clock, HealthReplies replies, HealthSafety safety, HealthAnswers answers,
-        HealthConfirmations confirmations, ILogger logger)
+        HealthConfirmations confirmations, ILogger logger, ITraceSession? trace = null)
     {
         _profiles = profiles;
         _events = events;
@@ -52,6 +54,7 @@ internal sealed class HealthMessagePipeline
         _answers = answers;
         _confirmations = confirmations;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     // An edited text message is read again and its records follow the new text. Ignored: non-text
@@ -64,11 +67,13 @@ internal sealed class HealthMessagePipeline
     {
         if (message.Kind != MessageKind.Text || message.Text is not { } text || text.StartsWith('/') || storeResult.MessageDbId is null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "edit_suppressed"));
             return;
         }
 
         if (_clock.UtcNow - message.SentAt > EditWindow)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "edit_suppressed"));
             _logger.LogInformation("Edit of message {MessageDbId} ignored: sent too long ago", storeResult.MessageDbId);
             return;
         }
@@ -131,6 +136,7 @@ internal sealed class HealthMessagePipeline
         var messageDbId = storeResult.MessageDbId;
         if (!ExtractionPrompt.ShouldExtract(text))
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "no_extraction_candidate"));
             // No model call. An edit into such a text has no readings left.
             if (isEdit)
             {
@@ -143,6 +149,7 @@ internal sealed class HealthMessagePipeline
         var instructions = _rolePrompts.Find(BotRoles.Health, ExtractInstructionsFile);
         if (instructions is null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "failed", "not_configured"));
             // The prompt resource is missing (an Error was logged at startup): extraction is off and
             // the family is told that nothing was recorded.
             LogOutcome($"refused:{LlmRefusalReason.NotConfigured}", messageDbId, 0);
@@ -168,6 +175,7 @@ internal sealed class HealthMessagePipeline
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "failed", "extraction_failed"));
             _logger.LogError("health extraction call failed: {ExceptionType}", ex.GetType().Name);
             LogOutcome("failed", messageDbId, 0);
             await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
@@ -176,6 +184,17 @@ internal sealed class HealthMessagePipeline
 
         if (!result.IsAnswer)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", result.RefusalReason switch
+            {
+                LlmRefusalReason.NotConfigured => "not_configured",
+                LlmRefusalReason.RateLimited => "rate_limited",
+                LlmRefusalReason.DailyCapReached => "daily_cap",
+                LlmRefusalReason.BudgetExhausted => "budget_exhausted",
+                LlmRefusalReason.AllModelsUnavailable => "all_models_unavailable",
+                _ => "provider_failure"
+            }, AttemptId: result.TraceAttemptId));
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "failed", "extraction_failed",
+                AttemptId: result.TraceAttemptId));
             LogOutcome($"refused:{result.RefusalReason}", messageDbId, 0);
             await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
@@ -184,6 +203,8 @@ internal sealed class HealthMessagePipeline
         var output = ExtractionParser.Parse(result.Text);
         if (output is null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "failed", "invalid_extraction",
+                AttemptId: result.TraceAttemptId));
             LogOutcome("invalid_output", messageDbId, 0);
             await HandleExtractionFailureAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, isEdit, cancellationToken);
             return;
@@ -209,6 +230,10 @@ internal sealed class HealthMessagePipeline
             }
         }
 
+        await TraceSafety.RecordAsync(_trace, new TraceEventData(
+            "extraction", "ok", "normal",
+            AttemptId: result.TraceAttemptId, EventCount: valid.Count, ProblemCount: problems.Count));
+
         // A free-text undo ("удали это", "не записывай"): the model decides the message asks for it; code
         // acts only on a new message that recorded nothing and is a reply or addressed to the bot, and
         // limits it to one message in the /undo scope. Otherwise the message is handled as usual.
@@ -220,6 +245,8 @@ internal sealed class HealthMessagePipeline
             await TrySendQuickScanReplyAsync(
                 telegramClient, message, text, familyId, profile, messageDbId, new HashSet<string>(), clarify: false, cancellationToken);
             LogOutcome("undo", messageDbId, 0);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "completed", "undo",
+                AttemptId: result.TraceAttemptId, EventCount: 0, ProblemCount: problems.Count));
             return;
         }
 
@@ -267,6 +294,7 @@ internal sealed class HealthMessagePipeline
                 LogOutcome("store_failed", messageDbId, 0);
                 if (SafetyRuleEvaluator.MostSevere(evaluations.Select(e => e.Alert)) is { } unsaved)
                 {
+                    await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "completed", "fixed_alert"));
                     await _replies.ReplyAsync(
                         telegramClient, message, SafetyAlertText.FormatNotRecorded(unsaved, profile.EmergencyPhone), cancellationToken, quote: true);
                     _logger.LogWarning(
@@ -363,6 +391,9 @@ internal sealed class HealthMessagePipeline
         LogOutcome(
             recordIndexes.Count > 0 ? "events" : toAsk.Count > 0 ? "pending" : problems.Count > 0 ? "clarify" : "no_events",
             messageDbId, recordIndexes.Count);
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("extraction", "completed",
+            recordIndexes.Count > 0 ? "events_recorded" : toAsk.Count > 0 ? "pending_record" : problems.Count > 0 ? "clarification" : "no_events",
+            AttemptId: result.TraceAttemptId, EventCount: recordIndexes.Count, ProblemCount: problems.Count));
 
         // An answer for a new message that the model marked as a question, even
         // when readings were recorded from the same message (the answer's context then already holds
@@ -374,6 +405,12 @@ internal sealed class HealthMessagePipeline
         {
             await _answers.AnswerQuestionAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
         }
+        else if (output.IsQuestion)
+        {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped",
+                alertDecided ? "alert_precedence" : problems.Count > 0 || quickScanSent || isEdit ? "answer_suppressed" : "not_addressed",
+                AttemptId: result.TraceAttemptId));
+        }
         else if (!isEdit && !output.IsQuestion && valid.Count == 0 && problems.Count == 0 && !quickScanSent
             && Addressing.IsAddressed(bot, message, text)
             && _hints.TryAcquire(bot.TelegramBotId, message.ChatId, message.TopicId, _clock.UtcNow))
@@ -381,6 +418,11 @@ internal sealed class HealthMessagePipeline
             // Extraction succeeded and the addressed message produced nothing at all (a greeting,
             // chatter): one short fixed hint, throttled per place so chatter does not trigger it every time.
             await _replies.ReplyAsync(telegramClient, message, HealthAssistant.AddressedHintText, cancellationToken, quote: true);
+        }
+        else
+        {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "question_false",
+                AttemptId: result.TraceAttemptId));
         }
 
         // The Да/Нет question comes last, after the alerts and the answer (also in unaddressed messages).
@@ -463,6 +505,7 @@ internal sealed class HealthMessagePipeline
         CancellationToken cancellationToken)
     {
         var alertText = SafetyAlertText.Format(decision, profile.EmergencyPhone);
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "completed", "fixed_alert"));
         if (await _replies.ReplyAsync(telegramClient, message, alertText, cancellationToken, quote: true)
             || await _replies.ReplyAsync(telegramClient, message, alertText, cancellationToken, quote: true))
         {
@@ -542,6 +585,7 @@ internal sealed class HealthMessagePipeline
         var sent = false;
         if (decision is not null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "completed", "fixed_alert"));
             await _replies.ReplyAsync(
                 telegramClient, message, SafetyAlertText.FormatNotRecorded(decision, profile.EmergencyPhone), cancellationToken, quote: true);
             _logger.LogWarning("Quick scan alert {RuleKey} ({Level}) for message {MessageDbId}", decision.RuleKey, decision.Level, messageDbId);

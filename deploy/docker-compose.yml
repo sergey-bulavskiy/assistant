@@ -25,6 +25,12 @@ services:
       TELEGRAM_MANAGER_BOT_TOKEN: ${TELEGRAM_MANAGER_BOT_TOKEN}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       ConnectionStrings__Assistant: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=postgres;Password=${POSTGRES_PASSWORD}
+      # Private diagnostics require explicit local opt-in. Limits cannot exceed these ceilings.
+      DEBUG_TRACES_ENABLED: ${DEBUG_TRACES_ENABLED:-false}
+      DEBUG_TRACES_RETENTION_DAYS: ${DEBUG_TRACES_RETENTION_DAYS:-60}
+      DEBUG_TRACES_MAX_DETAIL_BYTES: ${DEBUG_TRACES_MAX_DETAIL_BYTES:-262144}
+      DEBUG_TRACES_MAX_STORAGE_BYTES: ${DEBUG_TRACES_MAX_STORAGE_BYTES:-104857600}
+      DEBUG_TRACES_MAX_EVENTS: ${DEBUG_TRACES_MAX_EVENTS:-256}
       # LLM_MODELS has no default: model access stays off until explicitly configured and logged in.
       # See README "Set up the General assistant". Every *limit*
       # below does get a default matching .env.example, since the app itself still requires them

@@ -27,6 +27,9 @@ public enum LlmRefusalReason { NotConfigured, RateLimited, DailyCapReached, AllM
 
 public record LlmResult(bool IsAnswer, string? Text, string? ModelName, LlmRefusalReason? RefusalReason, DateTimeOffset? RetryAt)
 {
+    /// <summary>Correlation for the actual provider attempt that produced this result, when one exists.</summary>
+    public Guid? TraceAttemptId { get; init; }
+
     public static LlmResult Answered(string text, string modelName) => new(true, text, modelName, null, null);
 
     public static LlmResult Refused(LlmRefusalReason reason, DateTimeOffset? retryAt = null) => new(false, null, null, reason, retryAt);

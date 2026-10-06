@@ -1,5 +1,6 @@
 using System.Globalization;
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Messages;
@@ -29,6 +30,7 @@ public class GeneralAssistant : IGeneralAssistant
     private readonly IClock _clock;
     private readonly BuildInfo _buildInfo;
     private readonly ILogger<GeneralAssistant> _logger;
+    private readonly ITraceSession _trace;
 
     /// <param name="config">Null when LLM is off or its config is invalid: every question then gets
     /// <see cref="NotConfiguredText"/> without touching settings, context or the gateway.</param>
@@ -40,7 +42,8 @@ public class GeneralAssistant : IGeneralAssistant
         LlmConfig? config,
         IClock clock,
         BuildInfo buildInfo,
-        ILogger<GeneralAssistant> logger)
+        ILogger<GeneralAssistant> logger,
+        ITraceSession? trace = null)
     {
         _store = store;
         _gateway = gateway;
@@ -50,6 +53,7 @@ public class GeneralAssistant : IGeneralAssistant
         _clock = clock;
         _buildInfo = buildInfo;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     public async Task HandleAsync(
@@ -63,6 +67,7 @@ public class GeneralAssistant : IGeneralAssistant
         if (message.Kind != MessageKind.Text || message.IsEdit || message.Text is not { } text || bot.FamilyId is not { } familyId)
         {
             // Service, non-text (photos/voice are M7) and edited messages are stored, never answered.
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", message.IsEdit ? "edit_suppressed" : "service_or_non_text"));
             return;
         }
 
@@ -76,11 +81,13 @@ public class GeneralAssistant : IGeneralAssistant
         if (text.StartsWith('/'))
         {
             // Looks like a command but is not addressed to this bot (/cmd@otherbot): silent.
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "other_bot_command"));
             return;
         }
 
         if (!IsAddressed(bot, message, text, replyToAll, out var onlyByReplyToAll))
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "not_addressed"));
             return;
         }
 
@@ -125,6 +132,7 @@ public class GeneralAssistant : IGeneralAssistant
                 return;
 
             default:
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "unknown_command"));
                 return; // Unknown command (or /start in a group): silent.
         }
     }
@@ -219,6 +227,7 @@ public class GeneralAssistant : IGeneralAssistant
     {
         if (_config is null)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "not_configured"));
             if (silentRefusal)
             {
                 LogSilentRefusal(LlmRefusalReason.NotConfigured);
@@ -263,19 +272,41 @@ public class GeneralAssistant : IGeneralAssistant
 
         if (result.IsAnswer && !string.IsNullOrEmpty(result.Text))
         {
-            await ReplyAsync(bot, telegramClient, message, result.Text, cancellationToken, storeAsContext: true);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "generated", "normal",
+                AttemptId: result.TraceAttemptId, Text: result.Text));
+            using (TracingTelegramClient.ForAttempt(result.TraceAttemptId))
+            {
+                await ReplyAsync(bot, telegramClient, message, result.Text, cancellationToken, storeAsContext: true);
+            }
         }
         else if (silentRefusal)
         {
             // Answered only because of reply_to_all -- a refusal text in reply to every ordinary
             // group message would be noise.
             LogSilentRefusal(result.RefusalReason);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", RefusalCode(result),
+                AttemptId: result.TraceAttemptId));
         }
         else
         {
-            await ReplyAsync(bot, telegramClient, message, RefusalText(result, _clock.UtcNow), cancellationToken);
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", RefusalCode(result),
+                AttemptId: result.TraceAttemptId));
+            using (TracingTelegramClient.ForAttempt(result.TraceAttemptId))
+            {
+                await ReplyAsync(bot, telegramClient, message, RefusalText(result, _clock.UtcNow), cancellationToken);
+            }
         }
     }
+
+    private static string RefusalCode(LlmResult result) => result.RefusalReason switch
+    {
+        LlmRefusalReason.RateLimited => "rate_limited",
+        LlmRefusalReason.DailyCapReached => "daily_cap",
+        LlmRefusalReason.BudgetExhausted => "budget_exhausted",
+        LlmRefusalReason.AllModelsUnavailable => "all_models_unavailable",
+        LlmRefusalReason.Failed => "provider_failure",
+        _ => result.IsAnswer ? "empty_response" : "not_configured"
+    };
 
     // The refusal type only -- never message or answer text.
     private void LogSilentRefusal(LlmRefusalReason? reason) =>
@@ -353,8 +384,11 @@ public class GeneralAssistant : IGeneralAssistant
         var isGroup = message.ChatType != "private";
         var isFirstPart = true;
 
-        foreach (var part in ReplySplitter.Split(text))
+        var parts = ReplySplitter.Split(text).ToArray();
+        for (var index = 0; index < parts.Length; index++)
         {
+            var part = parts[index];
+            using var partScope = TracingTelegramClient.ForPart(index + 1, parts.Length);
             int sentMessageId;
             try
             {

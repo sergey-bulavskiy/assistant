@@ -189,6 +189,52 @@ This project is designed to later handle personal and health data at runtime, in
 personal data lives in this repository** — not in code, tests, commit history or this README. See
 `AGENTS.md` for the full rules.
 
+## Private debug traces
+
+Detailed diagnostics are off by default. Explicit local `DEBUG_TRACES_ENABLED=true` enables
+continuous rolling capture for authorized role-bot interactions: the source, assembled model
+request, parsed final response, application decisions, and attempted/sent text. Rejected or
+replaced final answer text is private and labeled **not sent**; the actual replacement and its
+delivery are recorded separately. Traces are separate from conversation history and never replayed.
+Manager interactions and unauthorized updates are excluded. Credentials, hidden reasoning,
+headers and raw process streams are excluded; known application credentials are redacted before
+persistence. Redaction cannot identify every secret typed into ordinary message text, so protect
+the database and local exports as sensitive data. Captured content never enters ordinary logs.
+
+Retention is at most 60 days from interaction creation. The default cumulative detail allowance is
+256 KiB per interaction, with 256 events, and total accounted storage is capped at
+100 MiB. Oldest interactions may be evicted earlier; exports report actual retained coverage,
+truncation and cap eviction counts. Accounting counts serialized detail plus a 1,024-byte metadata
+reserve per trace and event, rather than PostgreSQL physical file size. Cleanup runs at startup
+and hourly, including while capture is off.
+Diagnostic write failures are best effort and do not change normal processing or delivery.
+
+Optional local settings can reduce the limits: `DEBUG_TRACES_RETENTION_DAYS` (1–60),
+`DEBUG_TRACES_MAX_DETAIL_BYTES` (1024–262144), `DEBUG_TRACES_MAX_STORAGE_BYTES`
+(1048576–104857600), and `DEBUG_TRACES_MAX_EVENTS` (16–512). Invalid configuration disables
+capture with a sanitized warning. Production compose defaults remain off; applying new compose
+variables requires an explicitly authorized container recreation.
+
+Use the separate read-only local export tool with `ConnectionStrings__Assistant` set privately.
+Choose an explicit absolute output path outside repositories; the tool refuses existing files.
+It starts no bot or host and applies no migrations:
+
+```powershell
+dotnet run --project src/Assistant.TraceExport -- --message-id 123 --out C:/private/trace.json
+dotnet run --project src/Assistant.TraceExport -- --bot-id 111 --chat-id 222 --telegram-message-id 333 --out C:/private/trace.json
+```
+
+The second form resolves a Telegram source reference. An export contains only linked original,
+edit and captured confirmation timelines, actual LLM-attempt summaries and delivery results.
+Text edits are distinguished from new sends, including their target message IDs. Timeouts have
+**unknown** delivery; generated or attempted text is never labeled delivered. Attempt links and
+bounded delivery metadata survive exhaustion of the text allowance, subject to the event/storage cap.
+Disabled periods, expiry, eviction and failed writes can leave gaps; callback/reaction capture
+is not exhaustive. Coverage also lists up to 64 timestamp-only observations of incoming originals
+or latest edits without a retained trace in the selected family/bot/chat/topic window, with a total
+count and omitted count. Their cause and any continuous disabled period are unknown; no message
+content is reconstructed. The tool reports not found when no linked trace remains and prints no content.
+
 ## Prerequisites
 
 - A Windows PC (or any Docker host) with **Docker Desktop** installed, WSL2 backend enabled, and
@@ -397,6 +443,13 @@ Watchtower pulls) only if it passes; until then CD promotes without it. One-time
 locally and enabling the gate: `tests/Assistant.SmokeTests/README.md`. It does not cover creating a
 bot through `/newbot`, an unknown user's approval or promoting a second owner; the manual
 checklist below does.
+
+Private tracing is checked separately with synthetic inputs and explicit local authorization:
+confirm default-off writes no trace, then opt in in an isolated runtime, send a synthetic message,
+and export it to a private absolute path. Check request/attempt/source linkage and each final text
+delivery result; a replaced answer must show its original as `not sent`. Check an edit and a
+confirmation remain distinct. Disable capture afterward and confirm cleanup still runs. This
+check is not part of ordinary Telegram smoke and does not authorize capture in the home app.
 
 Manual checklist, for after setup and after any release that changes bot behaviour. It creates
 real bots and a real family.

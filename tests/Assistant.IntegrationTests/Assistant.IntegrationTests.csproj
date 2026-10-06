@@ -27,6 +27,7 @@
     <ProjectReference Include="../../src/Assistant.Application/Assistant.Application.csproj" />
     <ProjectReference Include="../../src/Assistant.Infrastructure/Assistant.Infrastructure.csproj" />
     <ProjectReference Include="../../src/Assistant.Host/Assistant.Host.csproj" />
+    <ProjectReference Include="../../src/Assistant.TraceExport/Assistant.TraceExport.csproj" />
   </ItemGroup>
 
 </Project>

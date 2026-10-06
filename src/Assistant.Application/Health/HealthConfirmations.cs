@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Health;
@@ -29,9 +30,11 @@ internal sealed class HealthConfirmations
     private readonly HealthReplies _replies;
     private readonly HealthSafety _safety;
     private readonly ILogger _logger;
+    private readonly ITraceSession _trace;
 
     public HealthConfirmations(
-        IEventStore events, IPendingRecordStore pending, IClock clock, HealthReplies replies, HealthSafety safety, ILogger logger)
+        IEventStore events, IPendingRecordStore pending, IClock clock, HealthReplies replies, HealthSafety safety, ILogger logger,
+        ITraceSession? trace = null)
     {
         _events = events;
         _pending = pending;
@@ -39,6 +42,7 @@ internal sealed class HealthConfirmations
         _replies = replies;
         _safety = safety;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     /// <summary>"глюкоза 10.0 ммоль/л; давление 128/84".</summary>
@@ -65,6 +69,9 @@ internal sealed class HealthConfirmations
             await _replies.ReplyAsync(telegramClient, message, ExtractionReplies.FailureNotice, cancellationToken, quote: true);
             throw;
         }
+
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation", "requested", "pending_record",
+            PendingRecordId: id, RelatedSourceMessageId: messageDbId, ActorId: message.UserId));
 
         var buttons = new[]
         {
@@ -112,6 +119,7 @@ internal sealed class HealthConfirmations
         if (pending is null || pending.BotId != bot.TelegramBotId || pending.ChatId != callback.MessageChatId
             || pending.Status != PendingRecordStatuses.Pending)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "already_processed"));
             await _replies.AnswerCallbackAsync(telegramClient, callback.CallbackQueryId, AlreadyDecidedText, cancellationToken);
             return;
         }
@@ -163,6 +171,8 @@ internal sealed class HealthConfirmations
         }
 
         _logger.LogInformation("Pending record {PendingId} {Status}", pending.Id, status);
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation", "cancelled", "normal",
+            PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: resolvedByUserId));
         if (pending.PromptMessageId is { } promptMessageId)
         {
             await EditPromptAsync(telegramClient, pending.ChatId, promptMessageId, text, cancellationToken);
@@ -196,11 +206,16 @@ internal sealed class HealthConfirmations
     {
         if (!await _pending.TryResolveAsync(familyId, pending.Id, status, callback.FromUserId, null, cancellationToken))
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "already_processed",
+                PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
             await _replies.AnswerCallbackAsync(telegramClient, callback.CallbackQueryId, AlreadyDecidedText, cancellationToken);
             return;
         }
 
         _logger.LogInformation("Pending record {PendingId} {Status}", pending.Id, status);
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation",
+            status == PendingRecordStatuses.Expired ? "expired" : "declined", "normal",
+            PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
         await EditPromptAsync(telegramClient, callback.MessageChatId, callback.MessageId, text, cancellationToken);
         await _replies.AnswerCallbackAsync(telegramClient, callback.CallbackQueryId, null, cancellationToken);
     }
@@ -232,6 +247,8 @@ internal sealed class HealthConfirmations
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             // Nothing changed: the row is still pending, so the next tap tries again.
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation", "failed", "normal",
+                PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
             _logger.LogError("saving a confirmed record failed: {ExceptionType}", ex.GetType().Name);
             await _replies.AnswerCallbackAsync(telegramClient, callback.CallbackQueryId, SaveFailedText, cancellationToken);
             return;
@@ -239,11 +256,15 @@ internal sealed class HealthConfirmations
 
         if (!accepted)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "already_processed",
+                PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
             await _replies.AnswerCallbackAsync(telegramClient, callback.CallbackQueryId, AlreadyDecidedText, cancellationToken);
             return;
         }
 
         _logger.LogInformation("Pending record {PendingId} accepted: {EventCount} events", pending.Id, saved.Count);
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation", "accepted", "normal",
+            PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
         await _replies.MarkRecordedAsync(telegramClient, pending.ChatId, pending.TelegramMessageId, cancellationToken);
         await _safety.SendAlertsAsync(
             telegramClient, pending.ChatId, pending.TopicId, pending.TelegramMessageId, familyId, profile, saved, evaluations,

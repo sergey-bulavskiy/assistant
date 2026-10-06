@@ -28,6 +28,11 @@ public class AuthorFoldingChatClient : IChatClient
 
     public void Dispose() => _inner.Dispose();
 
-    private static IEnumerable<ChatMessage> Fold(IEnumerable<ChatMessage> messages) =>
-        messages.Select(m => string.IsNullOrEmpty(m.AuthorName) ? m : new ChatMessage(m.Role, $"[{m.AuthorName}]: {m.Text}"));
+    // Gateway diagnostics use the same transformation to capture exactly what the API client sees.
+    internal static ChatMessage FoldMessage(ChatMessage message) =>
+        string.IsNullOrEmpty(message.AuthorName)
+            ? message
+            : new ChatMessage(message.Role, $"[{message.AuthorName}]: {message.Text}");
+
+    private static IEnumerable<ChatMessage> Fold(IEnumerable<ChatMessage> messages) => messages.Select(FoldMessage);
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Persistence;
@@ -22,6 +23,7 @@ public class LlmGateway : ILlmGateway
     private readonly IBudgetGuard _budget;
     private readonly IBudgetNoticeDispatcher _budgetNoticeDispatcher;
     private readonly ILogger<LlmGateway> _logger;
+    private readonly ITraceSession _trace;
 
     public LlmGateway(
         LlmConfig config,
@@ -33,7 +35,8 @@ public class LlmGateway : ILlmGateway
         ConcurrentCallGate concurrencyGate,
         IBudgetGuard budget,
         IBudgetNoticeDispatcher budgetNoticeDispatcher,
-        ILogger<LlmGateway> logger)
+        ILogger<LlmGateway> logger,
+        ITraceSession? trace = null)
     {
         _config = config;
         _catalog = catalog;
@@ -45,6 +48,7 @@ public class LlmGateway : ILlmGateway
         _budget = budget;
         _budgetNoticeDispatcher = budgetNoticeDispatcher;
         _logger = logger;
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     public bool IsEnabled => true;
@@ -72,11 +76,13 @@ public class LlmGateway : ILlmGateway
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            await TraceDecisionAsync("rate_limited");
             return LlmResult.Refused(LlmRefusalReason.RateLimited);
         }
 
         LlmResult result;
         var budgetWasConfigured = false;
+        var attemptedProvider = false;
 
         try
         {
@@ -92,6 +98,7 @@ public class LlmGateway : ILlmGateway
                 .CountAsync(c => c.FamilyId == request.FamilyId && c.CreatedAt >= minuteCutoff, cancellationToken);
             if (callsLastMinute >= _config.CallsPerMinute)
             {
+                await TraceDecisionAsync("rate_limited");
                 return LlmResult.Refused(LlmRefusalReason.RateLimited);
             }
 
@@ -100,6 +107,7 @@ public class LlmGateway : ILlmGateway
                 .CountAsync(c => c.FamilyId == request.FamilyId && c.CreatedAt >= dayCutoff, cancellationToken);
             if (callsToday >= _config.CallsPerDay)
             {
+                await TraceDecisionAsync("daily_cap");
                 return LlmResult.Refused(LlmRefusalReason.DailyCapReached);
             }
 
@@ -163,6 +171,7 @@ public class LlmGateway : ILlmGateway
                         continue;
                     }
 
+                    attemptedProvider = true;
                     var attempt = await TryCandidateAsync(request, candidate, price, estimate, cancellationToken);
                     if (attempt.Retry is { } retryAt)
                     {
@@ -197,6 +206,16 @@ public class LlmGateway : ILlmGateway
             _concurrencyGate.Release();
         }
 
+        if (!attemptedProvider && !result.IsAnswer)
+        {
+            await TraceDecisionAsync(result.RefusalReason switch
+            {
+                LlmRefusalReason.BudgetExhausted => "budget_exhausted",
+                LlmRefusalReason.AllModelsUnavailable => "all_models_unavailable",
+                _ => "not_configured"
+            });
+        }
+
         // Spec §10.3/review: notices are checked AFTER the call's cost is recorded (not from the
         // pre-call status used for filtering above) and OFF the reply path entirely -- never
         // awaited here, and never using this request's own scoped `_db` (the dispatcher creates its
@@ -220,6 +239,9 @@ public class LlmGateway : ILlmGateway
 
         return result;
     }
+
+    private Task TraceDecisionAsync(string reason) =>
+        TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", reason));
 
     private ModelPrice GetPrice(ModelCatalogEntry entry) =>
         _config.Prices.TryGetValue(entry.Name, out var price) ? price : new ModelPrice(0m, 0m);
@@ -311,6 +333,7 @@ public class LlmGateway : ILlmGateway
         // method does NOT acquire/release it per candidate.
         var stopwatch = Stopwatch.StartNew();
         ChatResponse response;
+        var attemptId = Guid.NewGuid();
 
         try
         {
@@ -319,6 +342,21 @@ public class LlmGateway : ILlmGateway
             chatMessages.AddRange(request.Messages.Select(
                 m => new ChatMessage(m.Role == LlmMessageRole.User ? ChatRole.User : ChatRole.Assistant, m.Text) { AuthorName = m.Author }));
             var options = new ChatOptions { ModelId = candidate.Name, MaxOutputTokens = _config.MaxOutputTokens };
+
+            if (TraceSafety.IsEnabled(_trace))
+            {
+                var codex = candidate.ProviderPrefix == LlmProviderValidation.CodexCliPrefix;
+                var chars = codex ? (int)Math.Min(int.MaxValue, (long)_config.MaxOutputTokens * 8) : (int?)null;
+                var bytes = chars is { } bound ? (int)Math.Min(int.MaxValue, (long)bound * 4) : (int?)null;
+                var directApi = candidate.ProviderPrefix is LlmProviderValidation.AnthropicPrefix or LlmProviderValidation.OpenAiPrefix;
+                var effectiveMessages = directApi ? chatMessages.Select(AuthorFoldingChatClient.FoldMessage) : chatMessages;
+                var captured = effectiveMessages.Select(m => new TraceModelMessage(
+                    m.Role.ToString().ToLowerInvariant(), m.Text ?? string.Empty, m.AuthorName)).ToArray();
+                await TraceSafety.RecordAsync(_trace, new TraceEventData(
+                    "model_request", "attempted", "normal", AttemptId: attemptId, Messages: captured,
+                    Options: new TraceModelOptions(candidate.Name, null, _config.MaxOutputTokens, null,
+                        chars, bytes, _config.CallTimeoutSeconds, candidate.ProviderPrefix, request.Tier)));
+            }
 
             using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             callCts.CancelAfter(TimeSpan.FromSeconds(_config.CallTimeoutSeconds));
@@ -346,7 +384,8 @@ public class LlmGateway : ILlmGateway
             }
 
             // Cost 0: the provider rejected the call before any billable work.
-            await RecordCallAsync(request, candidate, LlmCallOutcome.LimitReached, null, null, null, 0m, stopwatch.ElapsedMilliseconds);
+            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.LimitReached, null, null, null, 0m, stopwatch.ElapsedMilliseconds,
+                attemptId, "provider_limit");
 
             // ModelAvailability never shortens an existing mark (a longer cooldown from an earlier
             // failure wins), so the retry we report must reflect what actually got recorded, not the
@@ -369,7 +408,12 @@ public class LlmGateway : ILlmGateway
             stopwatch.Stop();
             if (!LlmCostCalculator.IsZero(price) || candidate.ProviderPrefix == LlmProviderValidation.CodexCliPrefix)
             {
-                await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
+                await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
+                    attemptId, "provider_failure");
+            }
+            else
+            {
+                await TraceModelResultAsync(attemptId, null, "failed", "provider_failure", null);
             }
 
             throw;
@@ -381,8 +425,9 @@ public class LlmGateway : ILlmGateway
             stopwatch.Stop();
             _logger.LogWarning("LLM call to {Model} timed out after {ElapsedMs}ms", candidate.Name, stopwatch.ElapsedMilliseconds);
             // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
-            return (LlmResult.Refused(LlmRefusalReason.Failed), null);
+            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
+                attemptId, "provider_timeout");
+            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
         catch (TimeoutException)
         {
@@ -394,15 +439,17 @@ public class LlmGateway : ILlmGateway
             stopwatch.Stop();
             _logger.LogWarning("LLM call to {Model} timed out after {ElapsedMs}ms", candidate.Name, stopwatch.ElapsedMilliseconds);
             // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
-            return (LlmResult.Refused(LlmRefusalReason.Failed), null);
+            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
+                attemptId, "provider_timeout");
+            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _logger.LogError("LLM call to {Model} failed: {ExceptionType}", candidate.Name, ex.GetType().Name);
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds);
-            return (LlmResult.Refused(LlmRefusalReason.Failed), null);
+            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
+                attemptId, "provider_failure");
+            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
 
         // Everything from here on is OUTSIDE the try above, on purpose: the provider call already
@@ -435,18 +482,19 @@ public class LlmGateway : ILlmGateway
 
         if (string.IsNullOrWhiteSpace(response.Text))
         {
-            await RecordCallAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, cost, stopwatch.ElapsedMilliseconds);
-            return (LlmResult.Refused(LlmRefusalReason.Failed), null);
+            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, cost, stopwatch.ElapsedMilliseconds,
+                attemptId, "empty_response");
+            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
 
         var reportedCost = ExtractReportedCost(response);
-        await RecordCallAsync(
+        await RecordAndTraceAsync(
             request, candidate, LlmCallOutcome.Ok,
             inputTokens is { } i ? (int)i : null,
             outputTokens is { } o ? (int)o : null,
-            reportedCost, cost, stopwatch.ElapsedMilliseconds);
+            reportedCost, cost, stopwatch.ElapsedMilliseconds, attemptId, "normal", response.Text);
 
-        return (LlmResult.Answered(response.Text, candidate.Name), null);
+        return (LlmResult.Answered(response.Text, candidate.Name) with { TraceAttemptId = attemptId }, null);
     }
 
     /// <summary>Reads the provider-reported cost defensively: it may arrive as a <c>decimal</c> (set
@@ -469,7 +517,20 @@ public class LlmGateway : ILlmGateway
         };
     }
 
-    private async Task RecordCallAsync(
+    private async Task RecordAndTraceAsync(
+        LlmRequest request, ModelCatalogEntry candidate, LlmCallOutcome outcome,
+        int? inputTokens, int? outputTokens, decimal? reportedCost, decimal cost, long durationMs,
+        Guid attemptId, string reason, string? text = null)
+    {
+        var callId = await RecordCallAsync(request, candidate, outcome, inputTokens, outputTokens, reportedCost, cost, durationMs);
+        await TraceModelResultAsync(attemptId, callId, outcome == LlmCallOutcome.Ok ? "ok" : "failed", reason, text);
+    }
+
+    private Task TraceModelResultAsync(Guid attemptId, long? callId, string outcome, string reason, string? text) =>
+        TraceSafety.RecordAsync(_trace, new TraceEventData(
+            "model_result", outcome, reason, AttemptId: attemptId, LlmCallId: callId, Text: text));
+
+    private async Task<long?> RecordCallAsync(
         LlmRequest request, ModelCatalogEntry candidate, LlmCallOutcome outcome,
         int? inputTokens, int? outputTokens, decimal? reportedCost, decimal cost, long durationMs)
     {
@@ -499,6 +560,7 @@ public class LlmGateway : ILlmGateway
             // (succeeded or definitively failed) -- recording the attempt is best-effort bookkeeping
             // that should not be aborted by a cancellation racing the end of the call.
             await _db.SaveChangesAsync(CancellationToken.None);
+            return call.Id;
         }
         catch (Exception ex)
         {
@@ -509,6 +571,7 @@ public class LlmGateway : ILlmGateway
             // on the same (scoped) DbContext.
             _logger.LogError("Failed to record LLM call attempt: {ExceptionType}", ex.GetType().Name);
             _db.Entry(call).State = EntityState.Detached;
+            return null;
         }
     }
 }

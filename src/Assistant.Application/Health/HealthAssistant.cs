@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
@@ -36,6 +37,7 @@ public class HealthAssistant : IHealthAssistant
     private readonly HealthCommands _commands;
     private readonly HealthMessagePipeline _pipeline;
     private readonly HealthConfirmations _confirmations;
+    private readonly ITraceSession _trace;
 
     public HealthAssistant(
         IHealthProfileStore profiles,
@@ -51,16 +53,18 @@ public class HealthAssistant : IHealthAssistant
         AddressedHintThrottle hints,
         IClock clock,
         BuildInfo buildInfo,
-        ILogger<HealthAssistant> logger)
+        ILogger<HealthAssistant> logger,
+        ITraceSession? trace = null)
     {
+        _trace = trace ?? NullTraceSession.Instance;
         _profiles = profiles;
         _replies = new HealthReplies(logger);
-        var safety = new HealthSafety(profiles, events, safetyAlerts, clock, _replies, logger);
-        var answers = new HealthAnswers(profiles, events, messages, gateway, config, rolePrompts, clock, logger);
-        _confirmations = new HealthConfirmations(events, pendingRecords, clock, _replies, safety, logger);
+        var safety = new HealthSafety(profiles, events, safetyAlerts, clock, _replies, logger, _trace);
+        var answers = new HealthAnswers(profiles, events, messages, gateway, config, rolePrompts, clock, logger, _trace);
+        _confirmations = new HealthConfirmations(events, pendingRecords, clock, _replies, safety, logger, _trace);
         _commands = new HealthCommands(profiles, ownership, events, _replies, clock, buildInfo);
         _pipeline = new HealthMessagePipeline(
-            profiles, events, gateway, rolePrompts, failureNotices, hints, clock, _replies, safety, answers, _confirmations, logger);
+            profiles, events, gateway, rolePrompts, failureNotices, hints, clock, _replies, safety, answers, _confirmations, logger, _trace);
     }
 
     public async Task HandleAsync(
@@ -68,6 +72,7 @@ public class HealthAssistant : IHealthAssistant
     {
         if (bot.FamilyId is not { } familyId)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "not_configured"));
             return;
         }
 
@@ -80,6 +85,11 @@ public class HealthAssistant : IHealthAssistant
                 await _pipeline.HandleEditAsync(bot, telegramClient, message, familyId, storeResult, cancellationToken);
             }
 
+            else
+            {
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "already_processed"));
+            }
+
             return;
         }
 
@@ -90,11 +100,13 @@ public class HealthAssistant : IHealthAssistant
 
         if (message.Kind == MessageKind.Service)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "service_or_non_text"));
             return;
         }
 
         if (message.Kind != MessageKind.Text || message.Text is not { } text)
         {
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "service_or_non_text"));
             // Voice and photos are not supported yet: say so in private chats, stay silent in groups.
             if (message.ChatType == "private")
             {
@@ -114,6 +126,10 @@ public class HealthAssistant : IHealthAssistant
             if (!text.StartsWith('/'))
             {
                 await _pipeline.HandleNewAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, replyToAll);
+            }
+            else
+            {
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "other_bot_command"));
             }
 
             return;
