@@ -63,9 +63,25 @@ public static class TelegramUpdateMapper
             MigrateToChatId: tgMessage.MigrateToChatId,
             RawJson: rawJson,
             ReplyToMessageId: replyToMessageId,
-            ReplyToUserId: replyToUserId);
+            ReplyToUserId: replyToUserId,
+            Document: tgMessage.Document is { } document ? new DocumentAttachment(
+                document.FileId, document.FileUniqueId, BoundedMetadata(document.FileName),
+                BoundedMetadata(document.MimeType), ValidSize(document.FileSize)) : null,
+            Photo: tgMessage.Photo is { Length: > 0 } photos ? new PhotoAttachment(
+                photos.Select(p => new PhotoSizeAttachment(p.FileId, p.FileUniqueId,
+                    p.Width, p.Height, ValidSize(p.FileSize))).ToArray()) : null,
+            MediaGroupId: tgMessage.MediaGroupId);
 
         return new IncomingUpdate(update.Id, message);
+    }
+
+    private static long? ValidSize(long? size) => size is >= 0 ? size : null;
+
+    private static string? BoundedMetadata(string? value)
+    {
+        if (value is null) return null;
+        var clean = new string(value.Where(c => !char.IsControl(c)).ToArray()).Trim();
+        return clean.Length > 255 ? clean[..255] : clean;
     }
 
     private static CallbackQueryInfo MapCallbackQuery(CallbackQuery callbackQuery) => new(

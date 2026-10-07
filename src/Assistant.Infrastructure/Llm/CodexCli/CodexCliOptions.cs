@@ -7,4 +7,5 @@ public sealed class CodexCliOptions
     public string HomeDirectory { get; init; } = "/home/app/.codex";
     public int MaxOutputTokens { get; init; } = 1000;
     public int CallTimeoutSeconds { get; init; } = 120;
+    public bool ImageInputEnabled { get; init; } = true;
 }

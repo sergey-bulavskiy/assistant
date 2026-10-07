@@ -9,6 +9,35 @@ namespace Assistant.Infrastructure.Telegram;
 
 public class TelegramClientAdapter : ITelegramClient
 {
+    public const long MaxDownloadBytes = 20_000_000;
+
+    public async Task<long> DownloadFileAsync(
+        string fileId, Stream destination, long maxBytes, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileId);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!destination.CanWrite) throw new ArgumentException("Destination must be writable.", nameof(destination));
+        if (maxBytes is <= 0 or > MaxDownloadBytes) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            var file = await _client.GetFile(fileId, linked.Token);
+            if (file.FileSize > maxBytes) throw new TelegramFileDownloadException(TelegramFileDownloadFailure.TooLarge);
+            using var bounded = new BoundedDownloadStream(destination, maxBytes);
+            try { await _client.DownloadFile(file, bounded, linked.Token); }
+            catch (Exception) when (bounded.LimitExceeded)
+            { throw new TelegramFileDownloadException(TelegramFileDownloadFailure.TooLarge); }
+            return bounded.BytesWritten;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException)
+        { throw new TelegramFileDownloadException(TelegramFileDownloadFailure.Timeout); }
+        catch (TelegramFileDownloadException) { throw; }
+        catch (Exception)
+        { throw new TelegramFileDownloadException(TelegramFileDownloadFailure.Unavailable); }
+    }
+
     private readonly ITelegramBotClient _client;
 
     public TelegramClientAdapter(ITelegramBotClient client)

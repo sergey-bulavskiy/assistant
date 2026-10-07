@@ -5,5 +5,7 @@ public enum LlmCallOutcome
     Ok,
     LimitReached,
     Failed,
-    Timeout
+    Timeout,
+    Dispatching,
+    OutcomeUnknown
 }

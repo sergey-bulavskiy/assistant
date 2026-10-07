@@ -10,6 +10,7 @@ public class LlmCallConfiguration : IEntityTypeConfiguration<LlmCall>
     {
         builder.ToTable("llm_calls");
         builder.HasKey(c => c.Id);
+        builder.HasIndex(c => c.AttemptKey).IsUnique().HasFilter("attempt_key IS NOT NULL");
         builder.Property(c => c.Tier).HasMaxLength(32).IsRequired();
         builder.Property(c => c.Provider).HasMaxLength(64).IsRequired();
         builder.Property(c => c.Model).HasMaxLength(128).IsRequired();

@@ -382,11 +382,26 @@ owner's explicit approval.
 Subscription calls retain call/token/attempt accounting with zero monetary `Cost`; this does not
 mean unlimited quota or represent subscription charges. Auth, process or quota failure reports
 unavailability and waits. It never automatically invokes Claude or a paid API. Raw CLI event
-streams can contain private content and must never enter ordinary logs or traces. This adapter
-scope is text only; photo support needs separate verification and a later request-contract change.
+streams can contain private content and must never enter ordinary logs or traces.
+Native image requests support one JPEG or PNG up to 20,000,000 bytes on the verified combination
+of Codex CLI `0.160.1` and `gpt-6.1-sol`. The adapter passes the image directly with `--image`
+while keeping tools disabled. This path was verified with synthetic inputs on Windows and
+nonroot Linux. Image attempts use the same call/token counters and zero subscription monetary
+cost. A durable attempt identity prevents automatic redispatch after an uncertain result or
+restart. Local hosts can explicitly disable this capability with `CODEX_IMAGE_INPUT_ENABLED=false`;
+the production compose uses the enabled default. This option does not select or change model chains.
 For Codex, `LLM_MAX_OUTPUT_TOKENS` is an instruction target rather than a verified hard generation
 cap. The adapter rejects final text above eight characters per configured token and bounds final
 file bytes/process streams; timeout and cancellation limit execution separately.
+
+Role import handlers share Telegram document/photo metadata and bounded attachment downloads.
+Captions remain ordinary message text, and photo size variants describe one source image.
+Downloads enforce the actual-byte limit, a 60-second deadline and caller cancellation.
+Document text extraction accepts UTF-8 plain text/Markdown and PDFs with a readable text layer,
+retaining at most 200,000 characters from at most 20,000,000 bytes. Truncation and unreadable,
+encrypted, malformed or unsupported files have explicit results. PDF extraction preserves page
+boundaries and marks its text-only coverage. Scan-only PDFs have no readable text in this path.
+PdfPig page parsing is synchronous, so cancellation takes effect between page operations.
 
 For a count-only audit of General preferences, privately query `chat_settings` for the number of
 non-null `preferred_model` values outside the final configured model list. Do not return rows,
