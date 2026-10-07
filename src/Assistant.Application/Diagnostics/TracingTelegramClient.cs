@@ -28,6 +28,8 @@ public sealed class TracingTelegramClient(ITraceSession trace, ITelegramClient i
     }
 
     public Task<BotIdentity> GetMeAsync(CancellationToken cancellationToken) => inner.GetMeAsync(cancellationToken);
+    public Task<long> DownloadFileAsync(string fileId, Stream destination, long maxBytes, CancellationToken cancellationToken) =>
+        inner.DownloadFileAsync(fileId, destination, maxBytes, cancellationToken);
     public Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(long offset, int timeoutSeconds, IReadOnlyList<UpdateKind> allowedUpdates, CancellationToken cancellationToken) =>
         inner.GetUpdatesAsync(offset, timeoutSeconds, allowedUpdates, cancellationToken);
     public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken) =>

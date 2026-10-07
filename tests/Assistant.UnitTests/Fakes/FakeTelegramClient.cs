@@ -4,6 +4,21 @@ namespace Assistant.UnitTests.Fakes;
 
 public class FakeTelegramClient : ITelegramClient
 {
+    public System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Files { get; } = new();
+    public System.Collections.Concurrent.ConcurrentQueue<string> DownloadedFiles { get; } = new();
+
+    public async Task<long> DownloadFileAsync(string fileId, Stream destination, long maxBytes, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        DownloadedFiles.Enqueue(fileId);
+        if (!Files.TryGetValue(fileId, out var bytes))
+            throw new TelegramFileDownloadException(TelegramFileDownloadFailure.Unavailable);
+        if (bytes.LongLength > maxBytes)
+            throw new TelegramFileDownloadException(TelegramFileDownloadFailure.TooLarge);
+        await destination.WriteAsync(bytes, cancellationToken);
+        return bytes.LongLength;
+    }
+
     public List<(long ChatId, int? TopicId, string Text, int? ReplyToMessageId)> Sent { get; } = new();
 
     public List<(long ChatId, int MessageId, IReadOnlyList<InlineButton> Buttons)> ButtonEdits { get; } = new();
