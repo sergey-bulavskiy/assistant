@@ -409,7 +409,9 @@
   Deletion is a tombstone, and a repost under a new Telegram message is a separate source.
 - Document source transactions lock the exact family-scoped `messages` row first, before admission,
   document and pending transitions. Initial document-caption EventStore/PendingRecordStore writes
-  use the same lock and reject tombstones; reuse the current pending-acceptance transaction, never
+  identify both bound and unbound admissions by immutable incoming source identity and exact
+  family/profile/internal-bot/Telegram-bot ownership, including tombstones. They use the same lock
+  and recheck deletion; reuse the current pending-acceptance transaction, never
   nest one. No network/parse work under a source transaction. Ordinary text sources keep their path.
 - Conditional lease operations require the exact owned Guid and unexpired lease. Five-minute leases
   renew every 30 seconds from independent DI scopes with current family set explicitly. A failed
@@ -421,3 +423,6 @@
 - Admission/storage transient wrappers contain fixed text and no inner exception. Document download,
   parse and transport errors log exception types only; file IDs, filenames, captions and content are
   never ordinary logs. Original bytes are neither archived nor passed to diagnostic traces.
+- Bounded filename/MIME normalization must cut before a complete UTF-16 surrogate pair, retaining
+  recognized filename suffixes. Npgsql encodes strings strictly; a dangling surrogate rejects an
+  otherwise valid upload before its transport offset commits. Keep existing metadata column bounds.

@@ -21,6 +21,8 @@
 - Caption goes directly through the ordinary recording/safety/eligible-answer pipeline, with command
   and model-undo mutation disabled. Body text is untrusted consultation JSON, never diary/profile input.
   Document edits are ignored; replacement requires delete and repost. `/docs` has no model/download.
+- Missing document content is requested as pasted/recognized text, readable-text PDF or UTF-8
+  .txt/.md within 20 MB. The answer prompt must not ask for uploaded photos/scans as recovery input.
 - Source `/del` atomically tombstones document/admission, caption facts and pending confirmations;
   late model/extraction results cannot recreate them. Event-only deletion retains an active document
   reaction. Close returned pending prompts only after commit, using generic text.

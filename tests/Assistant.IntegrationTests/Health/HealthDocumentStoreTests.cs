@@ -1005,6 +1005,129 @@ public sealed class HealthDocumentStoreTests : IntegrationTestBase
         (await verify.Context.PendingRecords.CountAsync()).ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unbound_caption_writer_waits_for_delete_and_cannot_recreate_source_effects(bool pending)
+    {
+        var seed = await SeedAsync();
+        HealthDocumentAdmissionInfo source;
+        await using (var setup = Open(seed.Scope.FamilyId))
+        {
+            var unbound = (await setup.Documents.AdmitAsync(seed.Scope, seed.Message, 10, NoCancellation)).ShouldNotBeNull();
+            var stored = await setup.Messages.StoreAsync(seed.Scope.TelegramBotId, 10, seed.Message, NoCancellation);
+            source = unbound with { SourceMessageId = stored.MessageDbId.ShouldNotBeNull() };
+            (await setup.Context.HealthDocumentAdmissions.AsNoTracking().SingleAsync()).SourceMessageId.ShouldBeNull();
+        }
+        var hold = new HoldUpdate("health_document_admissions");
+        var boundary = new CaptionWriteBoundary(pending ? "pending_records" : "events", holdInsert: false);
+        await using var deleting = Open(seed.Scope.FamilyId, hold);
+        await using var writer = Open(seed.Scope.FamilyId, boundary);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var deletion = deleting.Documents.DeleteSourceAsync(seed.Scope, seed.Message.ChatId, seed.Message.TopicId,
+            seed.Message.MessageId, 222, timeout.Token);
+        Task? writing = null;
+        Exception? failure = null;
+        try
+        {
+            await hold.Entered.Task.WaitAsync(timeout.Token); // Deletion already owns the exact source row.
+            writing = AddCaptionAsync(writer, seed.Scope, source, pending, timeout.Token);
+            (await boundary.First.Task.WaitAsync(timeout.Token)).ShouldBe("source_lock");
+        }
+        finally
+        {
+            hold.Release();
+            await deletion;
+            if (writing is not null) failure = await CaptureFailureAsync(writing);
+        }
+        failure.ShouldBeOfType<InvalidOperationException>().Message.ShouldBe("Document source is no longer active.");
+        (await deletion).DocumentDeleted.ShouldBeTrue();
+        await using var verify = Open(seed.Scope.FamilyId);
+        (await verify.Context.Events.CountAsync()).ShouldBe(0);
+        (await verify.Context.PendingRecords.CountAsync()).ShouldBe(0);
+        var admission = await verify.Context.HealthDocumentAdmissions.AsNoTracking().SingleAsync();
+        admission.SourceMessageId.ShouldBe(source.SourceMessageId);
+        admission.Status.ShouldBe("deleted");
+        (await verify.Documents.TryClaimDeliveryAsync(source, true, NoCancellation)).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unbound_caption_writer_holds_source_lock_and_waiting_delete_includes_its_committed_effect(bool pending)
+    {
+        var seed = await SeedAsync();
+        HealthDocumentAdmissionInfo source;
+        await using (var setup = Open(seed.Scope.FamilyId))
+        {
+            var unbound = (await setup.Documents.AdmitAsync(seed.Scope, seed.Message, 10, NoCancellation)).ShouldNotBeNull();
+            var stored = await setup.Messages.StoreAsync(seed.Scope.TelegramBotId, 10, seed.Message, NoCancellation);
+            source = unbound with { SourceMessageId = stored.MessageDbId.ShouldNotBeNull() };
+            (await setup.Context.HealthDocumentAdmissions.AsNoTracking().SingleAsync()).SourceMessageId.ShouldBeNull();
+        }
+        var boundary = new CaptionWriteBoundary(pending ? "pending_records" : "events", holdInsert: true);
+        var arriving = new ObserveSourceLock();
+        await using var writer = Open(seed.Scope.FamilyId, boundary);
+        await using var deleting = Open(seed.Scope.FamilyId, arriving);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var writing = AddCaptionAsync(writer, seed.Scope, source, pending, timeout.Token);
+        Task<HealthDocumentSourceDeletion>? deletion = null;
+        try
+        {
+            await boundary.InsertEntered.Task.WaitAsync(timeout.Token);
+            (await boundary.First.Task.WaitAsync(timeout.Token)).ShouldBe("source_lock");
+            deletion = deleting.Documents.DeleteSourceAsync(seed.Scope, seed.Message.ChatId, seed.Message.TopicId,
+                seed.Message.MessageId, 222, timeout.Token);
+            await arriving.Entered.Task.WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            boundary.Release();
+            await Task.WhenAll(writing, deletion ?? Task.FromResult(HealthDocumentSourceDeletion.None));
+        }
+        var result = await deletion!;
+        result.DeletedEvents.Events.Count.ShouldBe(pending ? 0 : 1);
+        result.ClosedPending.Count.ShouldBe(pending ? 1 : 0);
+        result.DeletedEvents.MessagesWithoutEvents.ShouldBe(new[] { new MessageRef(seed.Message.ChatId, seed.Message.MessageId) });
+        await using var verify = Open(seed.Scope.FamilyId);
+        (await verify.Context.Events.CountAsync(e => e.DeletedAt == null)).ShouldBe(0);
+        (await verify.Context.PendingRecords.CountAsync(p => p.Status == PendingRecordStatuses.Pending)).ShouldBe(0);
+        (await verify.Context.Events.CountAsync()).ShouldBe(pending ? 0 : 1);
+        (await verify.Context.PendingRecords.CountAsync()).ShouldBe(pending ? 1 : 0);
+        (await verify.Context.HealthDocumentAdmissions.AsNoTracking().SingleAsync()).Status.ShouldBe("deleted");
+    }
+
+    [Fact]
+    public async Task Supplementary_character_at_filename_truncation_boundary_admits_and_binds_as_supported_text()
+    {
+        var seed = await SeedAsync();
+        var fileName = new string('a', 249) + "😀" + new string('b', 10) + ".txt";
+        var message = seed.Message with { Document = seed.Message.Document! with { FileName = fileName } };
+        await using var scope = Open(seed.Scope.FamilyId);
+        var bound = await AdmitBindAsync(scope, seed, message, 10);
+        var expected = new string('a', 249) + "….txt";
+        var retainedName = bound.Attachment.FileName.ShouldNotBeNull();
+        retainedName.ShouldBe(expected);
+        retainedName.Length.ShouldBeLessThanOrEqualTo(255);
+        HealthDocumentCandidate.IsSupported(bound.Attachment).ShouldBeTrue();
+        var strict = new System.Text.UTF8Encoding(false, true);
+        strict.GetString(strict.GetBytes(retainedName)).ShouldBe(expected);
+        var admission = await scope.Context.HealthDocumentAdmissions.AsNoTracking().SingleAsync();
+        admission.FileName.ShouldBe(expected);
+        admission.SourceMessageId.ShouldBe(bound.SourceMessageId);
+    }
+
+    private static Task AddCaptionAsync(TestScope scope, HealthDocumentScope owner, HealthDocumentAdmissionInfo source,
+        bool pending, CancellationToken token) => pending
+        ? scope.Pending.AddAsync(owner.FamilyId, owner.ProfileId, Pending(source), token)
+        : scope.Events.AddAsync(owner.FamilyId, owner.ProfileId, Source(source), [Reading()], token);
+
+    private static async Task<Exception?> CaptureFailureAsync(Task task)
+    {
+        try { await task; return null; }
+        catch (Exception exception) { return exception; } // Assert exact type/message after both scopes finish.
+    }
+
     private async Task<Seed> SeedAsync(
         long telegramBotId = 1001, string chatType = "supergroup", long? userId = 111, long? existingFamilyId = null)
     {
@@ -1132,6 +1255,32 @@ public sealed class HealthDocumentStoreTests : IntegrationTestBase
             if (command.CommandText.Contains("FOR UPDATE", StringComparison.OrdinalIgnoreCase)) Entered.TrySetResult(true);
             return ValueTask.FromResult(result);
         }
+    }
+
+    private sealed class CaptionWriteBoundary(string table, bool holdInsert) : DbCommandInterceptor
+    {
+        public TaskCompletionSource<string> First { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> InsertEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Release() => _release.TrySetResult(true);
+        private async Task ObserveAsync(DbCommand command, CancellationToken token)
+        {
+            if (command.CommandText.Contains("FOR UPDATE", StringComparison.OrdinalIgnoreCase))
+                First.TrySetResult("source_lock");
+            if (command.CommandText.Replace("\"", "", StringComparison.Ordinal)
+                .Contains("INSERT INTO " + table, StringComparison.OrdinalIgnoreCase))
+            {
+                First.TrySetResult("caption_insert");
+                InsertEntered.TrySetResult(true);
+                if (holdInsert) await _release.Task.WaitAsync(token);
+            }
+        }
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        { await ObserveAsync(command, cancellationToken); return result; }
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        { await ObserveAsync(command, cancellationToken); return result; }
     }
 
     private sealed class CaptureReads : DbCommandInterceptor

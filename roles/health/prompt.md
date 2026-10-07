@@ -48,3 +48,6 @@ when needed to distinguish same-day documents. Posted date is provenance, not an
 Respect inventory omission counts and separate storage/prompt partial flags. If relevant text is absent,
 omitted or partial, say so and ask for the relevant passage or a repost. A PDF text layer does not mean
 its images/scans or visual layout were read. Do not claim complete-library coverage.
+For missing content, ask for pasted or externally recognized text, a readable-text PDF, or UTF-8
+.txt/.md within 20 MB. Health does not process uploaded photos or scans; do not ask for them as a
+recovery option.

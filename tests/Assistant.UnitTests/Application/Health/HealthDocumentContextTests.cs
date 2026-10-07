@@ -22,7 +22,29 @@ public sealed class HealthDocumentContextTests
     private static string TextSection(HealthConsultationSnapshot snapshot) => snapshot.SystemPrompt[
         snapshot.SystemPrompt.IndexOf("- Document text data", StringComparison.Ordinal)..];
     private static JsonElement[] TextEntries(HealthConsultationSnapshot snapshot) => TextSection(snapshot).Split('\n')
-        .Where(l => l.TrimStart().StartsWith('{')).Select(l => JsonDocument.Parse(l).RootElement.Clone()).ToArray();
+        .Where(l => l.TrimStart().StartsWith('{')).Select(l =>
+        {
+            using var parsed = JsonDocument.Parse(l);
+            return parsed.RootElement.Clone();
+        }).ToArray();
+
+    [Theory]
+    [InlineData("supported")]
+    [InlineData("unsupported")]
+    [InlineData("metadata")]
+    public void Metadata_truncation_preserves_valid_unicode_and_supported_suffix(string branch)
+    {
+        var supported = branch == "supported";
+        var prefix = new string('a', supported ? 249 : 253);
+        var raw = prefix + "😀" + new string('b', 10) + (supported ? ".txt" : ".bin");
+        var normalized = (branch == "metadata" ? HealthDocumentCandidate.Metadata(raw) : HealthDocumentCandidate.FileNameMetadata(raw)).ShouldNotBeNull();
+        var expected = prefix + (supported ? "….txt" : "…");
+        normalized.ShouldBe(expected);
+        normalized.Length.ShouldBeLessThanOrEqualTo(255);
+        var strict = new System.Text.UTF8Encoding(false, true);
+        strict.GetString(strict.GetBytes(normalized)).ShouldBe(expected);
+        if (supported) normalized.ShouldEndWith(".txt");
+    }
 
     [Fact]
     public void All_age_inventory_includes_no_text_and_orders_by_posted_date_then_id()

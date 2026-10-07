@@ -27,7 +27,7 @@ public static class HealthDocumentCandidate
     {
         if (value is null) return null;
         var clean = new string(value.Where(c => !char.IsControl(c)).ToArray()).Trim();
-        return clean.Length <= 255 ? clean : clean[..254] + "…";
+        return clean.Length <= 255 ? clean : SafePrefix(clean, 254) + "…";
     }
 
     public static string? FileNameMetadata(string? value)
@@ -38,8 +38,13 @@ public static class HealthDocumentCandidate
         var extension = Path.GetExtension(clean);
         if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) || extension.Equals(".md", StringComparison.OrdinalIgnoreCase))
-            return clean[..(254 - extension.Length)] + "…" + extension;
-        return clean[..254] + "…";
+            return SafePrefix(clean, 254 - extension.Length) + "…" + extension;
+        return SafePrefix(clean, 254) + "…";
+    }
+    private static string SafePrefix(string value, int length)
+    {
+        if (char.IsHighSurrogate(value[length - 1]) && char.IsLowSurrogate(value[length])) length--;
+        return value[..length];
     }
 }
 
