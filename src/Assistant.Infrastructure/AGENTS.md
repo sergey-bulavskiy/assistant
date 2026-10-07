@@ -14,6 +14,10 @@
 
   `AssistantDbContextFactory` is the design-time factory, so no startup project or running
   database is needed. Never edit a migration that is already on `main`; add a new one.
+  The current [dotnet/skills](https://github.com/dotnet/skills) catalog has EF Core query and data
+  access guidance, but no skill for creating this application's schema migrations. Follow this
+  guide for EF migrations; do not apply .NET framework or test-framework migration instructions
+  to the database schema.
 - On a fresh database EF logs an Error about the missing `__EFMigrationsHistory` table. It is
   harmless.
 - Message storage must stay idempotent per Telegram `update_id` and per message key (restart +
