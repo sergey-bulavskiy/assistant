@@ -1,7 +1,10 @@
 namespace Assistant.Application.Health;
 
 /// <summary>The one profile of a health bot. Id is health_profiles.id.</summary>
-public record HealthProfileInfo(long Id, DateOnly? StageStartDate, string TimeZone, string EmergencyPhone, string? ContextNote);
+public record HealthProfileInfo(long Id, DateOnly? StageStartDate, string TimeZone, string EmergencyPhone, string? ContextNote,
+    string? Conditions = null, string? Medications = null, string? Allergies = null, string? DoctorPlan = null, string? DoctorContacts = null);
+
+public enum HealthProfileField { Conditions, Medications, Allergies, DoctorPlan, DoctorContacts }
 
 /// <summary>Health profile and safety rules. Fails closed: every method takes familyId and throws
 /// InvalidOperationException unless ICurrentFamily.FamilyId equals it, so health rows are only ever
@@ -15,6 +18,9 @@ public interface IHealthProfileStore
 
     /// <summary>Writes StageStartDate, TimeZone, EmergencyPhone and ContextNote of profile.Id.</summary>
     Task SaveProfileAsync(long familyId, HealthProfileInfo profile, long updatedByUserId, CancellationToken cancellationToken);
+
+    /// <summary>Updates exactly one consultation field, preserving concurrent edits to other fields.</summary>
+    Task SaveFieldAsync(long familyId, long profileId, HealthProfileField field, string? value, long updatedByUserId, CancellationToken cancellationToken);
 
     /// <summary>The profile's rules in seed order; empty for another family's profile.</summary>
     Task<IReadOnlyList<SafetyRuleInfo>> GetRulesAsync(long familyId, long profileId, CancellationToken cancellationToken);
