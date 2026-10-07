@@ -1,6 +1,7 @@
 using Assistant.Application.Common;
 using Assistant.Application.Health;
 using Assistant.Application.Messages;
+using Assistant.Application.Vet;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Assistant.Application;
@@ -13,6 +14,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<UpdateHandler>();
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
         services.AddScoped<IHealthAssistant, HealthAssistant>();
+        services.AddScoped<IVetAssistant, VetAssistant>();
         services.AddSingleton<FailureNoticeThrottle>();
         return services;
     }

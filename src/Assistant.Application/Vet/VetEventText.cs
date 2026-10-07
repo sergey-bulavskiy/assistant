@@ -29,7 +29,8 @@ public static class VetEventText
 }
 
 public sealed record VetProposal(IReadOnlyList<VetCandidate> Candidates,
-    IReadOnlyList<VetEventChange> Changes, IReadOnlyList<string> Reasons, string Kind, bool RequiresTargetSelection = false);
+    IReadOnlyList<VetEventChange> Changes, IReadOnlyList<string> Reasons, string Kind, bool RequiresTargetSelection = false,
+    Guid? ClarificationInputRevisionId = null, Guid? ClarificationResultId = null, bool RequiresClarification = false);
 
 public sealed record VetTextPlan(IReadOnlyList<VetEventChange> ClearChanges, VetProposal? Pending);
 
@@ -97,7 +98,7 @@ public static class VetTextPlanner
         }
         if (reasons.Count > 0)
             return new([], new(validated.Where(v => v.Candidate.Intent != "question_only").Select(v => v.Candidate).ToArray(),
-                changes, reasons, "edit", requiresTargets));
+                changes, reasons, "edit", requiresTargets, RequiresClarification: unresolved.Count > 0));
         return new(changes, null);
     }
 

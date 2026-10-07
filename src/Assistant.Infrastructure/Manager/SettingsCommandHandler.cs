@@ -30,6 +30,8 @@ public class SettingsCommandHandler
         "settingsplace_autoreply_off",
         "settingsplace_healthquestions_on",
         "settingsplace_healthquestions_off",
+        "settingsplace_vetquestions_on",
+        "settingsplace_vetquestions_off",
         "member_disable",
         "member_enable",
         "member_makeowner"
@@ -108,6 +110,12 @@ public class SettingsCommandHandler
                 buttons.Add(place.ReplyToAll
                     ? new InlineButton("Отвечать без упоминания: вкл", $"settingsplace_healthquestions_off:{place.Id}")
                     : new InlineButton("Отвечать без упоминания: выкл", $"settingsplace_healthquestions_on:{place.Id}"));
+            }
+            else if (BotRoles.IsVet(placeBot.Role))
+            {
+                buttons.Add(place.ReplyToAll
+                    ? new InlineButton("Vet: отвечать без упоминания: вкл", $"settingsplace_vetquestions_off:{place.Id}")
+                    : new InlineButton("Vet: отвечать без упоминания: выкл", $"settingsplace_vetquestions_on:{place.Id}"));
             }
 
             // Topics of one chat share its title; the topic id tells them apart.
@@ -239,6 +247,8 @@ public class SettingsCommandHandler
             case "settingsplace_autoreply_off":
             case "settingsplace_healthquestions_on":
             case "settingsplace_healthquestions_off":
+            case "settingsplace_vetquestions_on":
+            case "settingsplace_vetquestions_off":
             {
                 var place = await _db.Places.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
                 var bot = place is null
@@ -252,19 +262,20 @@ public class SettingsCommandHandler
 
                 // Server-side too: callback data is guessable, the button alone proves nothing.
                 var healthQuestions = action.StartsWith("settingsplace_healthquestions_", StringComparison.Ordinal);
-                if (healthQuestions ? !BotRoles.IsHealth(bot.Role) : !BotRoles.IsGeneral(bot.Role))
+                var vetQuestions = action.StartsWith("settingsplace_vetquestions_", StringComparison.Ordinal);
+                if (healthQuestions ? !BotRoles.IsHealth(bot.Role) : vetQuestions ? !BotRoles.IsVet(bot.Role) : !BotRoles.IsGeneral(bot.Role))
                 {
                     await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId,
-                        healthQuestions ? "Доступно только для бота health." : "Доступно только для бота general.", cancellationToken);
+                        healthQuestions ? "Доступно только для бота health." : vetQuestions ? "Доступно только для бота vet." : "Доступно только для бота general.", cancellationToken);
                     return;
                 }
 
-                var turnOn = action is "settingsplace_autoreply_on" or "settingsplace_healthquestions_on";
+                var turnOn = action is "settingsplace_autoreply_on" or "settingsplace_healthquestions_on" or "settingsplace_vetquestions_on";
                 place.ReplyToAll = turnOn;
                 await _db.SaveChangesAsync(cancellationToken);
                 await telegramClient.AnswerCallbackAsync(
                     callback.CallbackQueryId,
-                    healthQuestions
+                    healthQuestions || vetQuestions
                         ? turnOn ? "Готово: отвечаю без упоминания, когда сообщение ожидает ответа." : "Готово: отвечаю только при обращении."
                         : turnOn ? "Готово: отвечаю на все сообщения." : "Готово: отвечаю только на обращения.",
                     cancellationToken);

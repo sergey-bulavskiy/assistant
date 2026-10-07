@@ -30,6 +30,8 @@
 
   <!-- Fail the build (also inside Docker) when the role prompts are not where the item above looks. -->
   <Target Name="EnsureRolePromptsPresent" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)../../roles/vet/prompt.md') Or !Exists('$(MSBuildThisFileDirectory)../../roles/vet/extract.md')"
+           Text="Required Vet role prompts are missing." />
     <Error Condition="!Exists('$(MSBuildThisFileDirectory)../../roles/health/prompt.md') Or !Exists('$(MSBuildThisFileDirectory)../../roles/health/extract.md')"
            Text="roles/health/prompt.md or roles/health/extract.md is missing. Role prompts are embedded from the repo-root roles/ folder; the Docker build must copy it." />
   </Target>

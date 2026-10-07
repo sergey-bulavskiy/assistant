@@ -65,6 +65,8 @@ public interface IVetDiaryStore
     Task<bool> GetReplyToAllAsync(VetDiaryScope scope, CancellationToken cancellationToken);
     Task<IReadOnlyList<VetEvent>> GetSourceEventsAsync(VetDiaryScope scope, Guid sourceId, CancellationToken cancellationToken);
     Task<VetEvent?> GetEventAsync(VetDiaryScope scope, long eventId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<VetEvent>> FindDateTypeAsync(VetDiaryScope scope, string eventType,
+        DateTimeOffset from, DateTimeOffset until, CancellationToken cancellationToken);
     Task<VetHistoryPage> QueryAsync(VetDiaryScope scope, long profileId, DateTimeOffset from,
         DateTimeOffset until, int offset, int pageSize, CancellationToken cancellationToken);
     Task<VetPendingDecision> PutPendingAsync(VetDiaryScope scope, Guid sourceId, Guid revisionId,
@@ -73,7 +75,7 @@ public interface IVetDiaryStore
     Task<VetPendingDecision?> GetPendingAsync(VetDiaryScope scope, long id, CancellationToken cancellationToken);
     Task<bool> RevisePendingAsync(VetDiaryScope scope, long id, int expectedRevision,
         string proposalJson, CancellationToken cancellationToken);
-    Task SetPromptAsync(VetDiaryScope scope, long id, int messageId, CancellationToken cancellationToken);
+    Task SetPromptAsync(VetDiaryScope scope, long id, int reviewRevision, int messageId, CancellationToken cancellationToken);
     Task<bool> DeclineAsync(VetDiaryScope scope, long id, int reviewRevision, long actorUserId, CancellationToken cancellationToken);
     Task<VetMutationResult> ApplyAsync(VetDiaryMutation mutation, CancellationToken cancellationToken);
     Task<VetMutationResult> UndoAsync(VetDiaryScope scope, long actorUserId, Guid operationKey, CancellationToken cancellationToken);

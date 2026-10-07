@@ -41,7 +41,7 @@ public sealed partial class VetAssistant
     }
 
     private async Task ResolveNaturalAsync(VetOperation op, IReadOnlyList<VetCandidate> supplied, ReceivingBot bot,
-        ITelegramClient client, IncomingMessage message, VetProfile profile, CancellationToken ct)
+        ITelegramClient client, IncomingMessage message, VetAdmittedSource clarification, VetProfile profile, CancellationToken ct)
     {
         var scope = VetDiaryScope.From(bot, message);
         var pending = await _diary.GetPendingAsync(scope, ct);
@@ -90,7 +90,47 @@ public sealed partial class VetAssistant
                     Intent = "record"
                 });
             }
-            var revised = proposal with { Candidates = merged, Changes = proposal.Kind == "confirm" ? [] : proposal.Changes };
+            var clarificationResult = await _diary.GetResultAsync(scope, clarification.Revision.Id, ct);
+            var revised = proposal with { Candidates = merged, Changes = [],
+                ClarificationInputRevisionId = clarification.Revision.Id, ClarificationResultId = clarificationResult!.Id,
+                RequiresClarification = false, Reasons = [] };
+            if (proposal.Kind == "manual")
+            {
+                var changes = new List<VetEventChange>();
+                var reasons = new List<string>();
+                foreach (var candidate in merged)
+                {
+                    var target = candidate.EventId is { } targetId
+                        ? await _diary.GetEventAsync(scope, targetId, ct) : null;
+                    if (target is null) { reasons.Add("Укажите точный ID исправляемой записи."); continue; }
+                    var validation = Correction(candidate, target, profile, clarification, clarificationResult.Id);
+                    if (validation.State is not { } state || state.EventType != target.EventType)
+                    { reasons.Add(validation.Reason ?? "Уточните исправление."); continue; }
+                    changes.Add(new(target.Id, target.Revision, state with
+                    {
+                        SourceKind = target.SourceKind, SourceId = target.SourceId, TextSourceId = target.TextSourceId,
+                        CandidateOrdinal = target.CandidateOrdinal, SourceAuthorUserId = target.SourceAuthorUserId,
+                        SourceMessageDbId = target.SourceMessageDbId, TelegramMessageId = target.TelegramMessageId
+                    }));
+                }
+                revised = revised with { Changes = changes, Reasons = reasons, RequiresClarification = reasons.Count > 0 };
+            }
+            else if (proposal.Kind == "edit")
+            {
+                var originalSource = (await _diary.GetSourceAsync(scope, decision.SourceId, ct))!;
+                var validations = merged.Select(c => VetEventValidation.Validate(c with { Intent = "record" },
+                    profile, originalSource, decision.ExtractionResultId)).ToArray();
+                var planned = VetTextPlanner.Plan(validations,
+                    await _diary.GetSourceEventsAsync(scope, decision.SourceId, ct), true, message.UserId!.Value, _clock.UtcNow);
+                var changes = planned.Pending?.Changes ?? planned.ClearChanges;
+                revised = revised with
+                {
+                    Changes = changes.Select(c => c with { State = c.State with
+                        { InputRevisionId = clarification.Revision.Id, ExtractionResultId = clarificationResult.Id } }).ToArray(),
+                    Reasons = planned.Pending?.Reasons ?? [], RequiresTargetSelection = planned.Pending?.RequiresTargetSelection ?? false,
+                    RequiresClarification = planned.Pending?.RequiresClarification ?? false
+                };
+            }
             if (!await _diary.RevisePendingAsync(scope, decision.Id, decision.ReviewRevision, JsonSerializer.Serialize(revised), ct))
             { await _replies.SendAsync(client, message, "Просмотр изменился параллельно; ничего не сохранено.", ct); return; }
             decision = (await _diary.GetPendingAsync(scope, decision.Id, ct))!;
@@ -111,6 +151,7 @@ public sealed partial class VetAssistant
             || decision.ExpiresAt <= _clock.UtcNow) return "Этот просмотр уже недействителен.";
         var proposal = JsonSerializer.Deserialize<VetProposal>(decision.ProposalJson)!;
         if (proposal.RequiresTargetSelection) return "Нужны точные ID исправляемых фактов; прежние записи сохранены.";
+        if (proposal.RequiresClarification) return "Сначала уточните недостающие данные; прежние записи сохранены.";
         var changes = proposal.Changes.ToList();
         if (proposal.Kind == "confirm" && proposal.Changes.Count == 0)
         {
@@ -135,8 +176,12 @@ public sealed partial class VetAssistant
         if (source is null || source.Revision.Id != decision.InputRevisionId) return;
         var proposal = JsonSerializer.Deserialize<VetProposal>(decision.ProposalJson)!;
         var text = $"Просмотр #{decision.Id}, версия {decision.ReviewRevision}. Пока не сохранено.\n";
-        var canAccept = !proposal.RequiresTargetSelection;
-        if (proposal.Kind == "confirm")
+        var canAccept = !proposal.RequiresTargetSelection && !proposal.RequiresClarification;
+        if (proposal.Kind == "confirm" && proposal.Changes.Count > 0)
+        {
+            foreach (var change in proposal.Changes) text += VetEventText.Describe(change.State) + "\n";
+        }
+        else if (proposal.Kind == "confirm")
         {
             var resolved = new List<VetEventChange>();
             var candidates = new List<VetCandidate>();
@@ -146,6 +191,8 @@ public sealed partial class VetAssistant
                 candidates.Add(candidate);
                 if (validation.State is { } state)
                 {
+                    if (proposal.ClarificationInputRevisionId is { } input && proposal.ClarificationResultId is { } result)
+                        state = state with { InputRevisionId = input, ExtractionResultId = result };
                     resolved.Add(new(null, null, state));
                     text += VetEventText.Describe(state) + "\n";
                 }
@@ -176,6 +223,6 @@ public sealed partial class VetAssistant
         text += canAccept ? "Подтвердите этот просмотр или отмените." : "Уточните недостающие данные ответом на этот просмотр или отмените.";
         var promptId = await _replies.ReviewAsync(client, message, decision.Id, decision.ReviewRevision,
             text.Length <= 3500 ? text : text[..3300] + "\nПолный просмотр слишком велик: разбейте исходную запись.", canAccept && text.Length <= 3500, ct);
-        if (promptId is { } prompt) await _diary.SetPromptAsync(scope, decision.Id, prompt, ct);
+        if (promptId is { } prompt) await _diary.SetPromptAsync(scope, decision.Id, decision.ReviewRevision, prompt, ct);
     }
 }

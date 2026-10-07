@@ -11,7 +11,9 @@ public sealed class RolePrompts : IRolePrompts
     public static readonly IReadOnlyList<string> RequiredResources = new[]
     {
         "roles/health/prompt.md",
-        "roles/health/extract.md"
+        "roles/health/extract.md",
+        "roles/vet/prompt.md",
+        "roles/vet/extract.md"
     };
 
     private readonly Dictionary<string, string> _texts = new(StringComparer.OrdinalIgnoreCase);

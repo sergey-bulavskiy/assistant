@@ -126,17 +126,35 @@ public sealed partial class VetAssistant
                     await TargetsAsync(scope, message, op.EventId, op.EventIds, ct), true, ct); return true;
             case "correct":
             {
+                if (source.Revision.WorkJson is { } savedWork)
+                {
+                    var saved = JsonSerializer.Deserialize<VetDiaryMutation>(savedWork)!;
+                    await _replies.SendAsync(client, message, MutationText(saved.Changes,
+                        await _diary.ApplyAsync(saved, ct)), ct);
+                    return true;
+                }
                 var result = await _diary.GetResultAsync(scope, source.Revision.Id, ct);
                 var targets = await TargetsAsync(scope, message, op.EventId, op.EventIds, ct);
                 var changes = new List<VetEventChange>();
                 var reasons = new List<string>();
                 var candidates = interpretation.Events.Where(c => c.Intent != "question_only").ToList();
-                foreach (var c in candidates)
+                for (var index = 0; index < candidates.Count; index++)
                 {
+                    var c = candidates[index];
                     var target = c.EventId is { } id ? await _diary.GetEventAsync(scope, id, ct)
                         : targets.Count == 1 && candidates.Count == 1 ? targets[0] : null;
+                    if (target is null && c.EventId is null && c.Date is { } date && op.EventId is null && op.EventIds.Count == 0)
+                    {
+                        var range = VetEventValidation.DateRange(profile, date, date);
+                        if (range is { } selected)
+                        {
+                            var matches = await _diary.FindDateTypeAsync(scope, c.EventType, selected.From, selected.Until, ct);
+                            if (matches.Count == 1) target = matches[0];
+                        }
+                    }
                     if (target is null) { reasons.Add("Укажите ID каждой исправляемой записи."); continue; }
-                    var validation = VetEventValidation.Validate(c with { Intent = "record" }, profile, source, result!.Id);
+                    candidates[index] = c with { EventId = target.Id };
+                    var validation = Correction(c, target, profile, source, result!.Id);
                     if (validation.State is null) { reasons.Add(validation.Reason ?? "Уточните исправление."); continue; }
                     if (validation.State.EventType != target.EventType) { reasons.Add("Тип существующего факта не меняется."); continue; }
                     var original = VetEventText.State(target);
@@ -148,7 +166,7 @@ public sealed partial class VetAssistant
                     }));
                 }
                 if (changes.Count == 0 && reasons.Count == 0) reasons.Add("Укажите запись и её новое точное значение/время.");
-                var proposal = new VetProposal(candidates, changes, reasons, "manual");
+                var proposal = new VetProposal(candidates, changes, reasons, "manual", RequiresClarification: reasons.Count > 0);
                 if (changes.Count == 1 && reasons.Count == 0)
                 {
                     var mutation = new VetDiaryMutation(scope, source.Revision.OperationKey, message.UserId!.Value,
@@ -166,7 +184,7 @@ public sealed partial class VetAssistant
             }
             case "accept":
             case "decline":
-                await ResolveNaturalAsync(op, interpretation.Events, bot, client, message, profile, ct); return true;
+                await ResolveNaturalAsync(op, interpretation.Events, bot, client, message, source, profile, ct); return true;
             case "continue": await ContinueAsync(bot, client, message, source, profile, ct); return true;
             case "retry": await RetrySourceAsync(bot, client, message, source, ct); return true;
             default: return false;
@@ -197,6 +215,13 @@ public sealed partial class VetAssistant
         VetAdmittedSource source, VetProfile profile, IReadOnlyList<VetEvent> targets, bool natural, CancellationToken ct)
     {
         var scope = VetDiaryScope.From(bot, message);
+        if (source.Revision.WorkJson is { } savedWork)
+        {
+            var savedMutation = JsonSerializer.Deserialize<VetDiaryMutation>(savedWork)!;
+            var replay = await _diary.ApplyAsync(savedMutation, ct);
+            await _replies.SendAsync(client, message, MutationText(savedMutation.Changes, replay), ct);
+            return;
+        }
         var changes = targets.Where(e => e.DeletedAt is null).Select(e => new VetEventChange(e.Id, e.Revision,
             VetEventText.State(e) with { DeletedAt = _clock.UtcNow, DeleteReason = "manual", DeletedByUserId = message.UserId })).ToArray();
         if (changes.Length == 0) { await _replies.SendAsync(client, message, "Активная запись в этом месте не найдена. Укажите ID или ответьте на её источник.", ct); return; }
@@ -238,6 +263,25 @@ public sealed partial class VetAssistant
         var refreshed = (await _diary.GetSourceAsync(scope, target.Source.Id, ct))!;
         await _replies.SendAsync(client, message, "Повтор разрешён. Сохранённый результат будет использован без нового вызова модели, если он уже есть.", ct);
         // The regular bounded recovery loop processes this exact admitted input after fresh auth.
+    }
+
+    private static VetValidation Correction(VetCandidate candidate, VetEvent target, VetProfile profile,
+        VetAdmittedSource source, Guid resultId)
+    {
+        var preserveTime = candidate.Time is null && (candidate.Date is null
+            || target.LocalTime.StartsWith(candidate.Date + " ", StringComparison.Ordinal));
+        var originalOffset = target.OccurredAt.ToOffset(TimeSpan.Zero).ToString("zzz", CultureInfo.InvariantCulture);
+        var input = candidate with { Intent = "record", Unit = candidate.Unit ?? target.Unit,
+            Product = candidate.Product ?? target.Product,
+            Date = preserveTime ? target.OccurredAt.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : candidate.Date,
+            Time = preserveTime ? target.OccurredAt.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : candidate.Time,
+            Offset = preserveTime ? originalOffset : candidate.Offset,
+            TimeEvidence = preserveTime ? "stated" : candidate.TimeEvidence };
+        var validation = VetEventValidation.Validate(input, profile, source, resultId);
+        if (validation.State is { } state && preserveTime)
+            validation = validation with { State = state with { OccurredAt = target.OccurredAt,
+                LocalTime = target.LocalTime, TimeZoneSnapshot = target.TimeZoneSnapshot, OccurredAtSource = target.OccurredAtSource } };
+        return validation;
     }
 
     private static string MutationText(IReadOnlyList<VetEventChange> changes, VetMutationResult result) =>

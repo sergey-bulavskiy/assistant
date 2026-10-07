@@ -252,6 +252,14 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
         return await Events(scope).AsNoTracking().SingleOrDefaultAsync(e => e.Id == eventId, ct);
     }
 
+    public async Task<IReadOnlyList<VetEvent>> FindDateTypeAsync(VetDiaryScope scope, string eventType,
+        DateTimeOffset from, DateTimeOffset until, CancellationToken ct)
+    {
+        await CheckAsync(scope, ct);
+        return await Events(scope).AsNoTracking().Where(e => e.EventType == eventType && e.DeletedAt == null
+            && e.OccurredAt >= from && e.OccurredAt < until).OrderBy(e => e.OccurredAt).ThenBy(e => e.Id).Take(2).ToListAsync(ct);
+    }
+
     public async Task<VetHistoryPage> QueryAsync(VetDiaryScope scope, long profileId, DateTimeOffset from,
         DateTimeOffset until, int offset, int pageSize, CancellationToken ct)
     {
@@ -323,10 +331,10 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
         return revised;
     }
 
-    public async Task SetPromptAsync(VetDiaryScope scope, long id, int messageId, CancellationToken ct)
+    public async Task SetPromptAsync(VetDiaryScope scope, long id, int reviewRevision, int messageId, CancellationToken ct)
     {
         await CheckAsync(scope, ct);
-        await Pending(scope).Where(p => p.Id == id && p.State == "pending")
+        await Pending(scope).Where(p => p.Id == id && p.State == "pending" && p.ReviewRevision == reviewRevision)
             .ExecuteUpdateAsync(u => u.SetProperty(p => p.PromptMessageId, messageId), ct);
     }
 
@@ -375,7 +383,7 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
                 || pending.InputRevisionId != mutation.InputRevisionId || pending.SourceId != mutation.SourceId)
                 return VetMutationResult.Of(VetMutationStatus.Stale);
             var reviewed = JsonSerializer.Deserialize<VetProposal>(pending.ProposalJson);
-            if (reviewed is null || reviewed.RequiresTargetSelection
+            if (reviewed is null || reviewed.RequiresTargetSelection || reviewed.RequiresClarification
                 || JsonSerializer.Serialize(reviewed.Changes) != JsonSerializer.Serialize(mutation.Changes))
                 return VetMutationResult.Of(VetMutationStatus.Refused);
         }
@@ -395,6 +403,9 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
                     && r.InputRevisionId == change.State.InputRevisionId && r.FamilyId == scope.FamilyId && r.BotDbId == scope.BotDbId, ct))
                 return VetMutationResult.Of(VetMutationStatus.Refused);
             VetEvent row;
+            if (change.State.DeletedAt is null && !await Sources(scope)
+                .AnyAsync(s => s.CurrentInputRevisionId == change.State.InputRevisionId, ct))
+                return VetMutationResult.Of(VetMutationStatus.Stale);
             VetEventState? before = null;
             int? beforeRevision = null;
             if (change.EventId is { } eventId)

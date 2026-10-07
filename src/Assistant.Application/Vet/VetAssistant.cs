@@ -19,7 +19,7 @@ public sealed record VetRuntimeOptions(bool SubscriptionOnly, int ContextMessage
 /// exact planned writes persist before downstream work. Unknown calls require explicit retry.</summary>
 public sealed partial class VetAssistant : IVetAssistant
 {
-    public const string NotSavedText = "Не сохранено. Исходное сообщение осталось для восстановления; /retry ответом на него повторит попытку.";
+    public const string NotSavedText = "Не удалось подтвердить сохранение. Исходное сообщение и полученный результат остаются для восстановления; проверьте историю перед новым исправлением.";
     public const string PausedText = "Обработка приостановлена: результат вызова неизвестен. Автоматически повторять его не буду; /retry ответом на исходное сообщение.";
     public const string OwnerOnlyText = "Только владелец семьи может менять профиль.";
     private readonly IVetProfileStore _profiles;
@@ -56,7 +56,13 @@ public sealed partial class VetAssistant : IVetAssistant
     public async Task HandleAsync(ReceivingBot bot, ITelegramClient client, IncomingMessage message,
         StoreResult stored, VetAdmittedSource? admitted, CancellationToken ct, bool replyToAll = false)
     {
-        if (admitted is null || bot.FamilyId is null || !await AuthorizedAsync(bot, message, ct)) return;
+        if (bot.FamilyId is null || !await AuthorizedAsync(bot, message, ct)) return;
+        if (admitted is null)
+        {
+            if (message.Text is { Length: > 16000 })
+                await _replies.SendAsync(client, message, "Сообщение слишком длинное; разделите запись на несколько сообщений.", ct);
+            return;
+        }
         var scope = VetDiaryScope.From(bot, message);
         if (stored.MessageDbId is { } messageId)
         {
@@ -64,7 +70,7 @@ public sealed partial class VetAssistant : IVetAssistant
             admitted = await _diary.GetSourceAsync(scope, admitted.Source.Id, ct);
         }
         if (admitted?.Source.SourceMessageDbId is null || admitted.Source.CurrentInputRevisionId != admitted.Revision.Id) return;
-        await ProcessAsync(bot, client, message, admitted, replyToAll, ct);
+        await ProcessSafelyAsync(bot, client, message, admitted, replyToAll, ct);
     }
 
     public async Task ResumeAsync(ReceivingBot bot, ITelegramClient client, CancellationToken ct)
@@ -81,7 +87,21 @@ public sealed partial class VetAssistant : IVetAssistant
                 // after the exact place passed its current approval check.
                 replyToAll = await _diary.GetReplyToAllAsync(VetDiaryScope.From(bot, message), ct);
             }
-            await ProcessAsync(bot, client, message, source, replyToAll, ct);
+            await ProcessSafelyAsync(bot, client, message, source, replyToAll, ct);
+        }
+    }
+
+    private async Task ProcessSafelyAsync(ReceivingBot bot, ITelegramClient client, IncomingMessage message,
+        VetAdmittedSource source, bool replyToAll, CancellationToken ct)
+    {
+        try { await ProcessAsync(bot, client, message, source, replyToAll, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Vet processing failed: {ExceptionType}", ex.GetType().Name);
+            // The outcome can be unknown if a commit succeeded before the connection failed.
+            // Recovery uses the persisted work and operation key, never a new interpretation.
+            await _replies.SendAsync(client, message, NotSavedText, ct);
         }
     }
 
@@ -172,9 +192,9 @@ public sealed partial class VetAssistant : IVetAssistant
                     if (interpretation.Unclear.Count > 0)
                         plan = source.Revision.IsEdit
                             ? new([], (plan.Pending ?? new([], plan.ClearChanges, [], "edit")) with
-                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray() })
+                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray(), RequiresClarification = true })
                             : plan with { Pending = (plan.Pending ?? new([], [], [], "confirm")) with
-                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray() } };
+                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray(), RequiresClarification = true } };
                     await _diary.SaveWorkAsync(scope, source.Revision.Id, JsonSerializer.Serialize(plan), ct);
                 }
                 if (plan.ClearChanges.Count > 0)
