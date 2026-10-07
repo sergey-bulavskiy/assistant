@@ -6,6 +6,7 @@ using Assistant.Domain.Health;
 using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
+using Assistant.Domain.Vet;
 using Microsoft.EntityFrameworkCore;
 
 namespace Assistant.Infrastructure.Persistence;
@@ -63,6 +64,15 @@ public class AssistantDbContext : DbContext
 
     public DbSet<PendingRecord> PendingRecords => Set<PendingRecord>();
 
+    public DbSet<VetProfile> VetProfiles => Set<VetProfile>();
+    public DbSet<VetEvent> VetEvents => Set<VetEvent>();
+    public DbSet<VetTextSource> VetTextSources => Set<VetTextSource>();
+    public DbSet<VetTextSourceRevision> VetTextSourceRevisions => Set<VetTextSourceRevision>();
+    public DbSet<VetExtractionResult> VetExtractionResults => Set<VetExtractionResult>();
+    public DbSet<VetPendingDecision> VetPendingDecisions => Set<VetPendingDecision>();
+    public DbSet<VetDiaryAction> VetDiaryActions => Set<VetDiaryAction>();
+    public DbSet<VetDiaryActionChange> VetDiaryActionChanges => Set<VetDiaryActionChange>();
+
     // Platform-wide (no FamilyId, no query filter): budgets span every family.
     public DbSet<BudgetNotice> BudgetNotices => Set<BudgetNotice>();
 
@@ -93,6 +103,15 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<HealthEvent>().HasQueryFilter(e => _currentFamily.FamilyId == null || e.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<SafetyAlert>().HasQueryFilter(a => _currentFamily.FamilyId == null || a.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<PendingRecord>().HasQueryFilter(p => _currentFamily.FamilyId == null || p.FamilyId == _currentFamily.FamilyId);
+        // Vet's direct reads and store methods both fail closed without an active family.
+        modelBuilder.Entity<VetProfile>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetEvent>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetTextSource>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetTextSourceRevision>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetExtractionResult>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPendingDecision>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetDiaryAction>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetDiaryActionChange>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
     }
 
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)
