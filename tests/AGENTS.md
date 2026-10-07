@@ -90,12 +90,11 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 - Exception: explicitly authorized, supervised local MCP checks may use an existing account
   with dedicated test bots/chats and synthetic messages (see `Assistant.SmokeTests/TELEGRAM-MCP.md`).
   Keep its session/configuration outside both repositories; never use that session in CI/CD.
-- For direct MCP connection checks or extending supervised cases, follow the agent runbook in
-  `Assistant.SmokeTests/TELEGRAM-MCP.md`. Reuse exposed tools or its SDK fallback; a connection
-  check does not authorize chat reads/sends. Keep one connector per session and all runtime
-  identifiers, credentials and evidence private.
-  Before any supervised Health input, establish the runbook's private proof that the dedicated
-  bot/profile is bound to an isolated disposable database; a dedicated group is insufficient.
+- For live Telegram ownership, locking, send budgets, retry limits, cleanup, and reporting, follow
+  [Live session ownership and bounded runs](Assistant.SmokeTests/TELEGRAM-MCP.md#live-session-ownership-and-bounded-runs).
+  Connection checks do not authorize chat reads/sends. Before any supervised Health input,
+  establish the runbook's private proof that the dedicated bot/profile is bound to an isolated
+  disposable database; a dedicated group is insufficient.
 
 ## Extraction evals (`Assistant.Evals`)
 

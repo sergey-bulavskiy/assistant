@@ -460,7 +460,8 @@ check is not part of ordinary Telegram smoke and does not authorize capture in t
 
 Optional [supervised local Telegram MCP checks](tests/Assistant.SmokeTests/TELEGRAM-MCP.md)
 use an existing account with dedicated test bots/chats and synthetic messages; they do not change
-the automated suite or CD gate.
+the automated suite or CD gate. Follow the linked runbook for shared session ownership,
+bounded runs, and required connector cleanup when multiple agents work in parallel.
 They include settings/topic isolation, restart observations and optional Health record/removal
 checks; Health inputs require proof of an isolated disposable database and dedicated bot/profile.
 
