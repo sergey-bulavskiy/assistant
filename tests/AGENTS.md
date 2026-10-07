@@ -42,8 +42,14 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 
 - **Synthetic data only.** Invented texts, ids like `111`/`222`, fake tokens like `test-token`.
   Never paste real messages, user ids or chat ids, even "anonymized".
-- `Assistant.UnitTests`: no I/O. Use the fakes in `Assistant.UnitTests/Fakes`
-  (`FakeTelegramClient`, `FakeMessageStore`, `FixedClock`) instead of mocking libraries.
+- `Assistant.UnitTests`: application tests use fakes and perform no I/O. Use the fakes in
+  `Assistant.UnitTests/Fakes` (`FakeTelegramClient`, `FakeMessageStore`, `FixedClock`) instead of
+  mocking libraries. A small set of infrastructure boundary tests may use temporary files or launch
+  a local child process when that real boundary is the behavior under test. Use synthetic inputs,
+  clean up temporary directories, and bound child-process lifetimes. Never call provider networks,
+  invoke real provider CLIs, or depend on real credentials or production configuration.
+- Tests in any project that mutate process environment variables must run serialized and restore
+  each variable's original value in `finally`.
 - The real Claude Code CLI is never invoked by any automated test — `ClaudeCliChatClient` is tested
   only against `FakeProcessRunner` (`Assistant.UnitTests/Fakes`), and `LlmGateway`/`GeneralAssistant`
   are tested only against fake `IChatClient`/`ILlmGateway` implementations

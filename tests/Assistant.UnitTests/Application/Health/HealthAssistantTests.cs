@@ -58,8 +58,7 @@ public class HealthAssistantTests
         _telegram.Sent.Count.ShouldBeGreaterThan(1);
         _telegram.Sent.ShouldAllBe(part => part.Text.Length <= 4096);
         var complete = string.Concat(_telegram.Sent.Select(part => part.Text));
-        complete.ShouldContain("marker-01-");
-        complete.ShouldContain("marker-20-");
+        foreach (var i in Enumerable.Range(1, 20)) complete.ShouldContain($"marker-{i:D2}-");
         _telegram.Sent.ShouldAllBe(part => part.TopicId == 7 && part.ReplyToMessageId != null);
     }
 

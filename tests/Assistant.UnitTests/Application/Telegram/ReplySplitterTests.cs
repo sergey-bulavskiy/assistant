@@ -32,7 +32,7 @@ public class ReplySplitterTests
         var chunks = ReplySplitter.Split(text, maxLength: 4096);
 
         chunks.ShouldAllBe(c => c.Length <= 4096);
-        string.Concat(chunks).Replace("\n", "").ShouldBe(text.Replace("\n", "").Substring(0, string.Concat(chunks).Replace("\n", "").Length));
+        string.Concat(chunks).Replace("\n", "").ShouldBe(text.Replace("\n", ""));
     }
 
     [Fact]

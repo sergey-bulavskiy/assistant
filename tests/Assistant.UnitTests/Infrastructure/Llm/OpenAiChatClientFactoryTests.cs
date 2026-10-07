@@ -74,11 +74,15 @@ public class OpenAiChatClientFactoryTests
             """{"error":{"type":"rate_limit_exceeded","code":"rate_limit_exceeded","message":"slow down"}}""",
             withRetryAfter: true));
 
+        var before = DateTimeOffset.UtcNow;
         var ex = await Should.ThrowAsync<ModelLimitReachedException>(() =>
             client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") }));
+        var after = DateTimeOffset.UtcNow;
 
         ex.Scope.ShouldBe(LlmLimitScope.Model);
         ex.RetryAt.ShouldNotBeNull();
+        ex.RetryAt!.Value.ShouldBeGreaterThanOrEqualTo(before.AddSeconds(20));
+        ex.RetryAt.Value.ShouldBeLessThanOrEqualTo(after.AddSeconds(20));
     }
 
     [Fact]
