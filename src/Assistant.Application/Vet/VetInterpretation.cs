@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Assistant.Application.Vet.Photos;
 
 namespace Assistant.Application.Vet;
 
@@ -11,12 +12,16 @@ public sealed record VetOperation(string Kind, long? EventId, IReadOnlyList<long
     long? PendingId, int? ReviewRevision, IReadOnlyList<VetProfileChange> ProfileChanges);
 public sealed record VetHistoryQuery(string? FromDate, string? UntilDate, int Offset, bool Analysis);
 public sealed record VetInterpretation(bool NeedsReply, IReadOnlyList<VetCandidate> Events,
-    IReadOnlyList<string> Unclear, VetOperation? Operation, VetHistoryQuery? HistoryQuery);
+    IReadOnlyList<string> Unclear, VetOperation? Operation, VetHistoryQuery? HistoryQuery)
+{
+    public VetPhotoOperation? PhotoOperation { get; init; }
+    public VetPhotoCaptionInput? PhotoCaption { get; init; }
+}
 public sealed record VetValidation(VetCandidate Candidate, VetEventState? State, string? Reason);
 
 public static class VetInterpretationParser
 {
-    private static readonly HashSet<string> RootFields = ["needs_reply", "events", "unclear", "operation", "history_query"];
+    private static readonly HashSet<string> RootFields = ["needs_reply", "events", "unclear", "operation", "history_query", "photo_operation", "photo_caption"];
     private static readonly HashSet<string> EventFields = ["type", "intent", "value", "dose", "unit", "product",
         "date", "time", "offset", "time_evidence", "ordinal", "event_id"];
     private static readonly HashSet<string> OperationFields = ["kind", "event_id", "event_ids", "pending_id", "review_revision", "profile_changes"];
@@ -97,7 +102,20 @@ public static class VetInterpretationParser
                 history = new(String(h, "from_date", 20), String(h, "until_date", 20),
                     Int(h, "offset") ?? 0, h.TryGetProperty("analysis", out var a) && a.ValueKind == JsonValueKind.True);
             }
-            return new(reply, candidates, unclear, operation, history);
+            VetPhotoOperation? photoOperation = null;
+            if (root.TryGetProperty("photo_operation", out var photo) && photo.ValueKind != JsonValueKind.Null)
+            {
+                photoOperation = VetPhotoOperationParser.Parse(photo);
+                if (photoOperation is null) return null;
+            }
+            VetPhotoCaptionInput? photoCaption = null;
+            if (root.TryGetProperty("photo_caption", out var caption) && caption.ValueKind != JsonValueKind.Null)
+            {
+                photoCaption = VetPhotoCaptionInputParser.Parse(caption);
+                if (photoCaption is null) return null;
+            }
+            return new(reply, candidates, unclear, operation, history)
+            { PhotoOperation = photoOperation, PhotoCaption = photoCaption };
         }
         catch (JsonException) { return null; }
         catch (InvalidOperationException) { return null; }

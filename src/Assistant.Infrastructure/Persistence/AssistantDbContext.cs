@@ -7,6 +7,7 @@ using Assistant.Domain.Llm;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
 using Assistant.Domain.Vet;
+using Assistant.Domain.Vet.Photos;
 using Microsoft.EntityFrameworkCore;
 
 namespace Assistant.Infrastructure.Persistence;
@@ -75,6 +76,19 @@ public class AssistantDbContext : DbContext
     public DbSet<VetDiaryAction> VetDiaryActions => Set<VetDiaryAction>();
     public DbSet<VetDiaryActionChange> VetDiaryActionChanges => Set<VetDiaryActionChange>();
 
+    public DbSet<VetPhotoBatch> VetPhotoBatches => Set<VetPhotoBatch>();
+    public DbSet<VetPhotoSource> VetPhotoSources => Set<VetPhotoSource>();
+    public DbSet<VetPhotoInputRevision> VetPhotoInputRevisions => Set<VetPhotoInputRevision>();
+    public DbSet<VetPhotoOriginalReference> VetPhotoOriginalReferences => Set<VetPhotoOriginalReference>();
+    public DbSet<VetPhotoBlob> VetPhotoBlobs => Set<VetPhotoBlob>();
+    public DbSet<VetPhotoExtraction> VetPhotoExtractions => Set<VetPhotoExtraction>();
+    public DbSet<VetPhotoCandidate> VetPhotoCandidates => Set<VetPhotoCandidate>();
+    public DbSet<VetPhotoReview> VetPhotoReviews => Set<VetPhotoReview>();
+    public DbSet<VetPhotoAttempt> VetPhotoAttempts => Set<VetPhotoAttempt>();
+    public DbSet<VetPhotoRun> VetPhotoRuns => Set<VetPhotoRun>();
+    public DbSet<VetPhotoRunWindow> VetPhotoRunWindows => Set<VetPhotoRunWindow>();
+    public DbSet<VetPhotoReaderLease> VetPhotoReaderLeases => Set<VetPhotoReaderLease>();
+
     // Platform-wide (no FamilyId, no query filter): budgets span every family.
     public DbSet<BudgetNotice> BudgetNotices => Set<BudgetNotice>();
 
@@ -116,6 +130,19 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<VetPendingDecision>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<VetDiaryAction>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<VetDiaryActionChange>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
+
+        modelBuilder.Entity<VetPhotoBatch>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoSource>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoInputRevision>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoOriginalReference>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoBlob>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoExtraction>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoCandidate>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoReview>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoAttempt>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoRun>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoRunWindow>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<VetPhotoReaderLease>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
     }
 
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)

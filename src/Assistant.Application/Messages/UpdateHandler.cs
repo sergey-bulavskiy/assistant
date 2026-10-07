@@ -6,6 +6,7 @@ using Assistant.Application.Health.Documents;
 using Assistant.Application.Manager;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
+using Assistant.Application.Vet.Photos;
 using Assistant.Domain.Families;
 using Assistant.Domain.Places;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,7 @@ public class UpdateHandler
     private readonly ILogger<UpdateHandler> _logger;
     private readonly ITraceSession _trace;
     private readonly IVetAssistant? _vetAssistant;
+    private readonly IVetPhotoAssistant? _vetPhotos;
 
     public UpdateHandler(
         IMessageStore store,
@@ -42,7 +44,8 @@ public class UpdateHandler
         IClock clock,
         ILogger<UpdateHandler> logger,
         ITraceSession? trace = null,
-        IVetAssistant? vetAssistant = null)
+        IVetAssistant? vetAssistant = null,
+        IVetPhotoAssistant? vetPhotos = null)
     {
         _store = store;
         _approvals = approvals;
@@ -56,6 +59,7 @@ public class UpdateHandler
         _logger = logger;
         _trace = trace ?? NullTraceSession.Instance;
         _vetAssistant = vetAssistant;
+        _vetPhotos = vetPhotos;
     }
 
     public async Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingUpdate update, CancellationToken cancellationToken)
@@ -151,14 +155,19 @@ public class UpdateHandler
         }
 
         VetAdmittedSource? admitted = null;
+        VetPhotoAdmission? photoAdmission = null;
         StoreResult result;
         try
         {
             if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null)
                 admitted = await _vetAssistant.AdmitAsync(bot, message, update.UpdateId, cancellationToken);
+            if (BotRoles.IsVet(bot.Role) && _vetPhotos != null)
+                photoAdmission = await _vetPhotos.AdmitAsync(bot, message, update.UpdateId, admitted, cancellationToken);
             if (BotRoles.IsHealth(bot.Role) && HealthDocumentCandidate.IsValid(message))
                 await _healthAssistant.AdmitDocumentAsync(bot, message, update.UpdateId, cancellationToken);
             result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
+            if (BotRoles.IsVet(bot.Role) && _vetPhotos != null)
+                await _vetPhotos.BindAsync(bot, message, result, photoAdmission, cancellationToken);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && BotRoles.IsHealth(bot.Role)
             && HealthDocumentCandidate.IsValid(message) && HealthDocumentIntakePersistenceException.IsRetryable(ex))
@@ -167,7 +176,8 @@ public class UpdateHandler
             throw new HealthDocumentIntakePersistenceException();
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && BotRoles.IsVet(bot.Role)
-            && _vetAssistant is not null && message.UserId is not null && message.Text is { Length: > 0 }
+            && message.UserId is not null && (_vetAssistant is not null && message.Text is { Length: > 0 }
+                || _vetPhotos != null && message.Kind is Assistant.Domain.Messages.MessageKind.Photo or Assistant.Domain.Messages.MessageKind.Document)
             && VetIntakePersistenceException.IsRetryable(ex))
         {
             _logger.LogWarning("Vet intake persistence failed: {ExceptionType}", ex.GetType().Name);
@@ -205,6 +215,8 @@ public class UpdateHandler
             else if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null)
             {
                 await _vetAssistant.HandleAsync(bot, telegramClient, message, result, admitted, cancellationToken, replyToAll);
+                if (_vetPhotos != null)
+                    await _vetPhotos.HandleAdmissionAsync(bot, telegramClient, message, result, photoAdmission, cancellationToken);
             }
             else
             {

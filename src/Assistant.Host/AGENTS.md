@@ -35,3 +35,16 @@
   `src/Assistant.Infrastructure/Bots`; see the Infrastructure guide's polling section. Vet admission
   must succeed before its update offset advances. Its narrow bounded recovery hook starts with a
   fresh family scope and current authorization; unknown provider calls never resume automatically.
+
+- An active Vet bot has one coordinator-owned lifetime joining its poller and independent
+  `VetPhotoBackgroundLoop`. If either ends, cancel and await both; disable/remove/shutdown must
+  drain both before disposing the token source or starting a replacement. The photo loop uses
+  the same receiving bot client, never a second getUpdates poller.
+- Polling durably admits/binds photo metadata before its offset commits; it does no image download
+  or vision call. The photo loop uses fresh family scopes and current bot/member/place checks,
+  bounded five-item passes and a global image execution gate of 1, then existing M3 guards. Saved
+  results/reviews resume without redispatch. `/health` remains polling health; it does not certify
+  photo queue progress, provider quota or the accuracy of a rendered reading.
+- Photo extraction derives subscription-only eligibility from existing LLM chains and pins
+  `gpt-6.1-sol` image capability. `CODEX_IMAGE_INPUT_ENABLED=false` is the existing local disable
+  switch; no new Vet-photo configuration variable or paid-provider fallback exists.

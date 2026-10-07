@@ -5,6 +5,7 @@ using Assistant.Application.Common;
 using Assistant.Application.Families;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
+using Assistant.Application.Vet.Photos;
 using Assistant.Domain.Vet;
 using Assistant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +14,7 @@ namespace Assistant.Infrastructure.Vet;
 
 /// <summary>Dedicated scoped Vet persistence. Transactions serialize per bot; immutable evidence
 /// is retained independently of mutable processing state. No message text or values are logged.</summary>
-public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current, IClock clock) : IVetDiaryStore
+public sealed partial class VetDiaryStore(AssistantDbContext db, ICurrentFamily current, IClock clock) : IVetDiaryStore
 {
     private readonly VetStoreGuard _guard = new(db, current);
     private IQueryable<VetTextSource> Sources(VetDiaryScope s) => db.Set<VetTextSource>().Where(x =>
@@ -487,64 +488,72 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
     public async Task<VetMutationResult> UndoAsync(VetDiaryScope scope, long actorUserId, Guid operationKey, CancellationToken ct)
     {
         await CheckAsync(scope, ct);
-        using var tracking = new VetMutationTracking(db);
+        ForgetDiaryPhotoSnapshots();
+        using var tracking = new PhotoDiaryTracking(db);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await _guard.LockAsync(scope.FamilyId, scope.BotDbId, ct);
-        if (!await _guard.ActorAsync(scope, actorUserId, ct)) return VetMutationResult.Of(VetMutationStatus.Refused);
+        if (!await db.Bots.AnyAsync(b => b.Id == scope.BotDbId && b.FamilyId == scope.FamilyId
+            && b.TelegramBotId == scope.TelegramBotId && b.Status == Assistant.Domain.Bots.BotStatus.Active, ct))
+            return VetMutationResult.Of(VetMutationStatus.Refused);
+        if (!await _guard.ActorAsync(scope, actorUserId, ct) && !await PhotoActorAsync(scope, actorUserId, ct))
+            return VetMutationResult.Of(VetMutationStatus.Refused);
+        if (operationKey == Guid.Empty) return VetMutationResult.Of(VetMutationStatus.Refused);
         var fingerprint = Hash(JsonSerializer.Serialize(new { scope, actorUserId, Kind = "undo" }));
         var replay = await db.Set<VetDiaryAction>().AsNoTracking().SingleOrDefaultAsync(a =>
             a.FamilyId == scope.FamilyId && a.BotDbId == scope.BotDbId && a.OperationKey == operationKey, ct);
-        if (replay is not null) return replay.Fingerprint == fingerprint
+        if (replay != null) return replay.Fingerprint == fingerprint
             ? JsonSerializer.Deserialize<VetMutationResult>(replay.OutcomeJson)! with { Status = VetMutationStatus.AlreadyApplied }
             : VetMutationResult.Of(VetMutationStatus.Refused);
         var target = await Actions(scope).AsNoTracking().Where(a => a.ActorUserId == actorUserId
-            && a.Kind != "undo" && a.ReversedByActionId == null && a.CreatedAt >= clock.UtcNow.AddHours(-24))
+            && a.Kind != "undo" && a.Kind != "photo_comparison_keep" && a.ReversedByActionId == null && a.CreatedAt >= clock.UtcNow.AddHours(-24))
             .OrderByDescending(a => a.CreatedAt).ThenByDescending(a => a.Id).FirstOrDefaultAsync(ct);
-        if (target is null) return VetMutationResult.Of(VetMutationStatus.NotFound);
-        var changes = await db.Set<VetDiaryActionChange>().AsNoTracking().Where(c =>
-            c.FamilyId == scope.FamilyId && c.BotDbId == scope.BotDbId && c.ActionId == target.Id).OrderBy(c => c.Id).ToListAsync(ct);
+        if (target == null) return VetMutationResult.Of(VetMutationStatus.NotFound);
+        var changes = await db.Set<VetDiaryActionChange>().AsNoTracking().Where(c => c.FamilyId == scope.FamilyId
+            && c.BotDbId == scope.BotDbId && c.ActionId == target.Id).OrderBy(c => c.Id).ToListAsync(ct);
+        var photo = await PreparePhotoUndoAsync(scope, target, changes, ct);
         var reversal = NewAction(scope, operationKey, actorUserId, "undo", fingerprint);
         reversal.ReversesActionId = target.Id;
-        var applied = new List<long>();
-        var protectedIds = new List<long>();
+        reversal.PhotoBatchId = target.PhotoBatchId;
+        var protectedIds = new HashSet<long>(photo.ProtectedEventIds);
         var inverses = new List<(VetEvent Row, VetEventState Before, int Revision, VetEventState After)>();
         foreach (var change in changes)
         {
+            if (protectedIds.Contains(change.EventId)) continue;
             var row = await Events(scope).AsNoTracking().SingleOrDefaultAsync(e => e.Id == change.EventId, ct);
-            if (row is null || row.Revision != change.AfterRevision) { protectedIds.Add(change.EventId); continue; }
+            if (row == null || row.Revision != change.AfterRevision) { protectedIds.Add(change.EventId); continue; }
             var before = State(row);
-            var inverse = change.BeforeJson is null
+            var inverse = change.BeforeJson == null
                 ? before with { DeletedAt = clock.UtcNow, DeleteReason = "undo", DeletedByUserId = actorUserId }
                 : JsonSerializer.Deserialize<VetEventState>(change.BeforeJson)!;
             inverses.Add((row, before, row.Revision, inverse));
         }
-        db.Add(reversal);
-        db.Attach(target);
+        db.Add(reversal); db.Attach(target);
         foreach (var item in inverses)
         {
-            db.Attach(item.Row);
-            ApplyState(item.Row, item.After);
-            item.Row.Revision++;
-            item.Row.UpdatedAt = clock.UtcNow;
-            item.Row.LastMutationKind = "undo";
-            applied.Add(item.Row.Id);
+            db.Attach(item.Row); ApplyState(item.Row, item.After);
+            item.Row.Revision = checked(item.Row.Revision + 1);
+            item.Row.UpdatedAt = clock.UtcNow; item.Row.LastMutationKind = "undo";
         }
         await db.SaveChangesAsync(ct);
         target.ReversedByActionId = reversal.Id;
-        foreach (var item in inverses) db.Add(new VetDiaryActionChange
-        {
-            FamilyId = scope.FamilyId, BotDbId = scope.BotDbId, ActionId = reversal.Id, EventId = item.Row.Id,
-            BeforeJson = JsonSerializer.Serialize(item.Before), AfterJson = JsonSerializer.Serialize(item.After),
-            BeforeRevision = item.Revision, AfterRevision = item.Row.Revision
-        });
-        var result = new VetMutationResult(VetMutationStatus.Applied, reversal.Id, applied, protectedIds)
-        { Revisions = inverses.Select(x => new VetEventRevision(x.Row.Id, x.Row.Revision)).ToArray() };
-        reversal.OutcomeJson = JsonSerializer.Serialize(result);
+        foreach (var item in inverses) db.Add(new VetDiaryActionChange { FamilyId = scope.FamilyId, BotDbId = scope.BotDbId,
+            ActionId = reversal.Id, EventId = item.Row.Id, BeforeJson = JsonSerializer.Serialize(item.Before),
+            AfterJson = JsonSerializer.Serialize(item.After), BeforeRevision = item.Revision, AfterRevision = item.Row.Revision });
+        // Filter any photo inverse whose canonical event became protected during the event pass.
+        photo = photo with { Inverses = photo.Inverses.Where(i =>
+            !(i.Before.EventId is { } own && protectedIds.Contains(own))
+            && !(i.Before.DuplicateEventId is { } linked && protectedIds.Contains(linked))).ToArray(),
+            ProtectedCandidateIds = photo.ProtectedCandidateIds.Concat(photo.Inverses.Where(i =>
+                i.Before.EventId is { } own && protectedIds.Contains(own)
+                || i.Before.DuplicateEventId is { } linked && protectedIds.Contains(linked)).Select(i => i.Candidate.Id)).Distinct().ToArray() };
+        var photoChanges = await ApplyPhotoUndoAsync(scope, photo, inverses.ToDictionary(i => i.Row.Id, i => i.Row.Revision), ct);
+        var result = new VetMutationResult(VetMutationStatus.Applied, reversal.Id, inverses.Select(i => i.Row.Id).ToArray(), protectedIds.Order().ToArray())
+            { Revisions = inverses.Select(i => new VetEventRevision(i.Row.Id, i.Row.Revision)).ToArray(),
+                ProtectedCandidateIds = photo.ProtectedCandidateIds };
+        reversal.OutcomeJson = JsonSerializer.Serialize(new VetPhotoActionOutcome(result.Status, result.ActionId,
+            result.EventIds, result.ProtectedIds, result.Revisions, photoChanges) { ProtectedCandidateIds = photo.ProtectedCandidateIds });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        foreach (var item in inverses) db.Entry(item.Row).State = EntityState.Detached;
-        db.Entry(target).State = EntityState.Detached;
-        db.Entry(reversal).State = EntityState.Detached;
         return result;
     }
 

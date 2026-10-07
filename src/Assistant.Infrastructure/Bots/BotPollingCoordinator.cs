@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
+using Assistant.Application.Vet.Photos;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Bots;
 using Assistant.Infrastructure.Persistence;
@@ -30,7 +31,11 @@ public class BotPollingCoordinator : IHostedService
     private readonly IClock _clock;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<BotPollingCoordinator> _logger;
+    private readonly IVetPhotoBackgroundLoop? _photoLoop;
     private readonly ConcurrentDictionary<long, WorkerHandle> _workers = new();
+    private readonly object _workerLifecycleSync = new();
+    private readonly Dictionary<long, Task> _workerStops = new();
+    private bool _hostStopping;
 
     public BotPollingCoordinator(
         IServiceScopeFactory scopeFactory,
@@ -40,7 +45,7 @@ public class BotPollingCoordinator : IHostedService
         PollingWorkerSettings settings,
         PollingHealth pollingHealth,
         IClock clock,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory, IVetPhotoBackgroundLoop? photoLoop = null)
     {
         _scopeFactory = scopeFactory;
         _clientFactory = clientFactory;
@@ -50,11 +55,13 @@ public class BotPollingCoordinator : IHostedService
         _pollingHealth = pollingHealth;
         _clock = clock;
         _loggerFactory = loggerFactory;
+        _photoLoop = photoLoop;
         _logger = loggerFactory.CreateLogger<BotPollingCoordinator>();
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        lock (_workerLifecycleSync) _hostStopping = false;
         await EnsureManagerBotRowAsync(cancellationToken);
 
         using var scope = _scopeFactory.CreateScope();
@@ -63,93 +70,80 @@ public class BotPollingCoordinator : IHostedService
             .Where(b => b.Status == BotStatus.Active)
             .ToListAsync(cancellationToken);
 
-        foreach (var bot in activeBots)
-        {
-            var handle = StartWorker(bot);
-            if (!_workers.TryAdd(bot.Id, handle))
-            {
-                await StopWorkerAsync(handle);
-            }
-        }
+        foreach (var bot in activeBots) StartWorkerIfAbsent(bot);
     }
 
-    /// <summary>Stops every currently tracked worker and clears `_workers`, so a repeat call (the
-    /// hosting layer does not guarantee IHostedService.StopAsync is invoked exactly once — ASP.NET
-    /// Core's test host in particular can call it more than once during teardown) finds nothing left
-    /// to stop and is a no-op rather than re-cancelling/re-disposing an already-stopped worker's
-    /// CancellationTokenSource.</summary>
+    /// <summary>Stops and drains all owned lifetimes. Concurrent stops share one drain task;
+    /// new workers cannot register during host shutdown.</summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // Snapshot-and-remove each entry (rather than iterating _workers.Values directly) so a
-        // concurrent StopBotAsync/StartBotAsync racing for the same bot id can never observe or
-        // touch the same handle we're stopping here.
-        var botIds = _workers.Keys.ToList();
-        var handles = new List<WorkerHandle>();
-        foreach (var botId in botIds)
-        {
-            if (_workers.TryRemove(botId, out var handle))
-            {
-                handles.Add(handle);
-            }
-        }
-
-        foreach (var handle in handles)
-        {
-            handle.Cts.Cancel();
-        }
-
-        await Task.WhenAll(handles.Select(h => h.RunTask));
-
-        foreach (var handle in handles)
-        {
-            handle.Cts.Dispose();
-        }
+        long[] botIds;
+        lock (_workerLifecycleSync)
+        { _hostStopping = true; botIds = _workers.Keys.ToArray(); }
+        await Task.WhenAll(botIds.Select(StopBotAsync));
     }
 
-    /// <summary>Starts polling a bot that was just created (e.g. by /newbot) without restarting the
-    /// process. No-op if the bot is already being polled.</summary>
     public async Task StartBotAsync(long botDbId, CancellationToken cancellationToken)
     {
-        if (_workers.ContainsKey(botDbId))
-        {
-            return;
-        }
-
+        lock (_workerLifecycleSync)
+            if (_hostStopping || _workers.ContainsKey(botDbId)) return;
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AssistantDbContext>();
         var bot = await db.Bots.IgnoreQueryFilters().SingleAsync(b => b.Id == botDbId, cancellationToken);
-        var handle = StartWorker(bot);
-
-        if (!_workers.TryAdd(bot.Id, handle))
-        {
-            // Another concurrent StartBotAsync call already registered a worker for this bot id first;
-            // cancel and drain the losing worker so it never runs orphaned.
-            await StopWorkerAsync(handle);
-        }
+        StartWorkerIfAbsent(bot);
     }
 
-    /// <summary>Stops polling a bot (e.g. /settings' Remove action). No-op if it isn't running.</summary>
-    public async Task StopBotAsync(long botDbId)
+    // The check, spawn and registration are one synchronous transition: no losing poller starts.
+    private void StartWorkerIfAbsent(Bot bot)
     {
-        // TryRemove is atomic against a concurrent StopAsync (also a remove-then-stop), so the two
-        // can never both grab the same handle and double-cancel/double-dispose its Cts.
-        if (_workers.TryRemove(botDbId, out var handle))
+        lock (_workerLifecycleSync)
         {
-            await StopWorkerAsync(handle);
+            if (_hostStopping || _workers.ContainsKey(bot.Id)) return;
+            if (!_workers.TryAdd(bot.Id, StartWorker(bot)))
+                throw new InvalidOperationException("Bot worker registration failed.");
         }
     }
 
-    /// <summary>Cancels a worker's token, awaits its run task to finish draining, then disposes the
-    /// token source. A given `WorkerHandle` is only ever reachable from one call site: it's either
-    /// never added to `_workers` (a losing `TryAdd` in `StartAsync`/`StartBotAsync`, so no one else
-    /// can find it), or removed by exactly one atomic `TryRemove` (`StopAsync`/`StopBotAsync`), which
-    /// guarantees only the winning caller ever touches that handle's Cts — so no guard is needed
-    /// here against a handle being cancelled or disposed twice.</summary>
+    public Task StopBotAsync(long botDbId)
+    {
+        lock (_workerLifecycleSync)
+        {
+            if (_workerStops.TryGetValue(botDbId, out var pending)) return pending;
+            if (!_workers.TryGetValue(botDbId, out var handle)) return Task.CompletedTask;
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _workerStops.Add(botDbId, completion.Task);
+            // Cancellation callbacks/draining run outside the registration lock. The handle stays
+            // registered until both tasks finish and the token source is disposed.
+            _ = Task.Run(() => DrainAndReleaseAsync(botDbId, handle, completion), CancellationToken.None);
+            return completion.Task;
+        }
+    }
+
+    private async Task DrainAndReleaseAsync(long botDbId, WorkerHandle handle, TaskCompletionSource completion)
+    {
+        Exception? failure = null;
+        try { await StopWorkerAsync(handle); }
+        catch (Exception ex) { failure = ex; }
+        finally
+        {
+            lock (_workerLifecycleSync)
+            {
+                _workers.TryRemove(botDbId, out _);
+                _workerStops.Remove(botDbId);
+            }
+        }
+        if (failure == null) completion.TrySetResult();
+        else completion.TrySetException(failure);
+    }
+
     private static async Task StopWorkerAsync(WorkerHandle handle)
     {
-        handle.Cts.Cancel();
-        await handle.RunTask;
-        handle.Cts.Dispose();
+        try { handle.Cts.Cancel(); }
+        finally
+        {
+            try { await handle.RunTask; }
+            finally { handle.Cts.Dispose(); }
+        }
     }
 
     /// <summary>The manager gets messages, button taps and managed_bot events; role bots get messages,
@@ -172,8 +166,23 @@ public class BotPollingCoordinator : IHostedService
         var worker = new BotPollingWorker(receivingBot, client, allowedUpdates, _scopeFactory, _settings, _pollingHealth, _clock, logger, token);
 
         var cts = new CancellationTokenSource();
-        var runTask = Task.Run(() => worker.RunAsync(cts.Token), CancellationToken.None);
+        var runTask = Task.Run(() => BotRoles.IsVet(receivingBot.Role) && _photoLoop != null
+            ? RunVetPairAsync(worker, receivingBot, client, cts)
+            : worker.RunAsync(cts.Token), CancellationToken.None);
         return new WorkerHandle(runTask, cts);
+    }
+
+    private async Task RunVetPairAsync(BotPollingWorker worker, ReceivingBot bot, ITelegramClient client,
+        CancellationTokenSource lifetime)
+    {
+        var polling = worker.RunAsync(lifetime.Token);
+        var photos = _photoLoop!.RunAsync(bot, client, lifetime.Token);
+        try { await Task.WhenAny(polling, photos); }
+        finally
+        {
+            try { await lifetime.CancelAsync(); }
+            finally { await Task.WhenAll(polling, photos); }
+        }
     }
 
     private async Task EnsureManagerBotRowAsync(CancellationToken cancellationToken)

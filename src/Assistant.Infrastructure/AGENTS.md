@@ -86,6 +86,54 @@
   Successful provider results and exact work plans remain durable across restart. Unknown provider
   dispatches are paused, not replayed. Only subscription-only chains enable Vet model work.
 
+## Vet meter-photo persistence (`Vet/Photos/`)
+
+- Photo scope includes family, internal bot, Telegram bot, chat and exact nullable topic. Recheck
+  active bot/member/place and stable profile identity; filters alone grant no authority. Image slot 1
+  is distinct from text/caption slot 0. Bind the exact stored incoming message before download/model
+  work. Source sender is immutable; the executing/confirming actor is checked separately.
+- Inputs, original references and extraction evidence are immutable. Edits advance only the source
+  pointer; one stable candidate/event identity survives correction, deletion and explicit restore.
+  Keep blob bytes out of ordinary message/context/trace projections. Hash sharing is family-scoped.
+- Global capacity locking precedes bot transaction locking. Atomically reserve and reconcile actual
+  content plus active download reservations against 1 GiB, input slots 10,000 and result/attempt slots
+  10,000 across all families; return aggregate counts only. A full limit never evicts prior evidence.
+  Each original is bounded 10 MiB and decoded JPEG/PNG 25 MP; preserve exact archived bytes.
+- Claim and persisted dispatch are separate fences. Freeze GUID AttemptKey, actor/source/input/ref
+  snapshots and lease before a call; M3 records the same key/source message before provider dispatch.
+  Claimed-but-unstarted work may resume; expired dispatched work is unknown and remains charged.
+  Successful immutable results replay without a second call. Lost ownership/edit/revocation may
+  retain old evidence but cannot install it as current. Cancellation blocks new automatic calls,
+  while admitted originals remain independently archivable; never free an unknown reservation.
+- Every fact-changing review requires all delivered pages/hashes, exact prompt/revision/selection
+  proof, fresh authority and expected candidate/input/result/reference/event revisions. Recheck
+  pending and saved collisions under the same bot transaction, then commit dispositions, facts and
+  action/outcome together. One stale item writes nothing. Rollback detaches owned tracking entries;
+  replay returns the committed action and first actor. Reviewed keep/protected reversal can record
+  a durable no-change audit action; evidence-only reviews cannot authorize facts.
+  Deliver unresolved/protected evidence as a complete current-scoped notice without acceptance
+  buttons or fact authority. Failed/unknown sends wait for explicit review retry; fully delivered
+  notices do not occupy recovery selection.
+- Caption actual insulin uses only TEXT identity. Persist unfiltered interpretation before image
+  glucose reconciliation; image edits/reprocessing cannot reapply insulin. Image processing waits
+  for an applied or failed/paused caption state, and failed captions supply no inferred context.
+- Reprocess selection manifests are fixed (up to 10,000 inputs) and approved in full before windows
+  of at most 50 run. Exact initial proof, actor and selected attempt/reference snapshots fence each
+  window. Unknown attempts require reviewed acknowledgement of possible repeated usage. Compare
+  stored successes without new calls; explicit selection/refresh can show retained historical
+  evidence without moving the source pointer. Deleted/manual/excluded/cancelled identities require
+  specific restoration proof. Ordinary Undo stays actor/place/action-time 24h; older selected reversal
+  hashes the full shown immutable/current states and protects later changes.
+- Original-byte deletion is owner-only, exact-place and complete-preview-bound. Tombstone only
+  selected reference revisions; facts/provenance remain. Reclaim a family blob only after all its
+  references are deleted and active readers release it. Count queued reclamation until bytes are
+  gone, recover it after restart, and never reacquire explicitly deleted bytes from Telegram metadata.
+- One scoped VetPhotoStore instance serves its typed ports and one scoped VetDiaryStore serves
+  diary/photo/reversal ports. Keep transaction ownership shared. Background work sets CurrentFamily
+  explicitly and uses bounded metadata queues, not blob projections. Photo logs use fixed categories
+  or exception types; no captions/values/bytes/raw provider JSON/full hashes/token URLs. Trace/export
+  contracts never carry original bytes or raw extraction payloads.
+
 ## Private diagnostic traces (`Diagnostics/`)
 
 - Capture starts only after the existing role-bot authorization gates. A trace identifies a bot

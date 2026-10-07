@@ -30,6 +30,7 @@ public sealed record VetMutationResult(VetMutationStatus Status, long? ActionId,
     IReadOnlyList<long> EventIds, IReadOnlyList<long> ProtectedIds)
 {
     public IReadOnlyList<VetEventRevision> Revisions { get; init; } = [];
+    public IReadOnlyList<Guid> ProtectedCandidateIds { get; init; } = [];
     public static VetMutationResult Of(VetMutationStatus status) => new(status, null, [], []);
 }
 public sealed record VetEventRevision(long EventId, int Revision);

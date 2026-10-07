@@ -1472,6 +1472,1320 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                     b.ToTable("places", (string)null);
                 });
 
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<Guid?>("ClaimToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("claim_token");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DownloadAttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("download_attempt_count");
+
+                    b.Property<Guid>("ExpectedCurrentInputId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expected_current_input_id");
+
+                    b.Property<int>("ExpectedSourceOrdinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("expected_source_ordinal");
+
+                    b.Property<Guid?>("ExtractionResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("extraction_result_id");
+
+                    b.Property<string>("FailureCategory")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("failure_category");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<bool>("HistoricalSelection")
+                        .HasColumnType("boolean")
+                        .HasColumnName("historical_selection");
+
+                    b.Property<Guid>("InputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("input_revision_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<long>("ReservedBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("reserved_bytes");
+
+                    b.Property<bool>("ReservedInputSlot")
+                        .HasColumnType("boolean")
+                        .HasColumnName("reserved_input_slot");
+
+                    b.Property<bool>("ReservedResultSlot")
+                        .HasColumnType("boolean")
+                        .HasColumnName("reserved_result_slot");
+
+                    b.Property<DateTimeOffset?>("RetryNotBefore")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retry_not_before");
+
+                    b.Property<Guid?>("RunWindowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_window_id");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_attempts");
+
+                    b.HasIndex("InputRevisionId")
+                        .HasDatabaseName("ix_vet_photo_attempts_input_revision_id");
+
+                    b.HasIndex("RunWindowId")
+                        .HasDatabaseName("ix_vet_photo_attempts_run_window_id");
+
+                    b.HasIndex("SourceId")
+                        .HasDatabaseName("ix_vet_photo_attempts_source_id");
+
+                    b.HasIndex("Kind", "State", "RetryNotBefore", "CreatedAt")
+                        .HasDatabaseName("ix_vet_photo_attempts_kind_state_retry_not_before_created_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_attempts_family_id_bot_db_id_telegram_bot_id_chat");
+
+                    b.ToTable("vet_photo_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AssumptionsJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("assumptions_json");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<DateTimeOffset?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<DateTimeOffset?>("IntakeClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("intake_closed_at");
+
+                    b.Property<string>("IntakeKind")
+                        .IsRequired()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasColumnName("intake_kind");
+
+                    b.Property<DateTimeOffset>("IntakeOpenedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("intake_opened_at");
+
+                    b.Property<int>("NextItemNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("next_item_number");
+
+                    b.Property<long>("ProfileId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("profile_id");
+
+                    b.Property<int>("ProfileRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("profile_revision");
+
+                    b.Property<int?>("ProgressMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("progress_message_id");
+
+                    b.Property<int>("ReviewRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("review_revision");
+
+                    b.Property<long>("StarterUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("starter_user_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_batches");
+
+                    b.HasIndex("ProfileId")
+                        .HasDatabaseName("ix_vet_photo_batches_profile_id");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_batches_family_id_bot_db_id_telegram_bot_id_chat_")
+                        .HasFilter("state = 'collecting'");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId"), false);
+
+                    b.ToTable("vet_photo_batches", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoBlob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActualBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actual_bytes");
+
+                    b.Property<byte[]>("Content")
+                        .HasColumnType("bytea")
+                        .HasColumnName("content");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("format");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("integer")
+                        .HasColumnName("height");
+
+                    b.Property<DateTimeOffset?>("ReclaimRequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reclaim_requested_at");
+
+                    b.Property<DateTimeOffset?>("ReclaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reclaimed_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("integer")
+                        .HasColumnName("width");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_blobs");
+
+                    b.HasIndex("FamilyId", "ContentHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_blobs_family_id_content_hash");
+
+                    b.HasIndex("State", "ReclaimRequestedAt")
+                        .HasDatabaseName("ix_vet_photo_blobs_state_reclaim_requested_at");
+
+                    b.ToTable("vet_photo_blobs", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoCandidate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<int>("CandidateOrdinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("candidate_ordinal");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<string>("CorrectionProvenanceJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("correction_provenance_json");
+
+                    b.Property<string>("DuplicateDecision")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("duplicate_decision");
+
+                    b.Property<long?>("DuplicateEventId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("duplicate_event_id");
+
+                    b.Property<int?>("DuplicateEventRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("duplicate_event_revision");
+
+                    b.Property<Guid?>("DuplicateSourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("duplicate_source_id");
+
+                    b.Property<string>("EffectiveJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("effective_json");
+
+                    b.Property<long?>("EventId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("event_id");
+
+                    b.Property<int?>("EventRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("event_revision");
+
+                    b.Property<Guid?>("ExtractionResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("extraction_result_id");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<Guid?>("InputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("input_revision_id");
+
+                    b.Property<Guid?>("LastReviewId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_review_id");
+
+                    b.Property<bool>("ManuallyCorrected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("manually_corrected");
+
+                    b.Property<string>("ReasonsJson")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)")
+                        .HasColumnName("reasons_json");
+
+                    b.Property<bool>("RequiresExplicitRestoration")
+                        .HasColumnType("boolean")
+                        .HasColumnName("requires_explicit_restoration");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_candidates");
+
+                    b.HasIndex("BatchId")
+                        .HasDatabaseName("ix_vet_photo_candidates_batch_id");
+
+                    b.HasIndex("EventId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_candidates_event_id")
+                        .HasFilter("event_id IS NOT NULL");
+
+                    b.HasIndex("ExtractionResultId")
+                        .HasDatabaseName("ix_vet_photo_candidates_extraction_result_id");
+
+                    b.HasIndex("InputRevisionId")
+                        .HasDatabaseName("ix_vet_photo_candidates_input_revision_id");
+
+                    b.HasIndex("SourceId", "CandidateOrdinal")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_candidates_source_id_candidate_ordinal");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_candidates_family_id_bot_db_id_telegram_bot_id_ch");
+
+                    b.ToTable("vet_photo_candidates", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoExtraction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attempt_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("DiagnosticAttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("diagnostic_attempt_id");
+
+                    b.Property<string>("FailureCategory")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("failure_category");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<Guid>("InputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("input_revision_id");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_name");
+
+                    b.Property<string>("PromptVersion")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<Guid?>("ReusesExtractionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reuses_extraction_id");
+
+                    b.Property<int>("SchemaVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("schema_version");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StructuredJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("structured_json");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_extractions");
+
+                    b.HasIndex("AttemptId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_extractions_attempt_id");
+
+                    b.HasIndex("ReusesExtractionId")
+                        .HasDatabaseName("ix_vet_photo_extractions_reuses_extraction_id");
+
+                    b.HasIndex("SourceId")
+                        .HasDatabaseName("ix_vet_photo_extractions_source_id");
+
+                    b.HasIndex("InputRevisionId", "CreatedAt")
+                        .HasDatabaseName("ix_vet_photo_extractions_input_revision_id_created_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_extractions_family_id_bot_db_id_telegram_bot_id_c");
+
+                    b.ToTable("vet_photo_extractions", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<string>("Caption")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)")
+                        .HasColumnName("caption");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<DateTimeOffset?>("EditedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("edited_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("FileId")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("file_id");
+
+                    b.Property<string>("FileName")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("FileUniqueId")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("file_unique_id");
+
+                    b.Property<string>("InputFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("input_fingerprint");
+
+                    b.Property<bool>("IsEdit")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_edit");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("ordinal");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<int?>("ReportedHeight")
+                        .HasColumnType("integer")
+                        .HasColumnName("reported_height");
+
+                    b.Property<string>("ReportedMimeType")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("reported_mime_type");
+
+                    b.Property<long?>("ReportedSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("reported_size");
+
+                    b.Property<int?>("ReportedWidth")
+                        .HasColumnType("integer")
+                        .HasColumnName("reported_width");
+
+                    b.Property<Guid?>("ReusesImageInputId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reuses_image_input_id");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<Guid?>("TextInputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("text_input_revision_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<long>("UpdateId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("update_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_input_revisions");
+
+                    b.HasIndex("ReusesImageInputId")
+                        .HasDatabaseName("ix_vet_photo_input_revisions_reuses_image_input_id");
+
+                    b.HasIndex("SourceId", "Ordinal")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_input_revisions_source_id_ordinal");
+
+                    b.HasIndex("SourceId", "UpdateId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_input_revisions_source_id_update_id");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_input_revisions_family_id_bot_db_id_telegram_bot_");
+
+                    b.ToTable("vet_photo_input_revisions", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoOriginalReference", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActualBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actual_bytes");
+
+                    b.Property<Guid>("BlobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("blob_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_hash");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<long?>("DeletedByUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<Guid?>("DeletionReviewId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deletion_review_id");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("format");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("integer")
+                        .HasColumnName("height");
+
+                    b.Property<Guid>("InputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("input_revision_id");
+
+                    b.Property<DateTimeOffset>("RetainedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("retained_at");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("integer")
+                        .HasColumnName("width");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_original_references");
+
+                    b.HasIndex("InputRevisionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_original_references_input_revision_id");
+
+                    b.HasIndex("BlobId", "State")
+                        .HasDatabaseName("ix_vet_photo_original_references_blob_id_state");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_original_references_family_id_bot_db_id_telegram_");
+
+                    b.ToTable("vet_photo_original_references", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoReaderLease", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attempt_id");
+
+                    b.Property<Guid>("BlobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("blob_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<Guid>("ClaimToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("claim_token");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<Guid>("OriginalReferenceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("original_reference_id");
+
+                    b.Property<int>("OriginalReferenceRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("original_reference_revision");
+
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("released_at");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_reader_leases");
+
+                    b.HasIndex("OriginalReferenceId")
+                        .HasDatabaseName("ix_vet_photo_reader_leases_original_reference_id");
+
+                    b.HasIndex("AttemptId", "ClaimToken")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_reader_leases_attempt_id_claim_token");
+
+                    b.HasIndex("BlobId", "ReleasedAt", "ExpiresAt")
+                        .HasDatabaseName("ix_vet_photo_reader_leases_blob_id_released_at_expires_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_reader_leases_family_id_bot_db_id_telegram_bot_id");
+
+                    b.ToTable("vet_photo_reader_leases", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int?>("AcceptancePromptMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("acceptance_prompt_message_id");
+
+                    b.Property<long?>("ActionId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("action_id");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<int?>("BatchReviewRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("batch_review_revision");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<bool>("CompletePreviewDelivered")
+                        .HasColumnType("boolean")
+                        .HasColumnName("complete_preview_delivered");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("decided_at");
+
+                    b.Property<long?>("DecisionActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("decision_actor_user_id");
+
+                    b.Property<string>("DeliveredPagesJson")
+                        .IsRequired()
+                        .HasMaxLength(65536)
+                        .HasColumnType("character varying(65536)")
+                        .HasColumnName("delivered_pages_json");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid>("OperationKey")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_key");
+
+                    b.Property<string>("OutcomeJson")
+                        .HasMaxLength(2097152)
+                        .HasColumnType("character varying(2097152)")
+                        .HasColumnName("outcome_json");
+
+                    b.Property<int>("PageCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("page_count");
+
+                    b.Property<string>("PreviewPagesJson")
+                        .IsRequired()
+                        .HasMaxLength(4194304)
+                        .HasColumnType("character varying(4194304)")
+                        .HasColumnName("preview_pages_json");
+
+                    b.Property<long?>("ProfileId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("profile_id");
+
+                    b.Property<int?>("ProfileRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("profile_revision");
+
+                    b.Property<long>("RequesterUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("requester_user_id");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.Property<Guid?>("RunWindowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_window_id");
+
+                    b.Property<string>("SelectionJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("selection_json");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_reviews");
+
+                    b.HasIndex("ActionId")
+                        .HasDatabaseName("ix_vet_photo_reviews_action_id");
+
+                    b.HasIndex("ProfileId")
+                        .HasDatabaseName("ix_vet_photo_reviews_profile_id");
+
+                    b.HasIndex("RunWindowId")
+                        .HasDatabaseName("ix_vet_photo_reviews_run_window_id");
+
+                    b.HasIndex("BatchId", "State", "CreatedAt")
+                        .HasDatabaseName("ix_vet_photo_reviews_batch_id_state_created_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "OperationKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_reviews_family_id_bot_db_id_operation_key");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_reviews_family_id_bot_db_id_telegram_bot_id_chat_");
+
+                    b.ToTable("vet_photo_reviews", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("model_name");
+
+                    b.Property<int>("NextWindowOrdinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("next_window_ordinal");
+
+                    b.Property<Guid>("OperationKey")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_key");
+
+                    b.Property<int>("SelectedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("selected_count");
+
+                    b.Property<string>("SelectionJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("selection_json");
+
+                    b.Property<string>("SelectionMode")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("selection_mode");
+
+                    b.Property<Guid>("SelectionReviewId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("selection_review_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_runs");
+
+                    b.HasIndex("SelectionReviewId")
+                        .HasDatabaseName("ix_vet_photo_runs_selection_review_id");
+
+                    b.HasIndex("FamilyId", "BotDbId", "OperationKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_runs_family_id_bot_db_id_operation_key");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_runs_family_id_bot_db_id_telegram_bot_id_chat_id_");
+
+                    b.ToTable("vet_photo_runs", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoRunWindow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long?>("ActionId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("action_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<Guid?>("ComparisonReviewId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("comparison_review_id");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("ordinal");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("SelectionJson")
+                        .IsRequired()
+                        .HasMaxLength(65536)
+                        .HasColumnType("character varying(65536)")
+                        .HasColumnName("selection_json");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_run_windows");
+
+                    b.HasIndex("ActionId")
+                        .HasDatabaseName("ix_vet_photo_run_windows_action_id");
+
+                    b.HasIndex("RunId", "Ordinal")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_run_windows_run_id_ordinal");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_run_windows_family_id_bot_db_id_telegram_bot_id_c");
+
+                    b.ToTable("vet_photo_run_windows", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoSource", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AdmittedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("admitted_at");
+
+                    b.Property<string>("Association")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("association");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<string>("ChatType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("chat_type");
+
+                    b.Property<Guid>("CurrentInputRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("current_input_revision_id");
+
+                    b.Property<int>("CurrentOrdinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_ordinal");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<int?>("ItemNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("item_number");
+
+                    b.Property<string>("MediaGroupId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("media_group_id");
+
+                    b.Property<Guid?>("ProposedBatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proposed_batch_id");
+
+                    b.Property<int?>("ReplyToMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("reply_to_message_id");
+
+                    b.Property<DateTimeOffset>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<long>("SourceAuthorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_author_user_id");
+
+                    b.Property<long?>("SourceMessageDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_message_db_id");
+
+                    b.Property<int>("SourceSlot")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_slot");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("state");
+
+                    b.Property<long>("TelegramBotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_bot_id");
+
+                    b.Property<int>("TelegramMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("telegram_message_id");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_vet_photo_sources");
+
+                    b.HasIndex("ProposedBatchId")
+                        .HasDatabaseName("ix_vet_photo_sources_proposed_batch_id");
+
+                    b.HasIndex("BatchId", "ItemNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_sources_batch_id_item_number")
+                        .HasFilter("batch_id IS NOT NULL AND item_number IS NOT NULL");
+
+                    b.HasIndex("FamilyId", "BotDbId", "State", "AdmittedAt")
+                        .HasDatabaseName("ix_vet_photo_sources_family_id_bot_db_id_state_admitted_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId")
+                        .HasDatabaseName("ix_vet_photo_sources_family_id_bot_db_id_telegram_bot_id_chat_");
+
+                    b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId", "TelegramMessageId", "SourceSlot")
+                        .IsUnique()
+                        .HasDatabaseName("ix_vet_photo_sources_family_id_bot_db_id_telegram_bot_id_chat_1");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("FamilyId", "BotDbId", "TelegramBotId", "ChatId", "TopicId", "TelegramMessageId", "SourceSlot"), false);
+
+                    b.ToTable("vet_photo_sources", (string)null);
+                });
+
             modelBuilder.Entity("Assistant.Domain.Vet.VetDiaryAction", b =>
                 {
                     b.Property<long>("Id")
@@ -2319,6 +3633,228 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_safety_rules_health_profiles_profile_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoAttempt", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", null)
+                        .WithMany()
+                        .HasForeignKey("InputRevisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_attempts_vet_photo_input_revisions_input_revision");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoRunWindow", null)
+                        .WithMany()
+                        .HasForeignKey("RunWindowId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_attempts_vet_photo_run_windows_run_window_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoSource", null)
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_attempts_vet_photo_sources_source_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoBatch", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.VetProfile", null)
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_batches_vet_profiles_profile_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoCandidate", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBatch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_candidates_vet_photo_batches_batch_id");
+
+                    b.HasOne("Assistant.Domain.Vet.VetEvent", null)
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_candidates_vet_events_event_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoExtraction", null)
+                        .WithMany()
+                        .HasForeignKey("ExtractionResultId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_candidates_vet_photo_extractions_extraction_resul");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", null)
+                        .WithMany()
+                        .HasForeignKey("InputRevisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_candidates_vet_photo_input_revisions_input_revisi");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoSource", null)
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_candidates_vet_photo_sources_source_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoExtraction", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoAttempt", null)
+                        .WithMany()
+                        .HasForeignKey("AttemptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_extractions_vet_photo_attempts_attempt_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", null)
+                        .WithMany()
+                        .HasForeignKey("InputRevisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_extractions_vet_photo_input_revisions_input_revis");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoExtraction", null)
+                        .WithMany()
+                        .HasForeignKey("ReusesExtractionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_extractions_vet_photo_extractions_reuses_extracti");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoSource", null)
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_extractions_vet_photo_sources_source_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", null)
+                        .WithMany()
+                        .HasForeignKey("ReusesImageInputId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_input_revisions_vet_photo_input_revisions_reuses_");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoSource", null)
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_input_revisions_vet_photo_sources_source_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoOriginalReference", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBlob", null)
+                        .WithMany()
+                        .HasForeignKey("BlobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_original_references_vet_photo_blobs_blob_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoInputRevision", null)
+                        .WithMany()
+                        .HasForeignKey("InputRevisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_original_references_vet_photo_input_revisions_inp");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoReaderLease", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoAttempt", null)
+                        .WithMany()
+                        .HasForeignKey("AttemptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_reader_leases_vet_photo_attempts_attempt_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBlob", null)
+                        .WithMany()
+                        .HasForeignKey("BlobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_reader_leases_vet_photo_blobs_blob_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoOriginalReference", null)
+                        .WithMany()
+                        .HasForeignKey("OriginalReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_reader_leases_vet_photo_original_references_origi");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoReview", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.VetDiaryAction", null)
+                        .WithMany()
+                        .HasForeignKey("ActionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_reviews_vet_diary_actions_action_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBatch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_reviews_vet_photo_batches_batch_id");
+
+                    b.HasOne("Assistant.Domain.Vet.VetProfile", null)
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_reviews_vet_profiles_profile_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoRunWindow", null)
+                        .WithMany()
+                        .HasForeignKey("RunWindowId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_reviews_vet_photo_run_windows_run_window_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoRun", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoReview", null)
+                        .WithMany()
+                        .HasForeignKey("SelectionReviewId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_runs_vet_photo_reviews_selection_review_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoRunWindow", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.VetDiaryAction", null)
+                        .WithMany()
+                        .HasForeignKey("ActionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_run_windows_vet_diary_actions_action_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_vet_photo_run_windows_vet_photo_runs_run_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoSource", b =>
+                {
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBatch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_sources_vet_photo_batches_batch_id");
+
+                    b.HasOne("Assistant.Domain.Vet.Photos.VetPhotoBatch", null)
+                        .WithMany()
+                        .HasForeignKey("ProposedBatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_vet_photo_sources_vet_photo_batches_proposed_batch_id");
                 });
 
             modelBuilder.Entity("Assistant.Domain.Vet.VetDiaryActionChange", b =>
