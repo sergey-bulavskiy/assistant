@@ -39,6 +39,8 @@ public class FakeTelegramClient : ITelegramClient
     /// every other chat id's send still succeeds. Used to prove one recipient's send failure never
     /// stops the others (e.g. BudgetNoticeSender's per-admin loop).</summary>
     public long? ThrowOnSendToChatId { get; set; }
+    /// <summary>Injects a failed review send independently of ordinary text acknowledgements.</summary>
+    public long? ThrowOnButtonsToChatId { get; set; }
 
     /// <summary>
     /// One-shot switch simulating Telegram redelivering updates the offset has already moved past
@@ -253,6 +255,7 @@ public class FakeTelegramClient : ITelegramClient
     public Task<int> SendTextWithButtonsAsync(
         long chatId, int? topicId, string text, IReadOnlyList<InlineButton> buttons, int? replyToMessageId, CancellationToken cancellationToken)
     {
+        if (ThrowOnButtonsToChatId == chatId) throw new IOException("synthetic review delivery failure");
         lock (_lock)
         {
             var messageId = _nextSentMessageId++;

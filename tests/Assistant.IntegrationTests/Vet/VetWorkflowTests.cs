@@ -10,6 +10,69 @@ namespace Assistant.IntegrationTests.Vet;
 public sealed class VetWorkflowTests : VetTestBase
 {
     [Fact]
+    public async Task Targetless_clarification_cannot_replace_both_same_type_pending_candidates()
+    {
+        await SeedAsync(); await using var s = Open();
+        s.Chat.EnqueueResponse("""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.4","date":"2001-04-03"},{"type":"glucose","intent":"record","value":"6.8","date":"2001-04-03"}]}""");
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic two incomplete readings")), CancellationToken.None);
+        var before = await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync();
+        var prompt = s.Telegram.ButtonMessages.Single();
+        s.Chat.EnqueueResponse("""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","time":"09:30","time_evidence":"stated"}],"operation":{"kind":"accept"}}""");
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic targetless clock clarification", 1001)
+            with { ReplyToMessageId = prompt.MessageId, ReplyToUserId = Bot.TelegramBotId }), CancellationToken.None);
+        var after = await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync();
+        after.ReviewRevision.ShouldBe(before.ReviewRevision); after.ProposalJson.ShouldBe(before.ProposalJson);
+        after.PromptMessageId.ShouldBe(before.PromptMessageId); after.State.ShouldBe("pending");
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(0); (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0);
+        s.Telegram.SentMessages.Last().Text.ShouldContain("Неоднозначное уточнение не меняет просмотр");
+    }
+
+    [Fact]
+    public async Task Oversized_partial_preview_cannot_save_full_subset_by_natural_acceptance()
+    {
+        await SeedAsync(); await using var s = Open();
+        var json = JsonSerializer.Serialize(new { needs_reply = false, events = Enumerable.Range(1, 20).Select(index =>
+            new { type = "insulin", intent = "unsure", dose = index.ToString(), product = new string('x', 100), time_evidence = "current" }).ToArray() });
+        s.Chat.EnqueueResponse(json);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic oversized proposed subset")), CancellationToken.None);
+        var pending = await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync();
+        s.Telegram.ButtonMessages.Single().Buttons.Select(b => b.Label).ShouldBe(new[] { "Отменить" });
+        s.Chat.EnqueueResponse(JsonSerializer.Serialize(new { needs_reply = false, events = Array.Empty<object>(),
+            operation = new { kind = "accept", pending_id = pending.Id, review_revision = pending.ReviewRevision } }));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic yes to partial preview", 1001)), CancellationToken.None);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(0); (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0);
+        (await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync()).State.ShouldBe("pending");
+        JsonSerializer.Deserialize<VetProposal>(pending.ProposalJson)!.RequiresClarification.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Failed_preview_delivery_cannot_be_accepted_by_explicit_model_reference_without_a_new_review()
+    {
+        await SeedAsync(); await using var s = Open();
+        s.Telegram.ThrowOnButtonsToChatId = -100;
+        s.Chat.EnqueueResponse("""{"needs_reply":false,"events":[{"type":"glucose","intent":"unsure","value":"6.4","time_evidence":"current"}]}""");
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic unseen pending")), CancellationToken.None);
+        var pending = await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync();
+        pending.PromptMessageId.ShouldBeNull();
+        s.Telegram.ThrowOnButtonsToChatId = null;
+        s.Chat.EnqueueResponse(JsonSerializer.Serialize(new { needs_reply = false, events = Array.Empty<object>(),
+            operation = new { kind = "accept", pending_id = pending.Id, review_revision = pending.ReviewRevision } }));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic model-selected unseen review", 1001)), CancellationToken.None);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(0); (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0);
+        s.Telegram.ButtonMessages.Single().Text.ShouldContain("глюкоза 6.4 mmol/L");
+        s.Telegram.SentMessages.Last().Text.ShouldContain("Сначала проверьте полный отправленный просмотр");
+        var shown = await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync();
+        shown.PromptMessageId.ShouldBe(s.Telegram.ButtonMessages.Single().MessageId);
+        s.Chat.EnqueueResponse(JsonSerializer.Serialize(new { needs_reply = false, events = Array.Empty<object>(),
+            operation = new { kind = "accept", pending_id = shown.Id, review_revision = shown.ReviewRevision } }));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(3, Text("synthetic separate reviewed confirmation", 1002, 222)), CancellationToken.None);
+        var saved = await s.Context.VetEvents.AsNoTracking().SingleAsync();
+        saved.Value.ShouldBe(6.4m); saved.SourceAuthorUserId.ShouldBe(111);
+        (await s.Context.VetDiaryActions.AsNoTracking().SingleAsync()).ActorUserId.ShouldBe(222);
+        (await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync()).State.ShouldBe("accepted");
+    }
+
+    [Fact]
     public async Task Value_only_correction_preserves_old_time_even_when_timezone_default_is_cleared()
     {
         await SeedAsync(); await using var s = Open();

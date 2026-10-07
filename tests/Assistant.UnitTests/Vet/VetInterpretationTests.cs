@@ -58,6 +58,8 @@ public sealed class VetInterpretationTests
     [InlineData("""{"needs_reply":true,"needs_reply":false,"events":[]}""")]
     [InlineData("""{"needs_reply":true,"events":[{"type":"glucose","value":6.4,"sql":"delete"}]}""")]
     [InlineData("""{"needs_reply":true,"events":[],"operation":{"kind":"correct","event_id":-1}}""")]
+    [InlineData("""{"needs_reply":true,"events":[],"operation":{"kind":"correct","event_id":"12"}}""")]
+    [InlineData("""{"needs_reply":true,"events":[{"type":"glucose","intent":"record","value":"6.8","event_id":"12"}]}""")]
     public void Nonclosed_or_invalid_schema_is_rejected(string json) =>
         VetInterpretationParser.Parse(json).ShouldBeNull();
 

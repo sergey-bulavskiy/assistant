@@ -386,7 +386,7 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
         {
             pending = await Pending(scope).AsNoTracking().SingleOrDefaultAsync(p => p.Id == pendingId, ct);
             if (pending is null) return VetMutationResult.Of(VetMutationStatus.NotFound);
-            if (pending.State != "pending" || pending.ReviewRevision != mutation.ReviewRevision || pending.ExpiresAt <= clock.UtcNow
+            if (pending.State != "pending" || pending.PromptMessageId == null || pending.ReviewRevision != mutation.ReviewRevision || pending.ExpiresAt <= clock.UtcNow
                 || pending.InputRevisionId != mutation.InputRevisionId || pending.SourceId != mutation.SourceId)
                 return VetMutationResult.Of(VetMutationStatus.Stale);
             var reviewed = JsonSerializer.Deserialize<VetProposal>(pending.ProposalJson);

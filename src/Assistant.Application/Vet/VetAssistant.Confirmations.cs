@@ -75,11 +75,26 @@ public sealed partial class VetAssistant
             {
                 await _replies.SendAsync(client, message, "Укажите отдельные исправления по ID; неопределённое сопоставление не подтверждается целиком.", ct); return;
             }
+            bool Matches(VetCandidate original, VetCandidate replacement)
+            {
+                if (original.EventType != replacement.EventType) return false;
+                if (replacement.EventId is { } eventId) return original.EventId == eventId;
+                var sameType = proposal.Candidates.Where(c => c.EventType == replacement.EventType).ToArray();
+                if (sameType.Length == 1) return true;
+                return VetInterpretationParser.TryPositiveDecimal(replacement.RawValue, out var value)
+                    && VetInterpretationParser.TryPositiveDecimal(original.RawValue, out var originalValue) && value == originalValue
+                    && sameType.Count(c => VetInterpretationParser.TryPositiveDecimal(c.RawValue, out var candidateValue) && candidateValue == value) == 1;
+            }
+            if (supplied.Any(replacement => proposal.Candidates.Count(original => Matches(original, replacement)) != 1))
+            {
+                await _replies.SendAsync(client, message,
+                    "Уточните, какой факт исправляете: укажите его исходное значение или точный ID. Неоднозначное уточнение не меняет просмотр.", ct);
+                return;
+            }
             var merged = new List<VetCandidate>();
             foreach (var original in proposal.Candidates)
             {
-                var replacements = supplied.Where(c => c.EventType == original.EventType
-                    && (c.EventId is null || c.EventId == original.EventId)).ToArray();
+                var replacements = supplied.Where(c => Matches(original, c)).ToArray();
                 if (replacements.Length > 1) { await _replies.SendAsync(client, message, "Уточните, какой факт исправляете.", ct); return; }
                 var replacement = replacements.SingleOrDefault();
                 merged.Add(replacement is null ? original : original with
@@ -150,6 +165,11 @@ public sealed partial class VetAssistant
         var source = await _diary.GetSourceAsync(scope, decision.SourceId, ct);
         if (source is null || source.Revision.Id != decision.InputRevisionId || decision.State != "pending"
             || decision.ExpiresAt <= _clock.UtcNow) return "Этот просмотр уже недействителен.";
+        if (decision.PromptMessageId is null)
+        {
+            await ShowPendingAsync(client, message, decision, profile, ct);
+            return "Сначала проверьте полный отправленный просмотр и подтвердите его отдельно. Ничего ещё не сохранено.";
+        }
         var proposal = JsonSerializer.Deserialize<VetProposal>(decision.ProposalJson)!;
         if (proposal.RequiresTargetSelection) return "Нужны точные ID исправляемых фактов; прежние записи сохранены.";
         if (proposal.RequiresClarification) return "Сначала уточните недостающие данные; прежние записи сохранены.";
@@ -226,6 +246,16 @@ public sealed partial class VetAssistant
         if (proposal.Reasons.Count > 0) text += string.Join("\n", proposal.Reasons) + "\n";
         if (proposal.RequiresTargetSelection || proposal.Changes.Count == 0 && proposal.Candidates.Count == 0) canAccept = false;
         text += canAccept ? "Подтвердите этот просмотр или отмените." : "Уточните недостающие данные ответом на этот просмотр или отмените.";
+        if (text.Length > 3500 && !proposal.RequiresClarification)
+        {
+            // A partial preview is never proof that the full frozen subset was reviewed.
+            var oversized = proposal with { RequiresClarification = true };
+            if (!await _diary.RevisePendingAsync(scope, decision.Id, decision.ReviewRevision, JsonSerializer.Serialize(oversized), ct)) return;
+            var oldRevision = decision.ReviewRevision;
+            decision = (await _diary.GetPendingAsync(scope, decision.Id, ct))!;
+            text = text.Replace($"версия {oldRevision}", $"версия {decision.ReviewRevision}");
+            canAccept = false;
+        }
         var promptId = await _replies.ReviewAsync(client, message, decision.Id, decision.ReviewRevision,
             text.Length <= 3500 ? text : text[..3300] + "\nПолный просмотр слишком велик: разбейте исходную запись.", canAccept && text.Length <= 3500, ct);
         if (promptId is { } prompt) await _diary.SetPromptAsync(scope, decision.Id, decision.ReviewRevision, prompt, ct);

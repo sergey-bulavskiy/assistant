@@ -57,6 +57,7 @@ public sealed class VetDiaryStoreTests : VetTestBase
             var changes = new[] { new VetEventChange(null, null, e.State) };
             pending = await setup.Diary.PutPendingAsync(Scope, e.Source.Source.Id, e.Source.Revision.Id,
                 e.State.ExtractionResultId, 111, JsonSerializer.Serialize(new VetProposal([], changes, [], "confirm")), CancellationToken.None);
+            await setup.Diary.SetPromptAsync(Scope, pending.Id, pending.ReviewRevision, 700, CancellationToken.None);
             mutation = new(Scope, pending.OperationKey, 222, "confirm", e.Profile.Id, changes,
                 pending.SourceId, pending.InputRevisionId, pending.Id, pending.ReviewRevision);
         }
@@ -81,6 +82,7 @@ public sealed class VetDiaryStoreTests : VetTestBase
         var changes = new[] { new VetEventChange(null, null, e.State) };
         var p = await setup.Diary.PutPendingAsync(Scope, e.Source.Source.Id, e.Source.Revision.Id,
             e.State.ExtractionResultId, 111, JsonSerializer.Serialize(new VetProposal([], changes, [], "confirm")), CancellationToken.None);
+        await setup.Diary.SetPromptAsync(Scope, p.Id, p.ReviewRevision, 700, CancellationToken.None);
         await using var accept = Open(); await using var decline = Open();
         var write = accept.Diary.ApplyAsync(new(Scope, p.OperationKey, 222, "confirm", e.Profile.Id, changes,
             p.SourceId, p.InputRevisionId, p.Id, p.ReviewRevision), CancellationToken.None);
@@ -109,6 +111,10 @@ public sealed class VetDiaryStoreTests : VetTestBase
             e.State.ExtractionResultId, 111, JsonSerializer.Serialize(new VetProposal([], reviewed, [], "confirm")), CancellationToken.None);
         var mutation = new VetDiaryMutation(Scope, p.OperationKey, 111, "confirm", e.Profile.Id, reviewed,
             p.SourceId, p.InputRevisionId, p.Id, p.ReviewRevision);
+        (await s.Diary.ApplyAsync(mutation, CancellationToken.None)).Status.ShouldBe(VetMutationStatus.Stale);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(0);
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0);
+        await s.Diary.SetPromptAsync(Scope, p.Id, p.ReviewRevision, 700, CancellationToken.None);
         (await s.Diary.ApplyAsync(mutation with { ReviewRevision = 99 }, CancellationToken.None)).Status.ShouldBe(VetMutationStatus.Stale);
         (await s.Diary.ApplyAsync(mutation with { Changes = [new(null, null, e.State with { Value = 7.1m })] }, CancellationToken.None))
             .Status.ShouldBe(VetMutationStatus.Refused);

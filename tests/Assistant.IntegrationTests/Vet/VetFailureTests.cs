@@ -111,6 +111,7 @@ public sealed class VetFailureTests : VetTestBase
             e.State with { EventType = "insulin", Value = 0.125m, Unit = "U" }) };
         var pending = await s.Diary.PutPendingAsync(Scope, e.Source.Source.Id, e.Source.Revision.Id,
             e.State.ExtractionResultId, 111, JsonSerializer.Serialize(new VetProposal([], changes, [], "confirm")), CancellationToken.None);
+        await s.Diary.SetPromptAsync(Scope, pending.Id, pending.ReviewRevision, 700, CancellationToken.None);
         var mutation = new VetDiaryMutation(Scope, pending.OperationKey, 222, "confirm", e.Profile.Id,
             changes, pending.SourceId, pending.InputRevisionId, pending.Id, pending.ReviewRevision);
         failure.Armed = true;
