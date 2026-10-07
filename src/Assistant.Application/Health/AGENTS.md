@@ -10,3 +10,6 @@
   trends, fixed diary count ceilings, pending facts or diagnostic traces enter this snapshot.
 - Profile fields use single-field store updates; legacy profile commands must preserve new columns.
   Never send sensitive profile fields to interpretation or ordinary logs.
+- Confirmation callbacks require the pending row's exact profile, bot, chat, nullable topic and
+  non-null saved prompt message before accepting, declining or expiring it. Family scope is enforced
+  by the pending store; a mismatched callback receives only the generic resolved acknowledgement.
