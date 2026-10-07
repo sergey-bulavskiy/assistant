@@ -54,12 +54,38 @@ public class LlmGateway : ILlmGateway
     public bool IsEnabled => true;
 
     public IReadOnlyList<ModelStatus> DescribeModels() =>
-        _catalog.Models.Select(m => new ModelStatus(m.Name, _availability.IsAvailable(m.Name), _availability.RetryAt(m.Name))).ToArray();
+        _catalog.Models.Select(m => new ModelStatus(m.Name, _availability.IsAvailable(m.Name), _availability.RetryAt(m.Name),
+            SupportsImages(m))).ToArray();
+
+    private bool SupportsImages(ModelCatalogEntry candidate) =>
+        candidate.ProviderPrefix == LlmProviderValidation.CodexCliPrefix && candidate.Name == "gpt-6.1-sol"
+        && _chatClients.GetClient(candidate.ProviderPrefix, candidate.Name) is IImageChatClient { SupportsImages: true };
+
+    private static bool HasImages(LlmRequest request) => request.Images is { Count: > 0 };
 
     public bool IsKnownModel(string name) => _catalog.TryGetByName(name, out _);
 
     public async Task<LlmResult> CompleteAsync(LlmRequest request, CancellationToken cancellationToken)
     {
+        if (HasImages(request))
+        {
+            if (request.AttemptKey is null || request.AttemptKey == Guid.Empty || request.TriggerMessageId is null
+                || request.Images!.Count != 1 || request.Images.Any(i => !ValidImage(i)))
+                return LlmResult.Refused(LlmRefusalReason.UnsupportedInput);
+            // The key is an attempt, not a cache entry: absent durable response data cannot justify redispatch.
+            var existing = await _db.LlmCalls.IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(c => c.AttemptKey == request.AttemptKey, cancellationToken);
+            if (existing is not null)
+            {
+                var same = existing.FamilyId == request.FamilyId && existing.BotId == request.BotId
+                    && existing.ChatId == request.ChatId && existing.TopicId == request.TopicId
+                    && existing.TriggerMessageId == request.TriggerMessageId && existing.Tier == request.Tier
+                    && existing.Provider == LlmProviderValidation.CodexCliPrefix && existing.Model == "gpt-6.1-sol"
+                    && (request.PreferredModel is null || request.PreferredModel == existing.Model);
+                return LlmResult.Refused(same ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed)
+                    with { TraceAttemptId = same ? request.AttemptKey : null };
+            }
+        }
         // Spec §8.8: take the concurrency semaphore FIRST, then check the rate guard. A single slot
         // covers the whole call including any fallback attempts across candidates -- fallback happens
         // serially within one guarded slot, it does not claim a second slot per attempt. If the wait
@@ -116,6 +142,11 @@ public class LlmGateway : ILlmGateway
             // Spec §10.3/review: notices are NOT sent from this pre-call status -- see the post-call
             // check after this try/finally, which re-evaluates against the call's own recorded cost.
             var candidates = _catalog.GetCandidateOrder(request.Tier, request.PreferredModel);
+            if (HasImages(request))
+            {
+                candidates = candidates.Where(SupportsImages).ToArray();
+                if (candidates.Count == 0) return LlmResult.Refused(LlmRefusalReason.UnsupportedInput);
+            }
             var budgetStatus = await _budget.EvaluateAsync(cancellationToken);
             budgetWasConfigured = budgetStatus is not null;
 
@@ -243,6 +274,15 @@ public class LlmGateway : ILlmGateway
     private Task TraceDecisionAsync(string reason) =>
         TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", reason));
 
+    private static bool ValidImage(LlmImage image)
+    {
+        var bytes = image.Data.Span;
+        if (bytes.Length is < 3 or > 20_000_000) return false;
+        return image.MediaType == "image/jpeg" ? bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff
+            : image.MediaType == "image/png" && bytes.Length >= 8
+                && bytes[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+    }
+
     private ModelPrice GetPrice(ModelCatalogEntry entry) =>
         _config.Prices.TryGetValue(entry.Name, out var price) ? price : new ModelPrice(0m, 0m);
 
@@ -334,6 +374,12 @@ public class LlmGateway : ILlmGateway
         var stopwatch = Stopwatch.StartNew();
         ChatResponse response;
         var attemptId = Guid.NewGuid();
+        if (HasImages(request))
+        {
+            attemptId = request.AttemptKey!.Value;
+            if (!await TryAdmitImageAttemptAsync(request, candidate, cancellationToken))
+                return (LlmResult.Refused(LlmRefusalReason.OutcomeUnknown) with { TraceAttemptId = attemptId }, null);
+        }
 
         try
         {
@@ -341,6 +387,12 @@ public class LlmGateway : ILlmGateway
             var chatMessages = new List<ChatMessage> { new(ChatRole.System, request.SystemPrompt) };
             chatMessages.AddRange(request.Messages.Select(
                 m => new ChatMessage(m.Role == LlmMessageRole.User ? ChatRole.User : ChatRole.Assistant, m.Text) { AuthorName = m.Author }));
+            if (HasImages(request))
+            {
+                var target = chatMessages.LastOrDefault(m => m.Role == ChatRole.User);
+                if (target is null) { target = new ChatMessage(ChatRole.User, string.Empty); chatMessages.Add(target); }
+                foreach (var image in request.Images!) target.Contents.Add(new DataContent(image.Data, image.MediaType));
+            }
             var options = new ChatOptions { ModelId = candidate.Name, MaxOutputTokens = _config.MaxOutputTokens };
 
             if (TraceSafety.IsEnabled(_trace))
@@ -427,7 +479,7 @@ public class LlmGateway : ILlmGateway
             // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
             await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
                 attemptId, "provider_timeout");
-            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
+            return (LlmResult.Refused(HasImages(request) ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
         catch (TimeoutException)
         {
@@ -441,15 +493,15 @@ public class LlmGateway : ILlmGateway
             // No usage came back, so the pre-call estimate is recorded as the cost (0 for zero-price).
             await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Timeout, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
                 attemptId, "provider_timeout");
-            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
+            return (LlmResult.Refused(HasImages(request) ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             _logger.LogError("LLM call to {Model} failed: {ExceptionType}", candidate.Name, ex.GetType().Name);
-            await RecordAndTraceAsync(request, candidate, LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
+            await RecordAndTraceAsync(request, candidate, HasImages(request) ? LlmCallOutcome.OutcomeUnknown : LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
                 attemptId, "provider_failure");
-            return (LlmResult.Refused(LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
+            return (LlmResult.Refused(HasImages(request) ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
 
         // Everything from here on is OUTSIDE the try above, on purpose: the provider call already
@@ -488,11 +540,14 @@ public class LlmGateway : ILlmGateway
         }
 
         var reportedCost = ExtractReportedCost(response);
-        await RecordAndTraceAsync(
+        var recorded = await RecordAndTraceAsync(
             request, candidate, LlmCallOutcome.Ok,
             inputTokens is { } i ? (int)i : null,
             outputTokens is { } o ? (int)o : null,
             reportedCost, cost, stopwatch.ElapsedMilliseconds, attemptId, "normal", response.Text);
+
+        if (HasImages(request) && !recorded)
+            return (LlmResult.Refused(LlmRefusalReason.OutcomeUnknown) with { TraceAttemptId = attemptId }, null);
 
         return (LlmResult.Answered(response.Text, candidate.Name) with { TraceAttemptId = attemptId }, null);
     }
@@ -517,13 +572,14 @@ public class LlmGateway : ILlmGateway
         };
     }
 
-    private async Task RecordAndTraceAsync(
+    private async Task<bool> RecordAndTraceAsync(
         LlmRequest request, ModelCatalogEntry candidate, LlmCallOutcome outcome,
         int? inputTokens, int? outputTokens, decimal? reportedCost, decimal cost, long durationMs,
         Guid attemptId, string reason, string? text = null)
     {
         var callId = await RecordCallAsync(request, candidate, outcome, inputTokens, outputTokens, reportedCost, cost, durationMs);
         await TraceModelResultAsync(attemptId, callId, outcome == LlmCallOutcome.Ok ? "ok" : "failed", reason, text);
+        return callId.HasValue;
     }
 
     private Task TraceModelResultAsync(Guid attemptId, long? callId, string outcome, string reason, string? text) =>
@@ -534,6 +590,30 @@ public class LlmGateway : ILlmGateway
         LlmRequest request, ModelCatalogEntry candidate, LlmCallOutcome outcome,
         int? inputTokens, int? outputTokens, decimal? reportedCost, decimal cost, long durationMs)
     {
+        if (HasImages(request))
+        {
+            try
+            {
+                // A crash/timeout cannot prove whether the provider finished an image operation.
+                var finalOutcome = outcome is LlmCallOutcome.Timeout or LlmCallOutcome.Failed
+                    ? LlmCallOutcome.OutcomeUnknown : outcome;
+                var changed = await _db.LlmCalls.IgnoreQueryFilters()
+                    .Where(c => c.AttemptKey == request.AttemptKey && c.FamilyId == request.FamilyId
+                        && c.BotId == request.BotId && c.Outcome == LlmCallOutcome.Dispatching)
+                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.Outcome, finalOutcome)
+                        .SetProperty(c => c.InputTokens, inputTokens).SetProperty(c => c.OutputTokens, outputTokens)
+                        .SetProperty(c => c.ReportedCost, reportedCost).SetProperty(c => c.Cost, cost)
+                        .SetProperty(c => c.DurationMs, durationMs), CancellationToken.None);
+                if (changed != 1) return null;
+                return await _db.LlmCalls.IgnoreQueryFilters().Where(c => c.AttemptKey == request.AttemptKey)
+                    .Select(c => (long?)c.Id).SingleAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Failed to finalize image attempt: {ExceptionType}", ex.GetType().Name);
+                return null;
+            }
+        }
         var call = new LlmCall
         {
             FamilyId = request.FamilyId,
@@ -572,6 +652,31 @@ public class LlmGateway : ILlmGateway
             _logger.LogError("Failed to record LLM call attempt: {ExceptionType}", ex.GetType().Name);
             _db.Entry(call).State = EntityState.Detached;
             return null;
+        }
+    }
+
+    private async Task<bool> TryAdmitImageAttemptAsync(LlmRequest request, ModelCatalogEntry candidate, CancellationToken token)
+    {
+        var row = new LlmCall
+        {
+            AttemptKey = request.AttemptKey, FamilyId = request.FamilyId, BotId = request.BotId,
+            Tier = request.Tier, Provider = candidate.ProviderPrefix, Model = candidate.Name,
+            Outcome = LlmCallOutcome.Dispatching, Cost = 0, CreatedAt = _clock.UtcNow,
+            ChatId = request.ChatId, TopicId = request.TopicId, TriggerMessageId = request.TriggerMessageId
+        };
+        _db.LlmCalls.Add(row);
+        try
+        {
+            await _db.SaveChangesAsync(token);
+            _db.Entry(row).State = EntityState.Detached;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _db.Entry(row).State = EntityState.Detached;
+            token.ThrowIfCancellationRequested();
+            _logger.LogWarning("Image attempt admission failed: {ExceptionType}", ex.GetType().Name);
+            return false;
         }
     }
 }

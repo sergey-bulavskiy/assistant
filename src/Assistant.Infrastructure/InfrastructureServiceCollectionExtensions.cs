@@ -70,6 +70,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IPendingRecordStore, PendingRecordStore>();
         services.AddVetPersistence();
         services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
+        services.AddSingleton<Assistant.Application.Health.Documents.IDocumentTextExtractor,
+            Assistant.Infrastructure.Health.Documents.DocumentTextExtractor>();
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.
         // The app must always start -- parsing/validation never throws and nothing here is
@@ -226,6 +228,7 @@ public static class InfrastructureServiceCollectionExtensions
             {
                 ExecutablePath = configuration["CODEX_CLI_PATH"] ?? "/usr/local/bin/codex",
                 HomeDirectory = configuration["CODEX_HOME"] ?? "/home/app/.codex",
+                ImageInputEnabled = !string.Equals(configuration["CODEX_IMAGE_INPUT_ENABLED"], "false", StringComparison.OrdinalIgnoreCase),
                 MaxOutputTokens = llmConfig.MaxOutputTokens,
                 CallTimeoutSeconds = llmConfig.CallTimeoutSeconds
             });
