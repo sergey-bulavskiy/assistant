@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
@@ -93,8 +94,8 @@ internal sealed class HealthMessagePipeline
     /// <summary>A new text message that is not a command.</summary>
     public Task HandleNewAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll) =>
-        ExtractAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, replyToAll: replyToAll);
+        StoreResult storeResult, CancellationToken cancellationToken, bool replyToAll, bool allowUndo = true) =>
+        ExtractAsync(bot, telegramClient, message, text, familyId, profile, storeResult, cancellationToken, replyToAll: replyToAll, allowUndo: allowUndo);
 
     // An edit into a text without readings (too short or emoji only, no model call): the message's
     // records are deleted and its reaction is cleared.
@@ -129,7 +130,7 @@ internal sealed class HealthMessagePipeline
     private async Task ExtractAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
         StoreResult storeResult, CancellationToken cancellationToken, bool isEdit = false,
-        IReadOnlyCollection<string>? alreadyAlertedRuleKeys = null, bool replyToAll = false)
+        IReadOnlyCollection<string>? alreadyAlertedRuleKeys = null, bool replyToAll = false, bool allowUndo = true)
     {
         var messageDbId = storeResult.MessageDbId;
         var addressed = Addressing.IsAddressed(bot, message, text);
@@ -238,7 +239,7 @@ internal sealed class HealthMessagePipeline
         // A free-text undo ("удали это", "не записывай"): the model decides the message asks for it; code
         // acts only on a new message that recorded nothing and is a reply or addressed to the bot, and
         // limits it to one message in the /undo scope. Otherwise the message is handled as usual.
-        if (!isEdit && output.Undo && valid.Count == 0 && (IsReply(message) || Addressing.IsAddressed(bot, message, text)))
+        if (allowUndo && !isEdit && output.Undo && valid.Count == 0 && (IsReply(message) || Addressing.IsAddressed(bot, message, text)))
         {
             await UndoByTextAsync(bot, telegramClient, message, familyId, profile, cancellationToken);
             // A dangerous reading in one of the quick-scan formats still gets its fixed alert even when
@@ -316,7 +317,8 @@ internal sealed class HealthMessagePipeline
             // ✍ first, then the alerts; the clarification (below) comes last.
             if (replaced is null)
             {
-                await _replies.MarkRecordedAsync(telegramClient, message.ChatId, message.MessageId, cancellationToken);
+                await _replies.MarkRecordedUnlessDocumentAcknowledgedAsync(HealthDocumentScope.From(bot, profile.Id),
+                    telegramClient, message.ChatId, message.MessageId, cancellationToken);
             }
             else
             {
