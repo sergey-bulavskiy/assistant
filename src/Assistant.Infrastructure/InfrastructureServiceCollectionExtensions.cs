@@ -18,6 +18,7 @@ using Assistant.Infrastructure.Manager;
 using Assistant.Infrastructure.Persistence;
 using Assistant.Infrastructure.Roles;
 using Assistant.Infrastructure.Telegram;
+using Assistant.Infrastructure.Vet;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
@@ -67,6 +68,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IEventStore, EventStore>();
         services.AddScoped<ISafetyAlertStore, SafetyAlertStore>();
         services.AddScoped<IPendingRecordStore, PendingRecordStore>();
+        services.AddVetPersistence();
         services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
 
         // LLM pipeline (spec 3.1, 8.9): parse config once at composition time and decide on/off.
