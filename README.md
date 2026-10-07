@@ -5,7 +5,7 @@ A family assistant built from Telegram bots. A **manager bot** sets up a family 
 into PostgreSQL, one role bot -- the **General assistant** -- can also answer with a real LLM
 (a CLI subscription provider or a deliberately configured API provider) once configured. A **health**
 role bot tracks one household member and safety thresholds; a **vet** role bot keeps one cat's
-glucose and administered-insulin diary with consultation through the ChatGPT subscription.
+glucose and administered-insulin diary, reviewed meter-photo imports and consultation through the ChatGPT subscription.
 
 ## What it does
 
@@ -249,7 +249,7 @@ Confirmed history is available across this bot's authorized places, with source/
 withheld for facts from another place. Reviews and mutations remain in the original place.
 Any approved member can confirm a shown review; only the first valid acceptance/decline counts.
 Clarification creates a new reviewed version. Source authors remain separate from actors who
-confirm/correct/delete. Reviews expire after 24 hours. Text edits within 24 hours preserve stable
+confirm/correct/delete. Text reviews expire after 24 hours. Photo batches have no automatic expiry. Text edits within 24 hours preserve stable
 event IDs, increase revisions only for changed facts, and protect independent corrections/deletes;
 ambiguous mapping requires explicit IDs. Older edits need an explicit correction.
 
@@ -263,18 +263,108 @@ ambiguous mapping requires explicit IDs. Older edits need an explicit correction
 | `/today`, `/more` | approved members | Today's local diary or the next history page (50 facts per page). Natural requests can choose older periods. |
 | `/del <ID>` or `/del` as a reply | approved members | Soft-delete exact events in this place, preserving sources. Natural multi-record changes require review. |
 | `/undo` | approved members | Reverse your latest unreversed action here within 24 hours of its action time; later independent changes are protected. |
-| `/retry` as a reply | approved members | Explicit retry of a paused/failed source, at most three retries. Saved successful results are reused. |
+| `/retry` as a reply | approved members | Explicit retry of a paused/failed text source, at most three retries. Saved successful results are reused. |
 
 Natural corrections use an exact ID, a replied source or one unambiguous date/type match.
 Writes are atomic and revision checked. The source is durably admitted before its transport
 offset advances; recovery resumes exact saved work without another interpretation. Unknown
 provider outcomes pause for an explicit retry. A failed acknowledgement cannot duplicate an action.
-Text and captions are supported here; image import and photo archives are a later feature.
 
 Vet requires a configured, active ChatGPT subscription model chain containing only `codex-cli`
 entries (`LLM_MODELS` and any `LLM_FAST_MODELS`). Other providers cause a visible refusal for Vet;
 profile/history commands remain available. Calls use the shared gateway limits and actual attempt
 accounting with the original stored-message trigger; subscription cost is zero.
+
+**Vet meter photos.** Approved members can import JPEG/PNG meter images as Telegram photos or image
+files. Use `/photos_start` or `/import readings`, upload across albums or individual messages,
+then `/photos_close`.
+Intake closes explicitly; an album or elapsed time never closes it. A photo outside an open
+collection gets a one-item review. `/photos` lists this place's batches; `/photos <batch-id>`
+shows an exact batch. A late album/reply/upload-window item remains identified for explicit
+addition; a genuinely new image after a terminal batch gets a separate review.
+
+Metadata is admitted before the Telegram offset commits. Downloading and image extraction run
+in an independent background loop, so polling can receive edits and decisions during processing.
+Status distinguishes received, retained, processed, unresolved and saved items. Metadata alone
+is not an archived original. A failed or interrupted call keeps its durable status; a successful
+stored result is reused, and an uncertain dispatch is never automatically repeated.
+Unresolved or protected evidence can be shown in a complete notice scoped to the current place,
+without acceptance buttons or authority to save facts. A failed or uncertain notice send waits
+for an explicit review retry; a fully shown notice does not keep recovery occupied.
+
+The complete review orders clear readings by measurement time and displays unresolved items,
+shared year/unit/timezone assumptions, duplicate choices and source numbers. Meter dates never
+use upload time as a substitute. Missing year requires a batch decision; missing clock/date,
+`HI`/`LO`, multiple displays and conflicting units stay unresolved. Confirming a year alone does
+not supply a missing month, day or clock. Only positive exact decimal mmol/L readings can save;
+mg/dL remains source evidence without conversion. Synthetic rendered-panel checks do not prove
+real-camera accuracy; check the displayed proposal before confirming it.
+
+Save the fully shown clear subset once; it becomes one atomic diary action. Unresolved items
+remain reviewable. Edits, changed assumptions, duplicate discoveries or another member's decision
+invalidate stale previews. Repeated acceptance returns the same action. Cancellation first closes
+collecting intake and shows the exact remainder; it stops new calls only after the full cancellation
+review is accepted. Saved facts and originals remain. Original authors remain
+separate from the member who saves, corrects or reverses it. Explicit actual insulin in the
+caption follows the separate text diary once; planned doses do not record, and image reprocessing
+cannot repeat an administration or create a second caption glucose reading.
+
+The same operations are available conversationally, using exact displayed batch/source/item/action
+handles when needed. Ambiguous references ask for a specific target. Shortcuts are:
+
+| Operation | Shortcut or selection | Result |
+|---|---|---|
+| Start intake | `/photos_start` or `/import readings` | Opens one collecting batch in this exact place. |
+| Close intake | `/photos_close [batch-id]` | Ends uploads explicitly; duplicate close is safe. |
+| Show batch/history | `/photos [offset]` or `/photos <batch-id>` | Lists stored batches or one exact batch. |
+| Review item/subset | `/photos_review [batch-id]` or exact item numbers in a request | Shows current evidence and exceptions. |
+| Correct item | Exact source/item and supplied value/date/time | Prepares a revised proposal; saved facts need a fresh review. |
+| Exclude item | Exact item request or `/photos_exclude [batch-id]` | Reviews the selected exclusion; no invented measurement. |
+| Save clear readings | `/photos_save [batch-id]` | Shows the exact clear subset for explicit confirmation. |
+| Cancel remainder | `/photos_cancel [batch-id]` or an exact run request | Closes collecting intake and shows its remainder; accepting that review stops new image calls. A run cancellation stops new windows. |
+| Change batch assumptions | Explicit year, unit or timezone request | Refreshes proposals and review without rewriting confirmed facts. |
+| Undo latest action | `/undo` | Reverses your latest applicable action here within 24 hours; protects later edits. |
+| Reverse older save | `/photos_reverse <action-id>` or an exact selected subset | Shows up to 50 exact rows and protected changes before confirmation. |
+| Reprocess originals | `/photos_reprocess current\|all_originals [batch-id]` or scoped date/source selection | Shows a fixed selection and call policy before work. |
+| Delete originals | `/photos_delete_originals current\|all_originals [batch-id]` | Owner-only preview of exact references and reclaimable bytes. |
+| Accept shown review | Acceptance button or unambiguous explicit decision | Applies only that fully delivered, current review. |
+| Decline shown review | Decline button or explicit decision | Applies no proposed diary changes. |
+| Add late item | Exact late source and identified batch request | Adds explicitly and invalidates the prior batch review. |
+| Resolve duplicate | Same reading/link, separate measurement or exclude | Records the reviewed choice; equal value alone is not deduplication. |
+| Continue run | `/photos_continue <run-id>` | Explicitly releases the next fixed window; never retries unknown calls silently. |
+
+Reprocessing defaults to current inputs. `all_originals` includes retained superseded and
+unknown-date inputs, split into sequential windows of at most 50 without truncating the selection.
+Measurement-date selection uses local dates; upload-date selection can recover a wrongly read
+meter date. Compare stored results with current facts before confirming each window. Multiple
+historical results for one source do not create multiple events. Use
+`/photos_result <run-id> <window-id> <source-id> <input-id> <result-id> [restore]` to choose one
+exact stored alternative for a fresh review. `restore` explicitly requests restoration; a normal
+comparison cannot revive a deleted, excluded, cancelled or manually protected identity. Selecting
+historical evidence leaves the current input pointer intact. Unknown attempts retain their charged
+slots; explicitly reprocessing them warns about possible additional subscription usage.
+
+Originals are retained for saved, cancelled, excluded, duplicate and superseded inputs. Source
+edits append evidence; caption-only changes can share bytes and reuse display extraction only
+when prompt/model/schema match. Diary undo, cancellation and trace cleanup never delete originals.
+Owner-confirmed byte deletion preserves facts and provenance; shared references and active readers
+protect content, and deleted originals require reupload. This deletes application-retained copies,
+not Telegram messages or owner-managed backups.
+
+Limits are 50 logical sources per batch, 10 MiB (10,485,760 bytes) per original and 25,000,000 decoded
+pixels. Actual bytes/format are checked; images are not resized or re-encoded for archival. Stored
+Telegram photo bytes may differ from the camera original; an image document avoids Telegram's photo
+compression. Across the application, unique retained content plus active reservations is limited
+to 1 GiB (1,073,741,824 bytes), with separate 10,000 input and 10,000 result/attempt slot limits.
+These are admission counters, not disk-size or subscription-quota estimates. Full capacity pauses
+new bytes/calls without eviction. No automatic capacity increase or retention expiry occurs.
+
+Image extraction requires the pinned Codex CLI `0.160.1`, eligible subscription model
+`gpt-6.1-sol` in `LLM_MODELS`, subscription-only model chains and enabled native image capability. Existing
+`CODEX_IMAGE_INPUT_ENABLED=false` disables that local capability. There is no separate Vet-photo
+environment switch, API fallback or model substitution; archive/status/diary operations remain
+available when image extraction is unavailable. The image request carries only source/input IDs,
+the selected image and its immutable caption, with tools disabled and no profile/history.
 
 ## Privacy
 
@@ -603,6 +693,12 @@ real bots and a real family.
   Enable that topic's "Отвечать без упоминания" and check an unmentioned request gets an answer,
   while plain reports do not require one. An older-month list and `/more` must use stored history.
   Keep these checks synthetic and isolated; no existing diary or live Telegram session is implied.
+- For an explicitly authorized synthetic meter-photo check, follow the existing
+  [upload runbook](tests/Assistant.SmokeTests/TELEGRAM-MCP.md) and its exact send budget in an isolated
+  disposable database. Check explicit close, full sorted review, one confirmed action, stale/replayed
+  decisions, retained originals after cancellation and owner-only deletion. This checklist is not
+  evidence that a live Telegram check has run.
+
 - `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
   the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
   `/week` → "Неделя: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that

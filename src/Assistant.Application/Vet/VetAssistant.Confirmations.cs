@@ -12,6 +12,7 @@ public sealed partial class VetAssistant
 {
     public async Task HandleCallbackAsync(ReceivingBot bot, ITelegramClient client, CallbackQueryInfo callback, CancellationToken ct)
     {
+        if (_photos != null && await _photos.HandleCallbackAsync(bot, client, callback, ct)) return;
         if (bot.FamilyId is null || callback.MessageId <= 0 || callback.MessageChatId == 0
             || callback.MessageChatType is not ("private" or "group" or "supergroup"))
         { await _replies.CallbackAsync(client, callback.CallbackQueryId, null, ct); return; }

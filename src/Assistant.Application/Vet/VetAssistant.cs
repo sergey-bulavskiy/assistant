@@ -10,6 +10,9 @@ using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
 using Assistant.Domain.Places;
 using Assistant.Domain.Vet;
+using Assistant.Application.Vet.Photos;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Assistant.Application.Vet;
@@ -36,15 +39,19 @@ public sealed partial class VetAssistant : IVetAssistant
     private readonly ILogger<VetAssistant> _logger;
     private readonly VetReplies _replies;
     private readonly ITraceSession _trace;
+    private readonly IVetPhotoAssistant? _photos;
+    private readonly IVetPhotoDiaryOperationRouter? _photoDiary;
 
     public VetAssistant(IVetProfileStore profiles, IVetDiaryStore diary, IApprovalService approvals,
         IFamilyOwnership ownership, IMessageStore messages, ILlmGateway gateway, IRolePrompts prompts,
-        IClock clock, BuildInfo buildInfo, VetRuntimeOptions options, ILogger<VetAssistant> logger, ITraceSession? trace = null)
+        IClock clock, BuildInfo buildInfo, VetRuntimeOptions options, ILogger<VetAssistant> logger, ITraceSession? trace = null, IVetPhotoAssistant? photos = null,
+        IVetPhotoDiaryOperationRouter? photoDiary = null)
     {
         _profiles = profiles; _diary = diary; _approvals = approvals; _ownership = ownership;
         _messages = messages; _gateway = gateway; _prompts = prompts; _clock = clock;
         _buildInfo = buildInfo; _options = options; _logger = logger; _replies = new(logger);
         _trace = trace ?? NullTraceSession.Instance;
+        _photos = photos; _photoDiary = photoDiary;
     }
 
     public async Task<VetAdmittedSource?> AdmitAsync(ReceivingBot bot, IncomingMessage message, long updateId, CancellationToken ct)
@@ -147,6 +154,8 @@ public sealed partial class VetAssistant : IVetAssistant
                 + "\nSource sent UTC: " + source.Source.SentAt.ToString("O")
                 + "\nPending reviewed references: " + JsonSerializer.Serialize(pending.Take(10).Select(p =>
                     new { p.Id, p.ReviewRevision, p.PromptMessageId, p.SourceId, Proposal = p.ProposalJson[..Math.Min(2000, p.ProposalJson.Length)] }));
+            if (_photos != null)
+                prompt += "\nExact-place photo handles (untrusted runtime data):\n" + await _photos.DescribeAsync(scope, message.UserId!.Value, ct);
             LlmResult result;
             try
             {
@@ -179,12 +188,29 @@ public sealed partial class VetAssistant : IVetAssistant
             source = (await _diary.GetSourceAsync(scope, source.Source.Id, ct))!;
         }
         var interpretation = VetInterpretationParser.Parse(persisted!.Json)!;
+        // Keep the immutable unfiltered result for caption context before filtering duplicate TEXT glucose.
+        if (_photos != null)
+            interpretation = await _photos.FilterCaptionAsync(scope, source.Source.TelegramMessageId, interpretation, ct);
         await TraceSafety.RecordAsync(_trace, new("extraction", "ok", "normal", AttemptId: persisted.AttemptId,
             RelatedSourceMessageId: source.Source.SourceMessageDbId, ActorId: message.UserId,
             EventCount: interpretation.Events.Count, ProblemCount: interpretation.Unclear.Count));
         if (!await AuthorizedAsync(bot, message, ct)) return;
-        var handled = await OperationAsync(interpretation, bot, client, message, source, profile, ct);
-        if (!handled && source.Revision.State != "written")
+        var photoHandled = _photos != null && interpretation.PhotoOperation is { } photoOperation
+            && await _photos.OperationAsync(bot, client, message, photoOperation, source.Revision.OperationKey, ct);
+        if (!photoHandled && _photos != null && interpretation.Operation is { Kind: "accept" or "decline" } naturalDecision)
+            photoHandled = await _photos.TryNaturalDecisionAsync(bot, client, message, naturalDecision, ct);
+        if (!photoHandled && _photoDiary != null && interpretation.Operation is { Kind: "correct" or "delete" } diaryOperation)
+            photoHandled = await _photoDiary.HandleAsync(bot, client, message, diaryOperation.Kind,
+                diaryOperation.EventIds.Concat(diaryOperation.EventId is { } eventId ? new[] { eventId } : []).ToArray(),
+                interpretation.Events, source.Revision.OperationKey, ct);
+        var handled = photoHandled || await OperationAsync(interpretation, bot, client, message, source, profile, ct);
+        var recordInterpretation = photoHandled ? interpretation with
+        { Operation = null, PhotoOperation = null, Unclear = [], Events = interpretation.Events.Where(c =>
+            c.EventType == "insulin" && c.Intent == "record" && c.EventId == null).ToArray() } : interpretation;
+        var independentPhotoRecord = photoHandled && recordInterpretation.Events.Count > 0;
+        var recordOperationKey = independentPhotoRecord ? new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(
+            "photo-independent-text:" + source.Revision.OperationKey.ToString("D"))).AsSpan(0, 16)) : source.Revision.OperationKey;
+        if ((!handled || independentPhotoRecord) && source.Revision.State != "written")
         {
             if (source.Revision.IsEdit && (source.Revision.EditedAt ?? source.Revision.AdmittedAt) - source.Source.SentAt > TimeSpan.FromHours(24))
                 await _replies.SendAsync(client, message, "Это старое сообщение: дневник сохранён. Исправьте запись явно по ID или ответом на исходное сообщение.", ct);
@@ -194,20 +220,20 @@ public sealed partial class VetAssistant : IVetAssistant
                 if (source.Revision.WorkJson is { } work) plan = JsonSerializer.Deserialize<VetTextPlan>(work)!;
                 else
                 {
-                    var validations = interpretation.Events.Select(c => VetEventValidation.Validate(c, profile, source, persisted.Id)).ToArray();
+                    var validations = recordInterpretation.Events.Select(c => VetEventValidation.Validate(c, profile, source, persisted.Id)).ToArray();
                     var old = await _diary.GetSourceEventsAsync(scope, source.Source.Id, ct);
                     plan = VetTextPlanner.Plan(validations, old, source.Revision.IsEdit, message.UserId!.Value, _clock.UtcNow);
-                    if (interpretation.Unclear.Count > 0)
+                    if (recordInterpretation.Unclear.Count > 0)
                         plan = source.Revision.IsEdit
                             ? new([], (plan.Pending ?? new([], plan.ClearChanges, [], "edit")) with
-                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray(), RequiresClarification = true })
+                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(recordInterpretation.Unclear).ToArray(), RequiresClarification = true })
                             : plan with { Pending = (plan.Pending ?? new([], [], [], "confirm")) with
-                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(interpretation.Unclear).ToArray(), RequiresClarification = true } };
+                                { Reasons = (plan.Pending?.Reasons ?? []).Concat(recordInterpretation.Unclear).ToArray(), RequiresClarification = true } };
                     await _diary.SaveWorkAsync(scope, source.Revision.Id, JsonSerializer.Serialize(plan), ct);
                 }
                 if (plan.ClearChanges.Count > 0)
                 {
-                    var mutation = new VetDiaryMutation(scope, source.Revision.OperationKey, message.UserId!.Value,
+                    var mutation = new VetDiaryMutation(scope, recordOperationKey, message.UserId!.Value,
                         source.Revision.IsEdit ? "edit" : "save", profile.Id, plan.ClearChanges, source.Source.Id, source.Revision.Id);
                     var outcome = await _diary.ApplyAsync(mutation, ct);
                     await TraceMutationAsync(source, message.UserId!.Value, outcome);

@@ -12,13 +12,15 @@ public sealed partial class VetAssistant
     private const string StartText = "Дневник глюкозы и фактически введённого инсулина для кота этого бота. "
         + "Можно писать обычным текстом, задавать вопросы, получать историю и исправлять записи. "
         + "Владелец один раз настраивает часовой пояс и единицы. "
-        + "/profile /setname /settz /setunit /setinsulin /setnote [owner|vet] /today /more /undo /del /retry /version. "
+        + "/profile /setname /settz /setunit /setinsulin /setnote [owner|vet] /today /more /undo /del /retry /version /import readings /photos /photos_close /photos_review. "
         + "В одобренном месте запись работает без упоминания; ответы без упоминания включаются владельцем в /settings.";
 
     private async Task CommandAsync(string command, string? args, ReceivingBot bot, ITelegramClient client,
         IncomingMessage message, VetAdmittedSource source, VetProfile profile, CancellationToken ct)
     {
         var scope = VetDiaryScope.From(bot, message);
+        if (_photos != null && await _photos.CommandAsync(bot, client, message, command, args,
+            source.Revision.OperationKey, ct)) return;
         switch (command)
         {
             case "start":
@@ -64,6 +66,8 @@ public sealed partial class VetAssistant
                     { await _replies.SendAsync(client, message, "Используйте /del <ID> или ответ на исходное сообщение.", ct); return; }
                     id = parsed;
                 }
+                if (_photoDiary != null && await _photoDiary.HandleAsync(bot, client, message, "delete",
+                    id is { } selectedId ? [selectedId] : [], [], source.Revision.OperationKey, ct)) return;
                 var targets = await TargetsAsync(scope, message, id, [], ct);
                 await DeleteAsync(bot, client, message, source, profile, targets, false, ct);
                 return;
