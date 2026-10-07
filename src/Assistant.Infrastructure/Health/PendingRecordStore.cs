@@ -4,6 +4,7 @@ using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Domain.Health;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Health.Documents;
 using Microsoft.EntityFrameworkCore;
 
 namespace Assistant.Infrastructure.Health;
@@ -36,6 +37,16 @@ public class PendingRecordStore : IPendingRecordStore
             throw new InvalidOperationException("Health profile not found in this family.");
         }
 
+        var documentSource = await HealthDocumentSourceLock.IsDocumentSourceAsync(_db, familyId, profileId, record.SourceMessageId, cancellationToken);
+        await using var sourceTransaction = documentSource && _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (documentSource && record.SourceMessageId is { } documentMessageId)
+        {
+            if (!await HealthDocumentSourceLock.LockAsync(_db, familyId, documentMessageId, cancellationToken)
+                || await HealthDocumentSourceLock.IsDeletedAsync(_db, familyId, profileId, documentMessageId, cancellationToken))
+                throw new InvalidOperationException("Document source is no longer active.");
+        }
+
         var row = new PendingRecord
         {
             FamilyId = familyId,
@@ -63,6 +74,7 @@ public class PendingRecordStore : IPendingRecordStore
             _db.Entry(row).State = EntityState.Detached;
         }
 
+        if (sourceTransaction is not null) await sourceTransaction.CommitAsync(cancellationToken);
         return row.Id;
     }
 
@@ -118,14 +130,18 @@ public class PendingRecordStore : IPendingRecordStore
 
         var now = _clock.UtcNow;
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
-        var changed = await _db.PendingRecords
+        var pending = await _db.PendingRecords.AsNoTracking()
             .Where(p => p.Id == id && p.FamilyId == familyId && p.Status == PendingRecordStatuses.Pending)
-            .ExecuteUpdateAsync(
-                s => s
-                    .SetProperty(p => p.Status, status)
-                    .SetProperty(p => p.ResolvedByUserId, resolvedByUserId)
-                    .SetProperty(p => p.ResolvedAt, (DateTimeOffset?)now),
-                cancellationToken);
+            .Select(p => new { p.ProfileId, p.SourceMessageId }).SingleOrDefaultAsync(cancellationToken);
+        if (pending is null) return false;
+        if (pending.SourceMessageId is { } sourceId && await HealthDocumentSourceLock.IsDocumentSourceAsync(
+                _db, familyId, pending.ProfileId, sourceId, cancellationToken))
+        {
+            if (!await HealthDocumentSourceLock.LockAsync(_db, familyId, sourceId, cancellationToken)
+                || await HealthDocumentSourceLock.IsDeletedAsync(_db, familyId, pending.ProfileId, sourceId, cancellationToken))
+                return false;
+        }
+        var changed = await PendingRecordTransitions.ResolveAsync(_db, familyId, id, status, resolvedByUserId, now, cancellationToken);
         if (changed != 1)
         {
             // Already decided (or not this family's row): disposing the transaction rolls it back.
@@ -141,7 +157,7 @@ public class PendingRecordStore : IPendingRecordStore
         return true;
     }
 
-    private static PendingRecordInfo ToInfo(PendingRecord row)
+    internal static PendingRecordInfo ToInfo(PendingRecord row)
     {
         var events = JsonSerializer.Deserialize<List<EventJson>>(row.Events, JsonOptions) ?? new List<EventJson>();
         return new PendingRecordInfo(
