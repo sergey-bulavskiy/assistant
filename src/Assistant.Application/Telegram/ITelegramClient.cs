@@ -15,6 +15,10 @@ public record InlineButton(string Label, string CallbackData);
 
 public interface ITelegramClient
 {
+    /// <summary>Copies a same-bot file into the caller-owned stream, enforcing actual bytes.
+    /// Throws TelegramFileDownloadException with a fixed reason, or caller cancellation.</summary>
+    Task<long> DownloadFileAsync(string fileId, Stream destination, long maxBytes, CancellationToken cancellationToken);
+
     Task<BotIdentity> GetMeAsync(CancellationToken cancellationToken);
 
     Task<IReadOnlyList<IncomingUpdate>> GetUpdatesAsync(

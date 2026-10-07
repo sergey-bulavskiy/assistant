@@ -18,7 +18,10 @@ public record IncomingMessage(
     long? MigrateToChatId,
     string RawJson,
     int? ReplyToMessageId,
-    long? ReplyToUserId);
+    long? ReplyToUserId,
+    DocumentAttachment? Document = null,
+    PhotoAttachment? Photo = null,
+    string? MediaGroupId = null);
 
 /// <summary>A tap on an inline button. <see cref="MessageChatId"/>/<see cref="MessageId"/> identify
 /// the message the button was attached to, so its buttons can later be edited/removed.
