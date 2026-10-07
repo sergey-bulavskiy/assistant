@@ -52,6 +52,8 @@ public class HealthConsultationContextTests
         snapshot.SystemPrompt.ShouldContain("2030-03-11 10:00 вес");
         snapshot.SystemPrompt.ShouldNotContain("2030-03-11 09:59 вес");
         snapshot.SystemPrompt.ShouldNotContain("excluded");
+        snapshot.SystemPrompt.ShouldContain("заметка: first");
+        snapshot.SystemPrompt.ShouldContain("заметка: second");
         snapshot.SystemPrompt.IndexOf("заметка: first", StringComparison.Ordinal)
             .ShouldBeLessThan(snapshot.SystemPrompt.IndexOf("заметка: second", StringComparison.Ordinal));
     }
