@@ -10,6 +10,9 @@
   stable IDs, and never guess ambiguous mapping or overwrite an independently advanced revision.
 - Confirm only the exact frozen review revision/subset. New clarification evidence gets its own
   input/result provenance and preview; profile changes cannot silently replace reviewed defaults.
+  A targetless clarification must match exactly one candidate before revising the proposal. Both
+  natural and callback acceptance require a delivered complete preview; oversized partial previews
+  remain unresolved, and a failed preview send requires a separate post-delivery confirmation.
 - Actor and original author differ. History is bot-wide confirmed facts; source IDs/pending/mutations
   are exact-place. Undo selects actor/action time/place, protects later revisions, and persists the
   attempted subset. Profile updates and pending proposals are not diary actions.
