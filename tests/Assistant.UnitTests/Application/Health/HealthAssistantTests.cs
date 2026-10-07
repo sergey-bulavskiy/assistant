@@ -2706,10 +2706,10 @@ public class HealthAssistantTests
 
     // --- Да / Нет taps ---
 
-    private async Task<(IncomingMessage Message, int PromptId)> AskInGroupAsync(double value = 10)
+    private async Task<(IncomingMessage Message, int PromptId)> AskInGroupAsync(double value = 10, int? topicId = 7)
     {
         Answer(IntentJson(true, ("unsure", value)));
-        var message = Msg("сахар " + value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " - высокий?", "group", topicId: 7);
+        var message = Msg("сахар " + value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " - высокий?", "group", topicId: topicId);
         await HandleAsync(message);
         var promptId = _telegram.ButtonMessages.ShouldHaveSingleItem().MessageId;
         _telegram.Sent.Clear();
@@ -2721,6 +2721,71 @@ public class HealthAssistantTests
 
     private Task TapAsync(CallbackQueryInfo tap, IClock? clock = null) =>
         CreateAssistant(clock).HandleCallbackAsync(Bot, _trace.Wrap(_telegram), tap, CancellationToken.None);
+
+    [Theory]
+    [InlineData("wrong_topic", "accept")]
+    [InlineData("wrong_topic", "decline")]
+    [InlineData("wrong_topic", "expire")]
+    [InlineData("missing_topic", "accept")]
+    [InlineData("missing_topic", "decline")]
+    [InlineData("missing_topic", "expire")]
+    [InlineData("unexpected_topic", "accept")]
+    [InlineData("unexpected_topic", "decline")]
+    [InlineData("unexpected_topic", "expire")]
+    [InlineData("wrong_prompt", "accept")]
+    [InlineData("wrong_prompt", "decline")]
+    [InlineData("wrong_prompt", "expire")]
+    [InlineData("absent_prompt", "accept")]
+    [InlineData("absent_prompt", "decline")]
+    [InlineData("absent_prompt", "expire")]
+    [InlineData("wrong_profile", "accept")]
+    [InlineData("wrong_profile", "decline")]
+    [InlineData("wrong_profile", "expire")]
+    public async Task Confirmation_binding_mismatch_cannot_accept_decline_or_expire(string mismatch, string action)
+    {
+        var (_, promptId) = await AskInGroupAsync(topicId: mismatch == "unexpected_topic" ? null : 7);
+        var tap = Tap(action == "decline" ? "rec_no:1" : "rec_yes:1", promptId);
+        switch (mismatch)
+        {
+            case "wrong_topic": tap = tap with { MessageTopicId = 8 }; break;
+            case "missing_topic": tap = tap with { MessageTopicId = null }; break;
+            case "wrong_prompt": tap = tap with { MessageId = promptId + 1 }; break;
+            case "absent_prompt": _pending.Rows[1] = _pending.Rows[1] with { PromptMessageId = null }; break;
+            case "wrong_profile": _pending.Rows[1] = _pending.Rows[1] with { ProfileId = 2 }; break;
+        }
+        _gateway.Requests.Clear();
+
+        await TapAsync(tap, new FixedClock(action == "expire" ? Now.AddHours(25) : Now));
+
+        _pending.Rows[1].Status.ShouldBe("pending");
+        _events.Added.ShouldBeEmpty();
+        _alerts.Claims.ShouldBeEmpty();
+        _telegram.Reactions.ShouldBeEmpty();
+        _telegram.TextEdits.ShouldBeEmpty();
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.AnsweredCallbacks.ShouldBe(new[] { (tap.CallbackQueryId, (string?)"Уже решено.") });
+        _gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(7)]
+    public async Task Confirmation_exact_binding_accepts_once_with_or_without_a_topic(int? topicId)
+    {
+        var (message, promptId) = await AskInGroupAsync(topicId: topicId);
+        var tap = Tap("rec_yes:1", promptId) with { MessageTopicId = topicId };
+
+        await TapAsync(tap);
+        await TapAsync(tap);
+
+        var added = _events.Added.ShouldHaveSingleItem();
+        added.ProfileId.ShouldBe(1);
+        added.Source.ShouldBe(new HealthEventSource(1, 999, -100, topicId, 111));
+        _pending.Rows[1].Status.ShouldBe("accepted");
+        _telegram.Reactions.ShouldBe(new[] { (-100L, message.MessageId, (string?)WritingHand) });
+        _telegram.TextEdits.ShouldHaveSingleItem();
+        _telegram.AnsweredCallbacks.Select(a => a.Text).ShouldBe(new[] { null, "Уже решено." });
+    }
 
     [Fact]
     public async Task Confirmation_outcome_links_pending_source_and_actor_across_interactions()
