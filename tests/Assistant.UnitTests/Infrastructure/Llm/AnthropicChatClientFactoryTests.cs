@@ -37,11 +37,15 @@ public class AnthropicChatClientFactoryTests
             return response;
         });
 
+        var before = DateTimeOffset.UtcNow;
         var ex = await Should.ThrowAsync<ModelLimitReachedException>(() =>
             client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") }));
+        var after = DateTimeOffset.UtcNow;
 
         ex.Scope.ShouldBe(LlmLimitScope.Model);
         ex.RetryAt.ShouldNotBeNull();
+        ex.RetryAt!.Value.ShouldBeGreaterThanOrEqualTo(before.AddSeconds(30));
+        ex.RetryAt.Value.ShouldBeLessThanOrEqualTo(after.AddSeconds(30));
     }
 
     [Fact]

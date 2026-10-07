@@ -19,11 +19,10 @@ namespace Assistant.IntegrationTests.Host;
 /// interception), so it is invisible to this eager read; process environment variables, read by
 /// the default configuration providers during WebApplication.CreateBuilder(args) itself (before
 /// any of Program.cs's later statements run), are not. Hence these tests set process environment
-/// variables rather than passing extra config to the factory. xUnit does not run test methods of
-/// the same class in parallel, so these don't race each other; each test clears its variables in a
-/// `finally` immediately after the host has finished starting (by which point the eager read has
-/// already happened and is baked into the built DI container), keeping the window in which another,
-/// unrelated test's host could observe a stray value as short as possible.</summary>
+/// variables rather than passing extra config to the factory. Each test restores its variables in
+/// a `finally` immediately after the host has finished starting (by which point the eager read has
+/// already happened and is baked into the built DI container), restoring each original value. The
+/// collection serializes these tests with other host factory tests.</summary>
 [Collection(HostFactoryCollection.Name)]
 public class LlmWiringTests : IAsyncLifetime
 {
@@ -65,7 +64,7 @@ public class LlmWiringTests : IAsyncLifetime
         "LLM_MODELS", "LLM_CALLS_PER_MINUTE", "LLM_CALLS_PER_DAY", "LLM_MAX_CONTEXT_MESSAGES",
         "LLM_MAX_INPUT_CHARS", "LLM_MAX_OUTPUT_TOKENS", "LLM_CALL_TIMEOUT_SECONDS",
         "LLM_MAX_CONCURRENT_CALLS", "LLM_MODEL_COOLDOWN_MINUTES", "CLAUDE_CODE_OAUTH_TOKEN",
-        // M3b additions (Task 9): api keys/proxies/prices/budget, also set/cleared around each
+        // M3b additions (Task 9): API keys/proxies/prices/budget, also restored around each
         // StartWithEnvAsync call so no test leaks one of these into the next.
         "LLM_PRICES", "ANTHROPIC_API_KEY", "ANTHROPIC_PROXY", "OPENAI_API_KEY", "OPENAI_BASE_URL",
         "OPENAI_PROXY", "LLM_BUDGET_DAILY_USD", "LLM_BUDGET_MONTHLY_USD", "LLM_BUDGET_WARN_PERCENT",
@@ -93,13 +92,15 @@ public class LlmWiringTests : IAsyncLifetime
 
     private async Task<AssistantWebApplicationFactory> StartWithEnvAsync(IReadOnlyDictionary<string, string?> env)
     {
-        foreach (var name in LlmEnvVarNames)
-        {
-            Environment.SetEnvironmentVariable(name, env.TryGetValue(name, out var value) ? value : null);
-        }
+        var originalValues = LlmEnvVarNames.ToDictionary(name => name, Environment.GetEnvironmentVariable);
 
         try
         {
+            foreach (var name in LlmEnvVarNames)
+            {
+                Environment.SetEnvironmentVariable(name, env.TryGetValue(name, out var value) ? value : null);
+            }
+
             var factory = new AssistantWebApplicationFactory(_connectionString);
             try
             {
@@ -118,7 +119,7 @@ public class LlmWiringTests : IAsyncLifetime
         {
             foreach (var name in LlmEnvVarNames)
             {
-                Environment.SetEnvironmentVariable(name, null);
+                Environment.SetEnvironmentVariable(name, originalValues[name]);
             }
         }
     }

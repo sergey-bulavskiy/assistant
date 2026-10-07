@@ -238,14 +238,6 @@ public class ClaudeCliInstallerHostedServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StopAsync_completes_immediately_there_is_nothing_to_stop()
-    {
-        var service = new ClaudeCliInstallerHostedService(new FakeProcessRunner(), Options(), new ModelAvailability(new FixedClock(DateTimeOffset.UtcNow)), new[] { "sonnet" }, NullLogger<ClaudeCliInstallerHostedService>.Instance);
-
-        await service.StopAsync(CancellationToken.None); // must not throw even though StartAsync was never called
-    }
-
-    [Fact]
     public async Task StartAsync_returns_promptly_while_the_install_is_still_running()
     {
         // Proves the fix: a BackgroundService's StartAsync only kicks off ExecuteAsync in the

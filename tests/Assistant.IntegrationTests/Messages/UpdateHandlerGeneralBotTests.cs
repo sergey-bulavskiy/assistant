@@ -164,13 +164,20 @@ public class UpdateHandlerGeneralBotTests : IntegrationTestBase
     public async Task Long_answer_parts_are_each_stored()
     {
         var (handler, bot, telegram) = await SetupAsync();
-        var paragraph = new string('a', 3000);
-        _gateway.Answers.Enqueue($"{paragraph}\n\n{paragraph}");
+        var firstParagraph = new string('a', 3000);
+        var secondParagraph = new string('b', 3000);
+        var expectedParts = new[] { firstParagraph, secondParagraph };
+        _gateway.Answers.Enqueue(string.Join("\n\n", expectedParts));
 
         await SendAsync(handler, bot, telegram, Text("test question"));
 
-        telegram.SentMessages.Count.ShouldBe(2);
-        (await Db.Messages.IgnoreQueryFilters().CountAsync(m => m.Direction == MessageDirection.Out)).ShouldBe(2);
+        telegram.SentMessages.Select(m => m.Text).ShouldBe(expectedParts);
+        var stored = await Db.Messages.IgnoreQueryFilters()
+            .Where(m => m.Direction == MessageDirection.Out)
+            .OrderBy(m => m.Id)
+            .Select(m => m.Text)
+            .ToListAsync();
+        stored.ShouldBe(expectedParts);
     }
 
     [Fact]
