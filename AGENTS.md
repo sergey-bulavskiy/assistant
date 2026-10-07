@@ -35,6 +35,17 @@ command only as an example next to a generic fallback.
   model explicitly.
 - **Read official docs first** (e.g. a tool's GitHub README) before probing an API by trial and
   error.
+- **Use applicable .NET skills when available.** Check the official
+  [dotnet/skills catalog](https://github.com/dotnet/skills) for exact task matches. Its
+  [`csharp-refactoring` skill](https://github.com/dotnet/skills/tree/main/plugins/dotnet/skills/csharp-refactoring)
+  covers behavior-preserving C# refactors. For framework upgrades, use the applicable skill from
+  the [`dotnet-upgrade` plugin](https://github.com/dotnet/skills/tree/main/plugins/dotnet-upgrade);
+  test writing and audits are covered in `tests/AGENTS.md`, and schema migrations in
+  `src/Assistant.Infrastructure/AGENTS.md`. The catalog currently has no dedicated general
+  architecture, code review, code style, or EF Core schema migration skill. For these areas, this
+  file and the relevant local guide remain the source of project rules. Skills support the
+  scheduled review described below; they do not add another review gate. Check the catalog for
+  future additions rather than assuming a skill exists.
 - **Ask before outward actions** the owner hasn't authorized in the current session (merges,
   pushes to `main`, publishing, deploying on the home PC, changing the owner's machine settings).
 

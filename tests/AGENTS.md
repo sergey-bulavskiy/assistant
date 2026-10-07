@@ -3,10 +3,21 @@
 ## Writing tests
 
 - Generate or extend tests with the **`code-testing-agent` skill** from the `dotnet-test` plugin
-  of [dotnet/skills](https://github.com/dotnet/skills). It is a *skill* to load, not an agent
-  name. Install once (Claude Code / Copilot CLI):
-  `/plugin marketplace add dotnet/skills`, then `/plugin install dotnet-test@dotnet-agent-skills`.
-  If the skill is unavailable, say so and write the tests by hand under the same rules.
+  of [dotnet/skills](https://github.com/dotnet/skills). Its source is
+  [`plugins/dotnet-test/skills/code-testing-agent/SKILL.md`](https://github.com/dotnet/skills/blob/main/plugins/dotnet-test/skills/code-testing-agent/SKILL.md).
+  Load it through the coding agent's supported skill or plugin mechanism; for example, Claude Code
+  and Copilot CLI use `/plugin marketplace add dotnet/skills`, then
+  `/plugin install dotnet-test@dotnet-agent-skills`. If unavailable, report that and write tests
+  by hand under the same rules.
+- For test audits, use the applicable upstream
+  [`test-anti-patterns`](https://github.com/dotnet/skills/tree/main/plugins/dotnet-test/skills/test-anti-patterns),
+  [`assertion-quality`](https://github.com/dotnet/skills/tree/main/plugins/dotnet-test/skills/assertion-quality),
+  [`test-smell-detection`](https://github.com/dotnet/skills/tree/main/plugins/dotnet-test/skills/test-smell-detection),
+  or [`test-gap-analysis`](https://github.com/dotnet/skills/tree/main/plugins/dotnet-test/skills/test-gap-analysis)
+  skill. For framework/platform migrations, use a matching skill from the
+  [`dotnet-test-migration` plugin](https://github.com/dotnet/skills/tree/main/plugins/dotnet-test-migration).
+  These migrations concern test suites and runners; EF Core schema migrations follow
+  `src/Assistant.Infrastructure/AGENTS.md`.
 - The framework here is **xUnit**; keep generated tests in the existing projects, folders and
   style, and use the fakes and fixtures below rather than new mocking libraries.
 
