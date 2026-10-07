@@ -180,12 +180,19 @@ privacy rules too.
 
 ## Environment pitfalls (Windows dev PC)
 
-- **Other agents may be working at the same time**, in this checkout or another worktree, and
-  may be running builds or tests. Before starting, check `git status` and running
-  `dotnet`/`testhost` processes. Never switch branches, stash or reset in a checkout you didn't
-  create; do your own work in a separate worktree (`git worktree add ../assistant-<topic> -b
-  <branch> main`). Don't run builds or tests the task doesn't need; a failing test may be one
-  another agent is fixing. Locked files in `bin/`/`obj/` usually mean another agent's run.
+- **Other agents may be working at the same time**, in this checkout, another worktree, or another
+  machine, and may be running builds or tests. Before starting any task, inspect `git status` and
+  running `dotnet`/`testhost` processes. Parallel workers may have merged changes from other
+  worktrees since your last pull. Synchronize from the latest `main` before planning,
+  implementation, review, or docs work: in an appropriate clean `main` checkout run
+  `git pull --ff-only origin main`. If already in a feature worktree, fetch `origin` and safely
+  incorporate `origin/main` into your owned branch before proceeding; do not run `git pull origin
+  main` on a feature branch and treat it as updating local `main`. Create new worktrees from the
+  refreshed remote branch (`git worktree add ../assistant-<topic> -b <branch> origin/main`).
+  Preserve local and other-session work; never switch branches, stash, reset, or overwrite another
+  checkout. If synchronization cannot fast-forward or be reconciled safely, stop and resolve that
+  state before proceeding. Don't run builds or tests the task doesn't need; a failing test may be
+  one another agent is fixing. Locked files in `bin/`/`obj/` usually mean another agent's run.
 - Git Bash mangles Windows backslash paths in `sed`/heredocs (`\a`, `\s`) — use forward slashes,
   a file-editing tool, or PowerShell for such edits.
 - A corporate NuGet source may exist on the machine; `nuget.config` pins nuget.org. Keep it.
