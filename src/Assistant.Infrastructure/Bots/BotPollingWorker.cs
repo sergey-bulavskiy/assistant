@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
@@ -65,7 +66,7 @@ public class BotPollingWorker
             try
             {
                 var offset = await GetOffsetAsync(stoppingToken);
-                if (BotRoles.IsVet(_bot.Role))
+                if (BotRoles.IsVet(_bot.Role) || BotRoles.IsHealth(_bot.Role))
                 {
                     using var recoveryScope = _scopeFactory.CreateScope();
                     await recoveryScope.ServiceProvider.GetRequiredService<UpdateHandler>()
@@ -116,6 +117,10 @@ public class BotPollingWorker
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (HealthDocumentIntakePersistenceException)
+        {
+            throw; // Valid document admission/transport has not crossed its durable offset boundary.
         }
         catch (VetIntakePersistenceException)
         {

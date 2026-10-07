@@ -2,6 +2,7 @@ using Assistant.Application.Common;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Manager;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
@@ -155,7 +156,15 @@ public class UpdateHandler
         {
             if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null)
                 admitted = await _vetAssistant.AdmitAsync(bot, message, update.UpdateId, cancellationToken);
+            if (BotRoles.IsHealth(bot.Role) && HealthDocumentCandidate.IsValid(message))
+                await _healthAssistant.AdmitDocumentAsync(bot, message, update.UpdateId, cancellationToken);
             result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && BotRoles.IsHealth(bot.Role)
+            && HealthDocumentCandidate.IsValid(message) && HealthDocumentIntakePersistenceException.IsRetryable(ex))
+        {
+            _logger.LogWarning("Health document intake persistence failed: {ExceptionType}", ex.GetType().Name);
+            throw new HealthDocumentIntakePersistenceException();
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && BotRoles.IsVet(bot.Role)
             && _vetAssistant is not null && message.UserId is not null && message.Text is { Length: > 0 }
@@ -224,9 +233,10 @@ public class UpdateHandler
 
     public async Task ResumeAsync(ReceivingBot bot, ITelegramClient client, CancellationToken cancellationToken)
     {
-        if (!BotRoles.IsVet(bot.Role) || bot.FamilyId is null || _vetAssistant is null) return;
+        if (bot.FamilyId is null) return;
         _currentFamily.Set(bot.FamilyId);
-        await _vetAssistant.ResumeAsync(bot, client, cancellationToken);
+        if (BotRoles.IsHealth(bot.Role)) await _healthAssistant.ResumeDocumentsAsync(bot, client, cancellationToken);
+        else if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null) await _vetAssistant.ResumeAsync(bot, client, cancellationToken);
     }
 
     // Role-bot button taps. Health and Vet have buttons; any other role answers the callback with

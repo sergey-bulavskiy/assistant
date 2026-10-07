@@ -1,4 +1,5 @@
 using System.Globalization;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Telegram;
 using Microsoft.Extensions.Logging;
 
@@ -11,9 +12,12 @@ internal sealed class HealthReplies
 {
     private readonly ILogger _logger;
 
-    public HealthReplies(ILogger logger)
+    private readonly IHealthDocumentStore? _documents;
+
+    public HealthReplies(ILogger logger, IHealthDocumentStore? documents = null)
     {
         _logger = logger;
+        _documents = documents;
     }
 
     // Command replies follow the General assistant: a Telegram reply in groups, a plain message in
@@ -45,6 +49,23 @@ internal sealed class HealthReplies
         return true;
     }
 
+    public async Task MarkRecordedUnlessDocumentAcknowledgedAsync(HealthDocumentScope scope,
+        ITelegramClient client, long chatId, int messageId, CancellationToken token)
+    {
+        if (_documents is not null && await _documents.HasAcknowledgedDocumentAsync(scope, chatId, messageId, token)) return;
+        await MarkRecordedAsync(client, chatId, messageId, token);
+    }
+
+    public async Task CloseDocumentPromptsAsync(ITelegramClient client, IReadOnlyList<PendingRecordInfo> rows, CancellationToken token)
+    {
+        foreach (var row in rows.Where(p => p.PromptMessageId is not null))
+        {
+            try { await client.EditMessageTextAsync(row.ChatId, row.PromptMessageId!.Value, "Источник удалён; запись закрыта.", token); }
+            catch (Exception ex) when (!token.IsCancellationRequested)
+            { _logger.LogWarning("Health document prompt update failed: {ExceptionType}", ex.GetType().Name); }
+        }
+    }
+
     // ✍, or 👍 once if the chat refuses ✍. A failed reaction never undoes the recorded events.
     public async Task MarkRecordedAsync(ITelegramClient telegramClient, long chatId, int messageId, CancellationToken cancellationToken)
     {
@@ -68,7 +89,7 @@ internal sealed class HealthReplies
         }
     }
 
-    // A message whose every event is gone loses its ✍. Deleting never "un-sends" anything else.
+    // A message whose every Health record (event/document) is gone loses its ✍. Deleting never "un-sends" anything else.
     public async Task ClearReactionsAsync(ITelegramClient telegramClient, IReadOnlyList<MessageRef> messages, CancellationToken cancellationToken)
     {
         foreach (var source in messages)

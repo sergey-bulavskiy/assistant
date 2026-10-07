@@ -1,4 +1,5 @@
 using System.Globalization;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
 using Assistant.Domain.Health;
@@ -9,7 +10,7 @@ namespace Assistant.Application.Health;
 public sealed record HealthConsultationSnapshot(string SystemPrompt, IReadOnlyList<LlmMessage> Messages);
 
 /// <summary>One shared character bound for protected instructions/profile/current text and optional
-/// raw diary, notes and conversation. Trimming affects the snapshot only, never stored data.</summary>
+/// raw diary, notes, conversation and retained documents. Trimming affects the snapshot only, never stored data.</summary>
 public static class HealthConsultationContext
 {
     public const string CurrentTruncationMarker = "\n[current message truncated]";
@@ -17,7 +18,7 @@ public static class HealthConsultationContext
     public static HealthConsultationSnapshot? Build(
         string instructions, DateTimeOffset now, HealthProfileInfo profile, IReadOnlyList<SafetyRuleInfo> rules,
         IReadOnlyList<HealthEventInfo> activeEvents, IReadOnlyList<ContextMessage> history,
-        string currentText, string? username, bool isGroup, int maxChars, IReadOnlyList<ExtractedUnclear>? uncertainty = null)
+        string currentText, string? username, bool isGroup, int maxChars, IReadOnlyList<ExtractedUnclear>? uncertainty = null, HealthDocumentContextSnapshot? documents = null)
     {
         var zone = ProfileTimeZone.Find(profile.TimeZone);
         var week = StageWeek.Compute(ProfileTimeZone.LocalToday(now, profile.TimeZone), profile.StageStartDate);
@@ -25,6 +26,7 @@ public static class HealthConsultationContext
         var ordered = activeEvents.Where(e => e.OccurredAt < now.AddHours(1)).OrderBy(e => e.OccurredAt).ThenBy(e => e.Id).ToArray();
         var readings = new Section("Diary entries of the last 30 days", ordered.Where(e => e.Type != HealthEventTypes.Note && e.OccurredAt >= now - ConsultationPrompt.ReadingsWindow), zone);
         var notes = new Section("Notes of the last 90 days", ordered.Where(e => e.Type == HealthEventTypes.Note && e.OccurredAt >= now - ConsultationPrompt.NotesWindow), zone);
+        var documentSection = new HealthDocumentContextSection(documents, zone);
         var messages = history.TakeLast(ConsultationPrompt.MaxHistoryMessages)
             .Select(e => new LlmMessage(e.Direction == MessageDirection.Out ? LlmMessageRole.Assistant : LlmMessageRole.User,
                 e.Text, isGroup && e.Direction != MessageDirection.Out ? e.Username : null)).ToArray();
@@ -38,14 +40,16 @@ public static class HealthConsultationContext
         }
         while (historyStart < messages.Length && messages[historyStart].Role != LlmMessageRole.User) DropHistory();
         string HistoryMarker() => historyShortened ? "- Conversation history shortened; earlier turns omitted.\n" : "";
-        long Size() => protectedText.Length + (long)readings.Length + notes.Length + HistoryMarker().Length + historyChars + currentText.Length;
+        long Size() => protectedText.Length + (long)readings.Length + notes.Length + documentSection.Length + HistoryMarker().Length + historyChars + currentText.Length;
 
         // Complete oldest lines/turns are removed in the approved priority order, marker costs included.
         while (Size() > maxChars && readings.DropOldest()) { }
         while (Size() > maxChars && notes.DropOldest()) { }
         while (Size() > maxChars && historyStart < messages.Length) DropHistory();
         while (historyStart < messages.Length && messages[historyStart].Role != LlmMessageRole.User) DropHistory();
-        var system = protectedText + readings.Render() + notes.Render() + HistoryMarker();
+        while (Size() > maxChars && documentSection.DropOldestText()) { }
+        while (Size() > maxChars && documentSection.DropOldestInventory()) { }
+        var system = protectedText + readings.Render() + notes.Render() + HistoryMarker() + documentSection.Render();
         var allowance = (long)maxChars - system.Length - historyChars;
         if (currentText.Length > allowance)
         {

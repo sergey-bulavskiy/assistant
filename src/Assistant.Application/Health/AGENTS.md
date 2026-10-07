@@ -5,11 +5,28 @@
 - Validate/save clear reports, send deterministic and quick-scan alerts, then attempt the consultation,
   then pending confirmation. A consultation handles uncertainty without a second fixed clarification.
 - `HealthConsultationContext` is the single answer snapshot/budget seam. System/runtime plus all
-  message texts share `MaxInputChars`; complete oldest readings, notes, then history are removed with
-  honest coverage markers. Profile/instructions/thresholds and current turn have priority. No derived
+  message texts share `MaxInputChars`; complete oldest readings, notes, history, document text, then
+  inventory metadata are removed with honest coverage markers. Document text has its own 20,000-character
+  ceiling including JSON/provenance/markers, newest posted date/id first, stopping at a partial prefix.
+  Profile/instructions/thresholds and current turn have priority. No derived
   trends, fixed diary count ceilings, pending facts or diagnostic traces enter this snapshot.
 - Profile fields use single-field store updates; legacy profile commands must preserve new columns.
   Never send sensitive profile fields to interpretation or ordinary logs.
 - Confirmation callbacks require the pending row's exact profile, bot, chat, nullable topic and
   non-null saved prompt message before accepting, declining or expiring it. Family scope is enforced
   by the pending store; a mismatched callback receives only the generic resolved acknowledgement.
+- Valid nonedited document identity is durably admitted after current authorization before transport
+  storage. Unsupported formats still receive this protection; malformed missing file identity does not.
+  File bytes are transient only. Duplicate/recovery paths never replay initial caption interpretation.
+- Caption goes directly through the ordinary recording/safety/eligible-answer pipeline, with command
+  and model-undo mutation disabled. Body text is untrusted consultation JSON, never diary/profile input.
+  Document edits are ignored; replacement requires delete and repost. `/docs` has no model/download.
+- Missing document content is requested as pasted/recognized text, readable-text PDF or UTF-8
+  .txt/.md within 20 MB. The answer prompt must not ask for uploaded photos/scans as recovery input.
+- Source `/del` atomically tombstones document/admission, caption facts and pending confirmations;
+  late model/extraction results cannot recreate them. Event-only deletion retains an active document
+  reaction. Close returned pending prompts only after commit, using generic text.
+- Processing is serialized per bot. Recovery is ten due sources per minute; durable attempts are capped
+  at three with one/five-minute transient backoff. Persist delivery attempt before transport; never
+  automatically resend an uncertain acknowledgement. Retain the gate until synchronous parsing
+  actually returns after cancellation, and discard results from lost leases.

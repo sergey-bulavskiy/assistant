@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
@@ -140,7 +141,7 @@ internal sealed class HealthConfirmations
             return;
         }
 
-        await AcceptAsync(telegramClient, callback, familyId, profile, pending, cancellationToken);
+        await AcceptAsync(bot, telegramClient, callback, familyId, profile, pending, cancellationToken);
     }
 
     /// <summary>Closes every pending row of this Telegram message (the original or its button
@@ -226,7 +227,7 @@ internal sealed class HealthConfirmations
     // commit together; only the tap that changed the row saves. The events keep the original sender
     // and message, so /undo and /del treat them like any other record of that message.
     private async Task AcceptAsync(
-        ITelegramClient telegramClient, CallbackQueryInfo callback, long familyId, HealthProfileInfo profile, PendingRecordInfo pending,
+        ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, long familyId, HealthProfileInfo profile, PendingRecordInfo pending,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<HealthEventInfo> saved = Array.Empty<HealthEventInfo>();
@@ -267,7 +268,8 @@ internal sealed class HealthConfirmations
         _logger.LogInformation("Pending record {PendingId} accepted: {EventCount} events", pending.Id, saved.Count);
         await TraceSafety.RecordAsync(_trace, new TraceEventData("confirmation", "accepted", "normal",
             PendingRecordId: pending.Id, RelatedSourceMessageId: pending.SourceMessageId, ActorId: callback.FromUserId));
-        await _replies.MarkRecordedAsync(telegramClient, pending.ChatId, pending.TelegramMessageId, cancellationToken);
+        await _replies.MarkRecordedUnlessDocumentAcknowledgedAsync(HealthDocumentScope.From(bot, profile.Id),
+            telegramClient, pending.ChatId, pending.TelegramMessageId, cancellationToken);
         await _safety.SendAlertsAsync(
             telegramClient, pending.ChatId, pending.TopicId, pending.TelegramMessageId, familyId, profile, saved, evaluations,
             pending.SourceMessageId, cancellationToken, alreadySent: pending.AlertedRuleKeys);

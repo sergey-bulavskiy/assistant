@@ -4,6 +4,7 @@ using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Domain.Health;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Health.Documents;
 using Microsoft.EntityFrameworkCore;
 
 namespace Assistant.Infrastructure.Health;
@@ -35,6 +36,15 @@ public class EventStore : IEventStore
         }
 
         var subjectTag = await GetSubjectTagAsync(familyId, profileId, cancellationToken);
+        var documentSource = await HealthDocumentSourceLock.IsDocumentSourceAsync(_db, familyId, profileId, source.MessageDbId, cancellationToken);
+        await using var sourceTransaction = documentSource && _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (documentSource && source.MessageDbId is { } documentMessageId)
+        {
+            if (!await HealthDocumentSourceLock.LockAsync(_db, familyId, documentMessageId, cancellationToken)
+                || await HealthDocumentSourceLock.IsDeletedAsync(_db, familyId, profileId, documentMessageId, cancellationToken))
+                throw new InvalidOperationException("Document source is no longer active.");
+        }
         var now = _clock.UtcNow;
         var rows = events.Select(e => NewRow(familyId, profileId, subjectTag, source, e, now)).ToList();
 
@@ -54,6 +64,7 @@ public class EventStore : IEventStore
             throw;
         }
 
+        if (sourceTransaction is not null) await sourceTransaction.CommitAsync(cancellationToken);
         return rows.Select(ToInfo).ToArray();
     }
 
@@ -245,7 +256,10 @@ public class EventStore : IEventStore
             .Select(e => e.SourceMessageId!.Value)
             .Distinct()
             .ToListAsync(cancellationToken);
-        var withoutEvents = sourceIds.Except(stillActive).ToArray();
+        var retainedDocuments = await _db.HealthDocuments.AsNoTracking()
+            .Where(d => d.FamilyId == familyId && d.DeletedAt == null && sourceIds.Contains(d.SourceMessageId))
+            .Select(d => d.SourceMessageId).ToListAsync(cancellationToken);
+        var withoutEvents = sourceIds.Except(stillActive).Except(retainedDocuments).ToArray();
         var messages = await _db.Messages.AsNoTracking()
             .Where(m => withoutEvents.Contains(m.Id))
             .OrderBy(m => m.Id)

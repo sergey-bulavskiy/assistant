@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
@@ -22,10 +23,11 @@ internal sealed class HealthAnswers
     private readonly IClock _clock;
     private readonly ILogger _logger;
     private readonly ITraceSession _trace;
+    private readonly IHealthDocumentStore? _documents;
 
     public HealthAnswers(
         IHealthProfileStore profiles, IEventStore events, IMessageStore messages, ILlmGateway gateway, LlmConfig? config,
-        IRolePrompts rolePrompts, IClock clock, ILogger logger, ITraceSession? trace = null)
+        IRolePrompts rolePrompts, IClock clock, ILogger logger, ITraceSession? trace = null, IHealthDocumentStore? documents = null)
     {
         _profiles = profiles;
         _events = events;
@@ -36,6 +38,7 @@ internal sealed class HealthAnswers
         _clock = clock;
         _logger = logger;
         _trace = trace ?? NullTraceSession.Instance;
+        _documents = documents;
     }
 
     public async Task AnswerAsync(
@@ -64,8 +67,10 @@ internal sealed class HealthAnswers
             var history = await _messages.GetRecentContextAsync(
                 bot.TelegramBotId, message.ChatId, message.TopicId, afterMessageId: null, beforeMessageId: messageDbId,
                 Math.Min(_config.MaxContextMessages, ConsultationPrompt.MaxHistoryMessages), cancellationToken);
+            var documents = _documents is null ? null
+                : await _documents.GetContextAsync(HealthDocumentScope.From(bot, profile.Id), cancellationToken);
             var snapshot = HealthConsultationContext.Build(instructions, now, profile, rules, readings, history,
-                text, message.Username, message.ChatType != "private", _config.MaxInputChars, uncertainty);
+                text, message.Username, message.ChatType != "private", _config.MaxInputChars, uncertainty, documents);
             if (snapshot is null)
             {
                 await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "context_budget_exceeded"));

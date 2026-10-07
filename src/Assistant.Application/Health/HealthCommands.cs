@@ -1,4 +1,5 @@
 using System.Globalization;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Common;
 using Assistant.Application.Families;
 using Assistant.Application.Messages;
@@ -24,6 +25,9 @@ internal sealed class HealthCommands
         "если самочувствие вызывает тревогу, звоните врачу или в скорую, не дожидаясь меня. " +
         "Можно попросить консультацию: в личном чате просто напишите, " +
         "в группе — упомяните меня, ответьте на моё сообщение или включите ответы для этого места.\n" +
+        "Можно отправить текстовый PDF или UTF-8 .txt/.md до 20 МБ. Фото и сканы — позже. " +
+        "Подпись читается один раз; правки файла/подписи не заменяют запись — удалите и отправьте заново.\n" +
+        "/docs — последние документы\n" +
         "/today — записи за сегодня\n" +
         "/notes — последние заметки или /notes <тег>\n" +
         "/undo — отменить вашу последнюю запись\n" +
@@ -59,7 +63,7 @@ internal sealed class HealthCommands
     internal const string NothingToUndoText = "Нечего отменять.";
     private const string EventNotFoundText = "Не нашёл такую запись.";
     private const string DeleteUsageText =
-        "Формат: /del в ответ на сообщение с показателями или /del <номер записи> (номера — в /today).";
+        "Формат: /del в ответ на сообщение с документом или показателями; /del <номер записи> удаляет только запись из /today.";
 
     /// <summary>/undo (and the free-text undo) only reach records created this recently.</summary>
     public static readonly TimeSpan UndoWindow = TimeSpan.FromHours(24);
@@ -70,9 +74,10 @@ internal sealed class HealthCommands
     private readonly HealthReplies _replies;
     private readonly IClock _clock;
     private readonly BuildInfo _buildInfo;
+    private readonly IHealthDocumentStore? _documents;
 
     public HealthCommands(
-        IHealthProfileStore profiles, IFamilyOwnership ownership, IEventStore events, HealthReplies replies, IClock clock, BuildInfo buildInfo)
+        IHealthProfileStore profiles, IFamilyOwnership ownership, IEventStore events, HealthReplies replies, IClock clock, BuildInfo buildInfo, IHealthDocumentStore? documents = null)
     {
         _profiles = profiles;
         _ownership = ownership;
@@ -80,6 +85,7 @@ internal sealed class HealthCommands
         _replies = replies;
         _clock = clock;
         _buildInfo = buildInfo;
+        _documents = documents;
     }
 
     public async Task HandleAsync(
@@ -110,6 +116,11 @@ internal sealed class HealthCommands
 
             case "notes":
                 await NotesAsync(telegramClient, message, familyId, profile, args, cancellationToken);
+                return;
+
+            case "docs":
+                var documents = _documents is null ? [] : await _documents.GetLatestAsync(HealthDocumentScope.From(bot, profile.Id), cancellationToken);
+                await _replies.ReplyAsync(telegramClient, message, HealthDocumentList.Render(documents, profile.TimeZone), cancellationToken);
                 return;
 
             case "undo":
@@ -394,6 +405,20 @@ internal sealed class HealthCommands
                 return;
             }
 
+            if (_documents is not null)
+            {
+                var documentDeletion = await _documents.DeleteSourceAsync(HealthDocumentScope.From(bot, profile.Id),
+                    message.ChatId, message.TopicId, repliedTo, message.UserId, cancellationToken);
+                if (documentDeletion.Changed)
+                {
+                    await _replies.CloseDocumentPromptsAsync(telegramClient, documentDeletion.ClosedPending, cancellationToken);
+                    await _replies.ClearReactionsAsync(telegramClient, documentDeletion.DeletedEvents.MessagesWithoutEvents, cancellationToken);
+                    var text = "Документ удалён из активного использования."
+                        + (documentDeletion.DeletedEvents.Events.Count > 0 ? " " + HealthReplies.DeletedText(documentDeletion.DeletedEvents) : "");
+                    await _replies.ReplyAsync(telegramClient, message, text, cancellationToken);
+                    return;
+                }
+            }
             deleted = await _events.DeleteBySourceTelegramMessageAsync(
                 familyId, profile.Id, bot.TelegramBotId, message.ChatId, repliedTo, EventDeleteReasons.Del, cancellationToken);
         }

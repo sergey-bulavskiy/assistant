@@ -397,3 +397,32 @@
   unstored trigger). `/tokens` (`LlmUsageQuery`) sums only `Ok` rows after the cutoff, scoped by
   family. `llm_calls.bot_id` holds the bot's **Telegram** id (as `messages.bot_id` does), not
   `bots.id`.
+
+
+## Health document persistence
+
+- `documents` retain extracted text and immutable source metadata; original file bytes are not archived.
+  `source_message_id` is a required `messages.id` FK. The separate `health_document_admissions`
+  table permits an unbound source before transport storage; uniqueness is family/Telegram bot/chat/message.
+  Both tables' direct reads fail closed without current family. Their stores must additionally validate
+  exact family/profile/internal bot/Telegram bot/source ownership; a query filter never grants access.
+  Deletion is a tombstone, and a repost under a new Telegram message is a separate source.
+- Document source transactions lock the exact family-scoped `messages` row first, before admission,
+  document and pending transitions. Initial document-caption EventStore/PendingRecordStore writes
+  identify both bound and unbound admissions by immutable incoming source identity and exact
+  family/profile/internal-bot/Telegram-bot ownership, including tombstones. They use the same lock
+  and recheck deletion; reuse the current pending-acceptance transaction, never
+  nest one. No network/parse work under a source transaction. Ordinary text sources keep their path.
+- Conditional lease operations require the exact owned Guid and unexpired lease. Five-minute leases
+  renew every 30 seconds from independent DI scopes with current family set explicitly. A failed
+  heartbeat cancels work; a stale owner cannot finalize or clear a successor's lease. Never share a
+  request DbContext with heartbeat operations. Lease cancellation cannot hard-preempt PdfPig parsing.
+- Context reads all active metadata without a date/count ceiling, then server-project only bounded
+  newest text candidates. Do not load every 200,000-character body to choose a 20,000-character prompt.
+  Preserve separate stored and prompt truncation flags, total coverage and immutable posted time.
+- Admission/storage transient wrappers contain fixed text and no inner exception. Document download,
+  parse and transport errors log exception types only; file IDs, filenames, captions and content are
+  never ordinary logs. Original bytes are neither archived nor passed to diagnostic traces.
+- Bounded filename/MIME normalization must cut before a complete UTF-16 surrogate pair, retaining
+  recognized filename suffixes. Npgsql encodes strings strictly; a dangling surrogate rejects an
+  otherwise valid upload before its transport offset commits. Keep existing metadata column bounds.

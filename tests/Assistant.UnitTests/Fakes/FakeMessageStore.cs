@@ -25,6 +25,8 @@ public class FakeMessageStore : IMessageStore
     private StoreResult? _nextResult;
 
     public bool ThrowOnStoreOutgoing { get; set; }
+    public Exception? ThrowOnStore { get; set; }
+    public Action? BeforeStore { get; set; }
 
     public List<CancellationToken> OutgoingTokens { get; } = new();
 
@@ -38,6 +40,8 @@ public class FakeMessageStore : IMessageStore
 
     public Task<StoreResult> StoreAsync(long botId, long updateId, IncomingMessage? message, CancellationToken cancellationToken)
     {
+        BeforeStore?.Invoke();
+        if (ThrowOnStore is not null) throw ThrowOnStore;
         Calls.Add((botId, updateId, message));
 
         long? rowId = null;

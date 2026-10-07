@@ -183,8 +183,9 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 | `/thresholds` | any approved member | Every safety rule with its values and source: "врач" (entered with `/threshold`) or "не подтверждено врачом" (published-guideline defaults). |
 | `/today` | any approved member | Today's records (the profile's local day), oldest first, each with its number (`#12`). |
 | `/notes` or `/notes <tag>` | any approved member | Last 10 notes across all dates, or up to 20 notes with the exact tag from the past 90 days, newest first; dates use the profile's time zone. |
+| `/docs` | any approved member | Ten newest active documents for this Health profile, with posted date/year, filename, bounded caption and reading status; no download or model call. |
 | `/undo` | any approved member | Deletes the records of your latest recorded message in this chat or topic (up to 24 hours old). |
-| `/del` | any approved member | As a reply to a message: deletes the records made from it. `/del 12` deletes record #12. |
+| `/del` | any approved member | As a reply: deletes that source's document, caption records and open confirmations together. `/del 12` deletes only record #12. |
 | `/setstart ДД.ММ.ГГГГ` | owners | Sets the stage start date (not in the future, at most 300 days ago). |
 | `/settz Area/City` | owners | Sets the profile's time zone (IANA id such as `Europe/Berlin`; default `UTC`). |
 | `/setphone <text>` | owners | Emergency number text for alerts (default "103 или 112"; up to 100 characters). |
@@ -195,7 +196,33 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 | `/version` | anyone | Running version. |
 
 Other members get "Только владелец семьи может менять профиль." for owner commands. Voice messages
-and photos in a private chat get a note that only text is supported for now.
+and photos in a private chat get a note directing the sender to text or supported documents.
+
+**Health documents.** Approved members can upload PDFs with readable text, UTF-8 text or Markdown.
+The bot retains the initial filename, caption, original posted date and reading status before
+downloading, then up to 200,000 extracted characters from at most 20,000,000 bytes. Original file
+bytes are not archived. Unsupported, oversized, encrypted, corrupt or scan-only files retain their
+metadata and a fixed explanation; this path has no OCR. Readable files receive the normal record
+reaction without another generic reply; partial text is marked. `/docs` retrieves retained state.
+
+An initial nonempty caption follows the ordinary recording/safety/eligible-answer policy, while
+the document body is reference material only. Caption commands cannot change the profile or undo
+records, and body instructions cannot perform actions. An eligible caption answer can use the
+just-read document. Duplicate delivery/recovery resumes file work without replaying the caption,
+model answer or alerts; the ordinary post-offset caption crash limitation still applies.
+
+Consultations include an all-age active document inventory and up to 20,000 characters of the newest
+readable text, within the existing shared input budget. Coverage and partial-text markers describe
+omissions; answers attribute material to its document posted date rather than treating that date
+as a measurement date. Reply `/del` removes the source from this library and caption diary together;
+deleting an individual record or using `/undo` retains its document. Upload edits are ignored: delete
+and repost to replace a document.
+
+Durable admission protects a valid document source before the polling offset advances, including
+unsupported formats. Recovery handles at most ten due sources per bot once per minute and rechecks
+current authorization. Supported downloads consume at most three attempts, with one- then five-minute
+delays after transient failures. Processing leases renew independently; original metadata survives
+interruption. Attempted or uncertain Telegram acknowledgements are not automatically resent.
 
 **Vet assistant** (`/newbot vet`): one cat profile and a separate confirmed diary for each bot.
 Turn off Group Privacy before using its approved tracking group/topic. Owners set the initially
@@ -454,6 +481,9 @@ retaining at most 200,000 characters from at most 20,000,000 bytes. Truncation a
 encrypted, malformed or unsupported files have explicit results. PDF extraction preserves page
 boundaries and marks its text-only coverage. Scan-only PDFs have no readable text in this path.
 PdfPig page parsing is synchronous, so cancellation takes effect between page operations.
+Health runs parsing on a worker task while renewing its lease from independent scopes. The per-bot
+processing gate remains held until that task actually finishes; cancellation cannot hard-preempt a
+PdfPig open/page operation. Results after cancellation, lease loss or source deletion are discarded.
 
 For a count-only audit of General preferences, privately query `chat_settings` for the number of
 non-null `preferred_model` values outside the final configured model list. Do not return rows,

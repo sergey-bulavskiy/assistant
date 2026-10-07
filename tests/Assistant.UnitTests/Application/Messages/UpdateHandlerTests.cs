@@ -14,7 +14,7 @@ using Microsoft.Extensions.Options;
 
 namespace Assistant.UnitTests.Application.Messages;
 
-public class UpdateHandlerTests
+public partial class UpdateHandlerTests
 {
     private sealed class FakeApprovalService : IApprovalService
     {
@@ -106,7 +106,7 @@ public class UpdateHandlerTests
         }
     }
 
-    private sealed class FakeHealthAssistant : IHealthAssistant
+    private sealed partial class FakeHealthAssistant : IHealthAssistant
     {
         public List<(ReceivingBot Bot, IncomingMessage Message, StoreResult Result, bool ReplyToAll)> Calls { get; } = new();
 

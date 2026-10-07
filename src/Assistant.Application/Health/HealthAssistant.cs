@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Health.Documents;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Llm;
@@ -18,7 +19,7 @@ public class HealthAssistant : IHealthAssistant
 {
     public const string OwnerOnlyText = "Только владелец семьи может менять профиль.";
 
-    public const string NonTextText = "Голосовые и фото пока не поддерживаются — напишите текстом.";
+    public const string NonTextText = "Голосовые и фото пока не поддерживаются — напишите текстом или отправьте текстовый PDF, UTF-8 .txt или .md до 20 МБ.";
 
     /// <summary>✍ (U+270D, no variation selector: the form Telegram allows for bots).</summary>
     public const string RecordedReaction = "✍";
@@ -35,6 +36,9 @@ public class HealthAssistant : IHealthAssistant
     private readonly HealthMessagePipeline _pipeline;
     private readonly HealthConfirmations _confirmations;
     private readonly ITraceSession _trace;
+    private readonly IHealthDocumentStore? _documents;
+    private readonly HealthDocumentProcessor? _documentProcessor;
+    private readonly ILogger _logger;
 
     public HealthAssistant(
         IHealthProfileStore profiles,
@@ -50,17 +54,62 @@ public class HealthAssistant : IHealthAssistant
         IClock clock,
         BuildInfo buildInfo,
         ILogger<HealthAssistant> logger,
-        ITraceSession? trace = null)
+        ITraceSession? trace = null, IHealthDocumentStore? documents = null, HealthDocumentProcessor? documentProcessor = null)
     {
         _trace = trace ?? NullTraceSession.Instance;
+        _documents = documents;
+        _documentProcessor = documentProcessor;
+        _logger = logger;
         _profiles = profiles;
-        _replies = new HealthReplies(logger);
+        _replies = new HealthReplies(logger, documents);
         var safety = new HealthSafety(profiles, events, safetyAlerts, clock, _replies, logger, _trace);
-        var answers = new HealthAnswers(profiles, events, messages, gateway, config, rolePrompts, clock, logger, _trace);
+        var answers = new HealthAnswers(profiles, events, messages, gateway, config, rolePrompts, clock, logger, _trace, documents);
         _confirmations = new HealthConfirmations(events, pendingRecords, clock, _replies, safety, logger, _trace);
-        _commands = new HealthCommands(profiles, ownership, events, _replies, clock, buildInfo);
+        _commands = new HealthCommands(profiles, ownership, events, _replies, clock, buildInfo, documents);
         _pipeline = new HealthMessagePipeline(
             profiles, events, gateway, rolePrompts, failureNotices, clock, _replies, safety, answers, _confirmations, logger, _trace);
+    }
+
+    public async Task<HealthDocumentAdmissionInfo?> AdmitDocumentAsync(
+        ReceivingBot bot, IncomingMessage message, long updateId, CancellationToken token)
+    {
+        if (_documents is null || bot.FamilyId is not { } familyId || !HealthDocumentCandidate.IsValid(message)) return null;
+        var profile = await _profiles.GetOrCreateAsync(familyId, bot.BotDbId, token);
+        return await _documents.AdmitAsync(HealthDocumentScope.From(bot, profile.Id), message, updateId, token);
+    }
+
+    public async Task ResumeDocumentsAsync(ReceivingBot bot, ITelegramClient client, CancellationToken token)
+    {
+        if (_documentProcessor is null || bot.FamilyId is not { } familyId) return;
+        var profile = await _profiles.GetOrCreateAsync(familyId, bot.BotDbId, token);
+        await _documentProcessor.ResumeAsync(HealthDocumentScope.From(bot, profile.Id), client, token);
+    }
+
+    private async Task HandleDocumentAsync(ReceivingBot bot, ITelegramClient client, IncomingMessage message,
+        StoreResult result, long familyId, CancellationToken token, bool replyToAll)
+    {
+        var profile = await _profiles.GetOrCreateAsync(familyId, bot.BotDbId, token);
+        Exception? failure = null;
+        try
+        {
+            var admission = await _documents!.FindAsync(HealthDocumentScope.From(bot, profile.Id), message.ChatId, message.TopicId, message.MessageId, token);
+            var bound = admission is null ? null : await _documents.BindAsync(admission.Scope, admission.Id, result.MessageDbId, token);
+            if (bound?.SourceMessageId is not null)
+                await _documentProcessor!.ProcessAsync(bound, client, token);
+            else if (result.Outcome == StoreOutcome.Stored)
+                await _replies.ReplyAsync(client, message, HealthDocumentProcessor.CannotRead, token, quote: true);
+        }
+        catch (Exception ex) when (!token.IsCancellationRequested)
+        {
+            _logger.LogWarning("Health document processing failed: {ExceptionType}", ex.GetType().Name);
+            failure = new InvalidOperationException("Health document processing failed.");
+            if (result.Outcome == StoreOutcome.Stored)
+                await _replies.ReplyAsync(client, message, HealthDocumentProcessor.CannotSave, token, quote: true);
+        }
+        // Only the original caption may be interpreted. It is data, never a slash command or undo.
+        if (result.Outcome == StoreOutcome.Stored && !string.IsNullOrWhiteSpace(message.Text))
+            await _pipeline.HandleNewAsync(bot, client, message, message.Text, familyId, profile, result, token, replyToAll, allowUndo: false);
+        if (failure is not null) throw failure;
     }
 
     public async Task HandleAsync(
@@ -69,6 +118,12 @@ public class HealthAssistant : IHealthAssistant
         if (bot.FamilyId is not { } familyId)
         {
             await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "not_configured"));
+            return;
+        }
+
+        if (!message.IsEdit && message.Kind == MessageKind.Document && _documents is not null && _documentProcessor is not null)
+        {
+            await HandleDocumentAsync(bot, telegramClient, message, storeResult, familyId, cancellationToken, replyToAll);
             return;
         }
 
@@ -112,7 +167,7 @@ public class HealthAssistant : IHealthAssistant
             return;
         }
 
-        // The profile (with its default rules) is created lazily by the bot's first text message.
+        // The profile (with its default rules) is created lazily by the bot's first text or document.
         var profile = await _profiles.GetOrCreateAsync(familyId, bot.BotDbId, cancellationToken);
 
         var command = CommandParser.Parse(text, bot.Username);

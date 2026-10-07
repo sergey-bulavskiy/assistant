@@ -16,7 +16,7 @@ public sealed record HealthEventInfo(long Id, string Type, DateTimeOffset Occurr
 public sealed record MessageRef(long ChatId, int TelegramMessageId);
 
 /// <summary>Events just soft-deleted (oldest id first) and the source messages that have no active
-/// event left (their reaction should be cleared).</summary>
+/// Health event or document left (their reaction should be cleared).</summary>
 public sealed record DeletedEvents(IReadOnlyList<HealthEventInfo> Events, IReadOnlyList<MessageRef> MessagesWithoutEvents)
 {
     public static DeletedEvents None { get; } = new(Array.Empty<HealthEventInfo>(), Array.Empty<MessageRef>());

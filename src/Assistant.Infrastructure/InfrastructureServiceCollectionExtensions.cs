@@ -2,6 +2,8 @@ using Assistant.Application.Common;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Health;
+using Assistant.Application.Health.Documents;
+using Assistant.Infrastructure.Health.Documents;
 using Assistant.Application.Llm;
 using Assistant.Application.Manager;
 using Assistant.Application.Messages;
@@ -68,6 +70,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IEventStore, EventStore>();
         services.AddScoped<ISafetyAlertStore, SafetyAlertStore>();
         services.AddScoped<IPendingRecordStore, PendingRecordStore>();
+        services.AddScoped<IHealthDocumentStore, HealthDocumentStore>();
+        services.AddSingleton<IHealthDocumentLeaseKeeper, HealthDocumentLeaseKeeper>();
+        services.AddSingleton(TimeProvider.System);
         services.AddVetPersistence();
         services.AddSingleton<IRolePrompts>(_ => new RolePrompts(typeof(RolePrompts).Assembly));
         services.AddSingleton<Assistant.Application.Health.Documents.IDocumentTextExtractor,

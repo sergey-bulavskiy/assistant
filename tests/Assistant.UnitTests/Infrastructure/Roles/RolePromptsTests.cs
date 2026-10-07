@@ -35,6 +35,8 @@ public class RolePromptsTests
         text.ShouldContain("last 90 days");
         text.ShouldContain("untrusted data");
         text.ShouldNotContain("Never recommend, calculate or change the dose");
+        text.ShouldContain("For missing content, ask for pasted or externally recognized text, a readable-text PDF, or UTF-8\n.txt/.md within 20 MB.");
+        text.ShouldContain("Health does not process uploaded photos or scans; do not ask for them as a\nrecovery option.");
     }
 
     [Fact]

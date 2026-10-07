@@ -515,7 +515,7 @@ public class HealthAssistantTests
     }
 
     private const string DeleteUsage =
-        "Формат: /del в ответ на сообщение с показателями или /del <номер записи> (номера — в /today).";
+        "Формат: /del в ответ на сообщение с документом или показателями; /del <номер записи> удаляет только запись из /today.";
 
     private static HealthEventInfo GlucoseEvent(long id) =>
         new(id, "glucose", Now, "{\"value\":7.8,\"context\":\"after_meal_1h\"}", null);
@@ -659,7 +659,7 @@ public class HealthAssistantTests
     [Fact]
     public async Task Non_text_in_private_gets_the_text_only_note()
     {
-        const string note = "Голосовые и фото пока не поддерживаются — напишите текстом.";
+        const string note = "Голосовые и фото пока не поддерживаются — напишите текстом или отправьте текстовый PDF, UTF-8 .txt или .md до 20 МБ.";
 
         await HandleAsync(Msg(null, kind: MessageKind.Photo));
         await HandleAsync(Msg(null, kind: MessageKind.Voice));
