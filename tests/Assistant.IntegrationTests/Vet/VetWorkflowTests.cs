@@ -17,7 +17,7 @@ public sealed class VetWorkflowTests : VetTestBase
         await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic old measurement")), CancellationToken.None);
         var original = await s.Context.VetEvents.AsNoTracking().SingleAsync();
         await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("/settz -", 1001)), CancellationToken.None);
-        s.Chat.EnqueueResponse($$"""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.9","event_id":{{original.Id}}}],"operation":{"kind":"correct"}}""");
+        s.Chat.EnqueueResponse($$$"""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.9","event_id":{{{original.Id}}}}],"operation":{"kind":"correct"}}""");
         await s.Handler.HandleAsync(Bot, s.Telegram, new(3, Text("synthetic value-only correction", 1002, 222)), CancellationToken.None);
         var current = await s.Context.VetEvents.AsNoTracking().SingleAsync();
         current.Id.ShouldBe(original.Id); current.Value.ShouldBe(6.9m); current.Revision.ShouldBe(2);
@@ -32,7 +32,7 @@ public sealed class VetWorkflowTests : VetTestBase
         s.Chat.EnqueueResponse(Historical);
         await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic old measurement")), CancellationToken.None);
         var original = await s.Context.VetEvents.AsNoTracking().SingleAsync();
-        s.Chat.EnqueueResponse($$"""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.9","date":"2001-04-04","event_id":{{original.Id}}}],"operation":{"kind":"correct"}}""");
+        s.Chat.EnqueueResponse($$$"""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.9","date":"2001-04-04","event_id":{{{original.Id}}}}],"operation":{"kind":"correct"}}""");
         await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic incomplete correction", 1001)), CancellationToken.None);
         var incomplete = s.Telegram.ButtonMessages.Single();
         incomplete.Buttons.Select(b => b.Label).ShouldBe(new[] { "Отменить" });
@@ -54,6 +54,70 @@ public sealed class VetWorkflowTests : VetTestBase
     private const string Mixed = """{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.4","time_evidence":"current"},{"type":"insulin","intent":"record","dose":"0.125","time_evidence":"current"}],"unclear":[]}""";
     private const string Question = """{"needs_reply":true,"events":[],"unclear":[]}""";
     private const string Historical = """{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.4","date":"2001-04-03","time":"09:30","unit":"mmol/L","time_evidence":"stated"}],"unclear":[]}""";
+
+    [Fact]
+    public async Task Source_edit_removal_and_undo_preserve_ids_and_higher_revisions_without_deleting_source()
+    {
+        await SeedAsync(); await using var s = Open();
+        s.Chat.EnqueueResponse(Mixed);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic mixed source")), CancellationToken.None);
+        var original = await s.Context.VetEvents.AsNoTracking().OrderBy(e => e.EventType).ToListAsync();
+        s.Chat.EnqueueResponse("""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.4","time_evidence":"current"}]}""");
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic source with insulin removed")
+            with { IsEdit = true, EditedAt = Now.AddMinutes(1) }), CancellationToken.None);
+        var removed = (await s.Diary.GetEventAsync(Scope, original[1].Id, CancellationToken.None))!;
+        removed.DeletedAt.ShouldNotBeNull(); removed.DeleteReason.ShouldBe("source_edit"); removed.Revision.ShouldBe(2);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(3, Text("/undo", 1001)), CancellationToken.None);
+        var restored = await s.Context.VetEvents.AsNoTracking().OrderBy(e => e.EventType).ToListAsync();
+        restored.Select(e => e.Id).ShouldBe(original.Select(e => e.Id));
+        restored.Select(e => e.Revision).ShouldBe(new[] { 1, 3 }); restored.ShouldAllBe(e => e.DeletedAt == null);
+        (await s.Context.VetTextSources.CountAsync()).ShouldBe(2);
+        (await s.Context.VetTextSourceRevisions.CountAsync()).ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Older_source_edit_and_expired_pending_do_not_mutate_confirmed_diary()
+    {
+        await SeedAsync(); await using var s = Open();
+        s.Chat.EnqueueResponse(Mixed);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic mixed source")), CancellationToken.None);
+        s.Chat.EnqueueResponse(Mixed.Replace("6.4", "6.8"));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic too-old edit")
+            with { IsEdit = true, EditedAt = Now.AddHours(25) }), CancellationToken.None);
+        (await s.Context.VetEvents.Where(e => e.EventType == "glucose").SingleAsync()).Value.ShouldBe(6.4m);
+        s.Telegram.SentMessages.Last().Text.ShouldContain("Исправьте запись явно по ID");
+        s.Chat.EnqueueResponse("""{"needs_reply":false,"events":[{"type":"insulin","intent":"unsure","dose":"0.3","time_evidence":"current"}]}""");
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(3, Text("synthetic pending", 1001)), CancellationToken.None);
+        var prompt = s.Telegram.ButtonMessages.Single(); Clock.UtcNow = Now.AddHours(25);
+        await s.Assistant.HandleCallbackAsync(Bot, s.Telegram, new("expired", 222, prompt.Buttons[0].CallbackData,
+            -100, prompt.MessageId, 7, "supergroup"), CancellationToken.None);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(2);
+        s.Telegram.AnsweredCallbacks.Single().Text.ShouldBe("Этот просмотр уже недействителен.");
+        (await s.Diary.GetPendingAsync(Scope, CancellationToken.None)).ShouldBeEmpty();
+        (await s.Context.VetPendingDecisions.AsNoTracking().SingleAsync()).State.ShouldBe("expired");
+    }
+
+    [Fact]
+    public async Task Natural_profile_change_is_owner_only_and_commands_do_not_call_model_or_create_diary_actions()
+    {
+        await SeedAsync(); await using var s = Open();
+        var profileChange = """{"needs_reply":false,"events":[],"operation":{"kind":"profile","profile_changes":[{"field":"ReportedVetGuidance","value":"synthetic owner-reported guidance"}]}}""";
+        s.Chat.EnqueueResponse(profileChange);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic member profile change", actor: 222)), CancellationToken.None);
+        (await s.Profiles.GetOrCreateAsync(FamilyId, Bot.BotDbId, CancellationToken.None)).ReportedVetGuidance.ShouldBeNull();
+        s.Telegram.SentMessages.Last().Text.ShouldBe(VetAssistant.OwnerOnlyText);
+        s.Chat.EnqueueResponse(profileChange);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic owner profile change", 1001)), CancellationToken.None);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(3, Text("/setnote owner synthetic owner context", 1002)), CancellationToken.None);
+        var profile = await s.Profiles.GetOrCreateAsync(FamilyId, Bot.BotDbId, CancellationToken.None);
+        profile.ReportedVetGuidance.ShouldBe("synthetic owner-reported guidance");
+        profile.OwnerContextNote.ShouldBe("synthetic owner context");
+        var provenance = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(profile.FieldProvenanceJson)!;
+        provenance["ReportedVetGuidance"].GetProperty("ActorUserId").GetInt64().ShouldBe(111);
+        provenance["ReportedVetGuidance"].GetProperty("Source").GetString().ShouldBe("owner-reported veterinarian");
+        s.Chat.RequestedMessages.Count.ShouldBe(2);
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0); (await s.Context.VetEvents.CountAsync()).ShouldBe(0);
+    }
 
     [Fact]
     public async Task Mixed_actual_report_saves_one_action_once_under_transport_redelivery_with_actual_attempt_accounting()

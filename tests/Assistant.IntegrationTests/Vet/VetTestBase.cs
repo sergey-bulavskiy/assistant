@@ -1,4 +1,5 @@
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Health;
 using Assistant.Application.Llm;
 using Assistant.Application.Manager;
@@ -23,6 +24,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Assistant.IntegrationTests.Vet;
@@ -59,7 +61,8 @@ public abstract class VetTestBase : IntegrationTestBase
     }
 
     protected VetTestSession Open(long? familyId = null, IInterceptor? interceptor = null,
-        VetRuntimeOptions? runtimeOptions = null) => new(ConnectionString, familyId ?? FamilyId, Bot, Clock, interceptor, runtimeOptions);
+        VetRuntimeOptions? runtimeOptions = null, ITraceSession? trace = null, ILogger<VetAssistant>? logger = null)
+        => new(ConnectionString, familyId ?? FamilyId, Bot, Clock, interceptor, runtimeOptions, trace, logger);
     protected VetTestSession Unscoped() => new(ConnectionString, null, Bot, Clock);
     protected static IncomingMessage Text(string text, int id = 1000, long actor = 111, int topic = 7) =>
         new(-100, "supergroup", "synthetic topic", topic, id, actor, "synthetic_user", text,
@@ -107,7 +110,8 @@ public abstract class VetTestBase : IntegrationTestBase
         public FakeTelegramClient Telegram { get; } = new();
         public ScriptedChatClient Chat { get; } = new();
         public VetTestSession(string connectionString, long? familyId, ReceivingBot bot, IClock clock,
-            IInterceptor? interceptor = null, VetRuntimeOptions? runtimeOptions = null)
+            IInterceptor? interceptor = null, VetRuntimeOptions? runtimeOptions = null,
+            ITraceSession? trace = null, ILogger<VetAssistant>? logger = null)
         {
             Current.Set(familyId);
             var options = new DbContextOptionsBuilder<AssistantDbContext>();
@@ -135,9 +139,9 @@ public abstract class VetTestBase : IntegrationTestBase
             var build = new BuildInfo("abcdef1", null, Now);
             Assistant = new(Profiles, Diary, approvals, ownership, Messages, gateway,
                 new RolePrompts(typeof(RolePrompts).Assembly), clock, build, runtimeOptions ?? new(true, 20, 32000),
-                NullLogger<VetAssistant>.Instance);
+                logger ?? NullLogger<VetAssistant>.Instance, trace);
             Handler = new(Messages, approvals, Current, new NoopManager(), new NoopGeneral(), new NoopHealth(),
-                botOptions, build, clock, NullLogger<UpdateHandler>.Instance, vetAssistant: Assistant);
+                botOptions, build, clock, NullLogger<UpdateHandler>.Instance, trace, vetAssistant: Assistant);
         }
         public ValueTask DisposeAsync() => Context.DisposeAsync();
         public void Dispose() => Context.Dispose();

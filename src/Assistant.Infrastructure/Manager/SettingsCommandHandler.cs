@@ -114,8 +114,8 @@ public class SettingsCommandHandler
             else if (BotRoles.IsVet(placeBot.Role))
             {
                 buttons.Add(place.ReplyToAll
-                    ? new InlineButton("Vet: отвечать без упоминания: вкл", $"settingsplace_vetquestions_off:{place.Id}")
-                    : new InlineButton("Vet: отвечать без упоминания: выкл", $"settingsplace_vetquestions_on:{place.Id}"));
+                    ? new InlineButton("Отвечать без упоминания: вкл", $"settingsplace_vetquestions_off:{place.Id}")
+                    : new InlineButton("Отвечать без упоминания: выкл", $"settingsplace_vetquestions_on:{place.Id}"));
             }
 
             // Topics of one chat share its title; the topic id tells them apart.

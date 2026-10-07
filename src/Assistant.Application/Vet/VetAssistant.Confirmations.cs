@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Vet;
@@ -164,6 +165,10 @@ public sealed partial class VetAssistant
         var result = await _diary.ApplyAsync(new(scope, decision.OperationKey, message.UserId!.Value,
             proposal.Kind == "confirm" ? "confirm" : proposal.Kind, profile.Id, changes,
             decision.SourceId, decision.InputRevisionId, decision.Id, decision.ReviewRevision), ct);
+        await TraceSafety.RecordAsync(_trace, new("confirmation",
+            result.Status is VetMutationStatus.Applied or VetMutationStatus.AlreadyApplied ? "accepted" : "skipped", "normal",
+            PendingRecordId: decision.Id, RelatedSourceMessageId: source.Source.SourceMessageDbId,
+            ActorId: message.UserId));
         return MutationText(changes, result);
     }
 

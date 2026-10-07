@@ -14,6 +14,32 @@ namespace Assistant.IntegrationTests.Vet;
 public sealed class VetFailureTests : VetTestBase
 {
     [Fact]
+    public async Task Recovery_limit_does_not_let_unlinked_or_revoked_sources_starve_authorized_linked_work()
+    {
+        await SeedAsync(); await using var s = Open();
+        for (var index = 0; index < 5; index++)
+            await s.Diary.AdmitAsync(Scope, Text("synthetic unlinked source", 1000 + index)
+                with { SentAt = Now.AddDays(-1) }, index + 1, CancellationToken.None);
+        for (var index = 0; index < 5; index++)
+        {
+            var message = Text("synthetic subsequently revoked source", 1100 + index, actor: 222)
+                with { SentAt = Now.AddDays(-1) };
+            var source = await s.Diary.AdmitAsync(Scope, message, index + 6, CancellationToken.None);
+            var stored = await s.Messages.StoreAsync(Bot.TelegramBotId, index + 6, message, CancellationToken.None);
+            await s.Diary.LinkMessageAsync(Scope, source.Source.Id, stored.MessageDbId!.Value, CancellationToken.None);
+        }
+        await Db.FamilyMembers.Where(m => m.FamilyId == FamilyId && m.TelegramUserId == 222)
+            .ExecuteUpdateAsync(u => u.SetProperty(m => m.Status, Assistant.Domain.Families.FamilyMemberStatus.Denied));
+        var eligible = await EvidenceAsync(s, id: 2000, update: 100);
+        await s.Diary.SaveWorkAsync(Scope, eligible.Source.Revision.Id, JsonSerializer.Serialize(
+            new VetTextPlan([new(null, null, eligible.State)], null)), CancellationToken.None);
+        await s.Handler.ResumeAsync(Bot, s.Telegram, CancellationToken.None);
+        (await s.Context.VetEvents.SingleAsync()).SourceId.ShouldBe(eligible.Source.Source.Id);
+        s.Chat.RequestedMessages.ShouldBeEmpty();
+        (await s.Context.VetTextSourceRevisions.CountAsync(r => r.State == "admitted")).ShouldBe(10);
+    }
+
+    [Fact]
     public async Task Failed_diary_write_reports_uncertain_status_then_recovery_uses_exact_work_without_new_model_call()
     {
         await SeedAsync();

@@ -29,8 +29,10 @@ public enum VetMutationStatus { Applied, AlreadyApplied, Stale, NotFound, Refuse
 public sealed record VetMutationResult(VetMutationStatus Status, long? ActionId,
     IReadOnlyList<long> EventIds, IReadOnlyList<long> ProtectedIds)
 {
+    public IReadOnlyList<VetEventRevision> Revisions { get; init; } = [];
     public static VetMutationResult Of(VetMutationStatus status) => new(status, null, [], []);
 }
+public sealed record VetEventRevision(long EventId, int Revision);
 public sealed record VetAdmittedSource(VetTextSource Source, VetTextSourceRevision Revision);
 public sealed record VetHistoryPage(IReadOnlyList<VetHistoryFact> Facts, int Total, int Offset, bool HasMore);
 public sealed record VetHistoryFact(long? EventId, string EventType, decimal Value, string Unit,

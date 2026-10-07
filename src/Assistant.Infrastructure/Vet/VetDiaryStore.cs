@@ -110,6 +110,13 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
         await _guard.BotAsync(familyId, botDbId, null, ct);
         var sources = await db.Set<VetTextSource>().AsNoTracking()
             .Where(s => s.FamilyId == familyId && s.BotDbId == botDbId
+                && db.FamilyMembers.Any(m => m.FamilyId == familyId && m.TelegramUserId == s.SourceAuthorUserId
+                    && m.Status == Assistant.Domain.Families.FamilyMemberStatus.Approved)
+                && (s.ChatType == "private" || db.Places.Any(p => p.BotId == botDbId && p.ChatId == s.ChatId
+                    && p.TopicId == s.TopicId && p.Status == Assistant.Domain.Places.PlaceStatus.Approved))
+                && (s.SourceMessageDbId != null || db.Messages.Any(m => m.FamilyId == familyId
+                    && m.BotId == s.TelegramBotId && m.ChatId == s.ChatId && m.TopicId == s.TopicId
+                    && m.TelegramMessageId == s.TelegramMessageId))
                 && db.Set<VetTextSourceRevision>().Any(r => r.Id == s.CurrentInputRevisionId
                     && (r.State == "admitted" || r.State == "ready" || r.State == "written" || r.State == "dispatching")))
             .OrderBy(s => s.SentAt).ThenBy(s => s.Id).Take(Math.Clamp(limit, 1, 20)).ToListAsync(ct);
@@ -466,7 +473,8 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
             AfterJson = JsonSerializer.Serialize(item.After), BeforeRevision = item.BeforeRevision,
             AfterRevision = item.Event.Revision
         });
-        var outcome = new VetMutationResult(VetMutationStatus.Applied, action.Id, affected.Select(x => x.Event.Id).ToArray(), []);
+        var outcome = new VetMutationResult(VetMutationStatus.Applied, action.Id, affected.Select(x => x.Event.Id).ToArray(), [])
+        { Revisions = affected.Select(x => new VetEventRevision(x.Event.Id, x.Event.Revision)).ToArray() };
         action.OutcomeJson = JsonSerializer.Serialize(outcome);
         if (pending is not null) await ResolvePendingAsync(scope, pending.Id, mutation.ActorUserId, ct);
         await db.SaveChangesAsync(ct);
@@ -529,7 +537,8 @@ public sealed class VetDiaryStore(AssistantDbContext db, ICurrentFamily current,
             BeforeJson = JsonSerializer.Serialize(item.Before), AfterJson = JsonSerializer.Serialize(item.After),
             BeforeRevision = item.Revision, AfterRevision = item.Row.Revision
         });
-        var result = new VetMutationResult(VetMutationStatus.Applied, reversal.Id, applied, protectedIds);
+        var result = new VetMutationResult(VetMutationStatus.Applied, reversal.Id, applied, protectedIds)
+        { Revisions = inverses.Select(x => new VetEventRevision(x.Row.Id, x.Row.Revision)).ToArray() };
         reversal.OutcomeJson = JsonSerializer.Serialize(result);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);

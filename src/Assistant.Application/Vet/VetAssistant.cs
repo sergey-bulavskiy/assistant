@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Assistant.Application.Common;
+using Assistant.Application.Diagnostics;
 using Assistant.Application.Families;
 using Assistant.Application.Llm;
 using Assistant.Application.Messages;
@@ -34,14 +35,16 @@ public sealed partial class VetAssistant : IVetAssistant
     private readonly VetRuntimeOptions _options;
     private readonly ILogger<VetAssistant> _logger;
     private readonly VetReplies _replies;
+    private readonly ITraceSession _trace;
 
     public VetAssistant(IVetProfileStore profiles, IVetDiaryStore diary, IApprovalService approvals,
         IFamilyOwnership ownership, IMessageStore messages, ILlmGateway gateway, IRolePrompts prompts,
-        IClock clock, BuildInfo buildInfo, VetRuntimeOptions options, ILogger<VetAssistant> logger)
+        IClock clock, BuildInfo buildInfo, VetRuntimeOptions options, ILogger<VetAssistant> logger, ITraceSession? trace = null)
     {
         _profiles = profiles; _diary = diary; _approvals = approvals; _ownership = ownership;
         _messages = messages; _gateway = gateway; _prompts = prompts; _clock = clock;
         _buildInfo = buildInfo; _options = options; _logger = logger; _replies = new(logger);
+        _trace = trace ?? NullTraceSession.Instance;
     }
 
     public async Task<VetAdmittedSource?> AdmitAsync(ReceivingBot bot, IncomingMessage message, long updateId, CancellationToken ct)
@@ -99,6 +102,8 @@ public sealed partial class VetAssistant : IVetAssistant
         catch (Exception ex)
         {
             _logger.LogWarning("Vet processing failed: {ExceptionType}", ex.GetType().Name);
+            await TraceSafety.RecordAsync(_trace, new("extraction", "failed", "provider_failure",
+                RelatedSourceMessageId: source.Source.SourceMessageDbId, ActorId: message.UserId));
             // The outcome can be unknown if a commit succeeded before the connection failed.
             // Recovery uses the persisted work and operation key, never a new interpretation.
             await _replies.SendAsync(client, message, NotSavedText, ct);
@@ -174,6 +179,9 @@ public sealed partial class VetAssistant : IVetAssistant
             source = (await _diary.GetSourceAsync(scope, source.Source.Id, ct))!;
         }
         var interpretation = VetInterpretationParser.Parse(persisted!.Json)!;
+        await TraceSafety.RecordAsync(_trace, new("extraction", "ok", "normal", AttemptId: persisted.AttemptId,
+            RelatedSourceMessageId: source.Source.SourceMessageDbId, ActorId: message.UserId,
+            EventCount: interpretation.Events.Count, ProblemCount: interpretation.Unclear.Count));
         if (!await AuthorizedAsync(bot, message, ct)) return;
         var handled = await OperationAsync(interpretation, bot, client, message, source, profile, ct);
         if (!handled && source.Revision.State != "written")
@@ -202,6 +210,7 @@ public sealed partial class VetAssistant : IVetAssistant
                     var mutation = new VetDiaryMutation(scope, source.Revision.OperationKey, message.UserId!.Value,
                         source.Revision.IsEdit ? "edit" : "save", profile.Id, plan.ClearChanges, source.Source.Id, source.Revision.Id);
                     var outcome = await _diary.ApplyAsync(mutation, ct);
+                    await TraceMutationAsync(source, message.UserId!.Value, outcome);
                     if (outcome.Status is VetMutationStatus.Applied or VetMutationStatus.AlreadyApplied or VetMutationStatus.NoChange)
                         await _replies.SendAsync(client, message, DescribeChanges(plan.ClearChanges, outcome), ct);
                     else
@@ -217,6 +226,9 @@ public sealed partial class VetAssistant : IVetAssistant
                         message.UserId!.Value, JsonSerializer.Serialize(proposal), ct);
                     if (decision.State == "pending" && decision.PromptMessageId is null)
                         await ShowPendingAsync(client, message, decision, profile, ct);
+                    await TraceSafety.RecordAsync(_trace, new("confirmation", "requested", "pending_record",
+                        PendingRecordId: decision.Id, RelatedSourceMessageId: source.Source.SourceMessageDbId,
+                        ActorId: message.UserId));
                 }
             }
         }
@@ -230,6 +242,11 @@ public sealed partial class VetAssistant : IVetAssistant
         if (after?.Revision.AnswerState == "ready") return;
         await CompleteAsync(scope, source.Revision.Id, ct);
     }
+
+    private Task TraceMutationAsync(VetAdmittedSource source, long actor, VetMutationResult outcome) =>
+        TraceSafety.RecordAsync(_trace, new("extraction", outcome.Status is VetMutationStatus.Applied or VetMutationStatus.AlreadyApplied
+            ? "ok" : "skipped", "events_recorded", RelatedSourceMessageId: source.Source.SourceMessageDbId,
+            ActorId: actor, EventCount: outcome.EventIds.Count));
 
     private async Task<LlmResult> CallAsync(ReceivingBot bot, ITelegramClient client, IncomingMessage message,
         VetAdmittedSource source, string tier, string prompt, CancellationToken ct)
