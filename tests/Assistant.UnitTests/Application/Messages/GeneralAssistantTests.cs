@@ -800,15 +800,16 @@ public class GeneralAssistantTests
 
         _telegram.ChatActionsSent.ShouldNotBeEmpty();
         _telegram.ChatActionsSent.ShouldAllBe(a => a.Action == "typing" && a.ChatId == PrivateChatId);
+        _telegram.LastChatActionCancellationToken.ShouldNotBeNull();
+        _telegram.LastChatActionCancellationToken!.Value.CanBeCanceled.ShouldBeTrue();
+        _telegram.LastChatActionCancellationToken.Value.IsCancellationRequested.ShouldBeFalse();
         _telegram.Sent.ShouldBeEmpty();
 
         answerGate.SetResult();
-        await handling;
+        await handling.WaitAsync(TimeSpan.FromSeconds(5));
 
         _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("test answer");
-        var actionsAfterAnswer = _telegram.ChatActionsSent.Count;
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
-        _telegram.ChatActionsSent.Count.ShouldBe(actionsAfterAnswer);
+        _telegram.LastChatActionCancellationToken!.Value.IsCancellationRequested.ShouldBeTrue();
     }
 
     [Fact]

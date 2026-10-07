@@ -63,9 +63,10 @@ public class ProcessRunnerEnvironmentIsolationTests
     [UnixOnlyFact]
     public async Task The_childs_environment_never_contains_a_variable_the_parent_process_has_but_the_request_did_not_list()
     {
-        Environment.SetEnvironmentVariable("ASSISTANT_TEST_LEAK_VAR", "should-not-reach-child");
+        var originalValue = Environment.GetEnvironmentVariable("ASSISTANT_TEST_LEAK_VAR");
         try
         {
+            Environment.SetEnvironmentVariable("ASSISTANT_TEST_LEAK_VAR", "should-not-reach-child");
             var runner = new ProcessRunner();
             var environment = new Dictionary<string, string> { ["ASSISTANT_TEST_VAR"] = "visible-value" };
             var request = new ProcessRunRequest(
@@ -78,7 +79,7 @@ public class ProcessRunnerEnvironmentIsolationTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ASSISTANT_TEST_LEAK_VAR", null);
+            Environment.SetEnvironmentVariable("ASSISTANT_TEST_LEAK_VAR", originalValue);
         }
     }
 }

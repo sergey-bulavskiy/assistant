@@ -25,6 +25,7 @@ internal static class ReadOnlyListExtensions
     }
 }
 
+[Collection(nameof(ProcessWideEnvironmentCollection))]
 public class ClaudeCliChatClientTests
 {
     // Minimal capturing logger: check this repo's existing tests first (grep for "ILogger<" fakes
@@ -288,13 +289,22 @@ public class ClaudeCliChatClientTests
         // Simulates the real hosting process, which DOES have these set: prove the allowlist is
         // built from scratch (ClaudeCliOptions + a fixed list), never by inheriting/filtering the
         // parent's environment block.
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-leak-test");
-        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "sk-openai-leak-test");
-        Environment.SetEnvironmentVariable("TELEGRAM_MANAGER_BOT_TOKEN", "123456:leak-test-token");
-        Environment.SetEnvironmentVariable("TOKEN_ENCRYPTION_KEY", "leak-test-encryption-key");
-        Environment.SetEnvironmentVariable("ConnectionStrings__Assistant", "Host=leak;Password=leak-test");
+        var variables = new Dictionary<string, string?>
+        {
+            ["ANTHROPIC_API_KEY"] = "sk-ant-leak-test",
+            ["OPENAI_API_KEY"] = "sk-openai-leak-test",
+            ["TELEGRAM_MANAGER_BOT_TOKEN"] = "123456:leak-test-token",
+            ["TOKEN_ENCRYPTION_KEY"] = "leak-test-encryption-key",
+            ["ConnectionStrings__Assistant"] = "Host=leak;Password=leak-test"
+        };
+        var originalValues = variables.Keys.ToDictionary(name => name, Environment.GetEnvironmentVariable);
         try
         {
+            foreach (var (name, value) in variables)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+
             var runner = new FakeProcessRunner
             {
                 Handler = _ => new ProcessRunResult(0, """{"is_error":false,"subtype":"success","result":"hi","usage":{"input_tokens":1,"output_tokens":1}}""", "", false)
@@ -315,11 +325,10 @@ public class ClaudeCliChatClientTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
-            Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
-            Environment.SetEnvironmentVariable("TELEGRAM_MANAGER_BOT_TOKEN", null);
-            Environment.SetEnvironmentVariable("TOKEN_ENCRYPTION_KEY", null);
-            Environment.SetEnvironmentVariable("ConnectionStrings__Assistant", null);
+            foreach (var (name, value) in originalValues)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
         }
     }
 
