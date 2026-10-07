@@ -8,8 +8,10 @@ using Telegram.Bot.Types;
 
 namespace Assistant.UnitTests.Infrastructure.Telegram;
 
-public sealed class TelegramMediaTests
+public sealed class TelegramMediaTests : IDisposable
 {
+    private readonly List<HttpClient> _clients = [];
+
     [Fact]
     public void MapsDocumentMetadataAndCaptionWithoutInterpretingFilename()
     {
@@ -110,8 +112,17 @@ public sealed class TelegramMediaTests
         destination.Length.ShouldBe(0);
     }
 
-    private static TelegramClientAdapter Create(FileHandler handler) =>
-        new(new TelegramBotClient(new TelegramBotClientOptions("123456:test-token"), new HttpClient(handler)));
+    private TelegramClientAdapter Create(FileHandler handler)
+    {
+        var client = new HttpClient(handler);
+        _clients.Add(client);
+        return new(new TelegramBotClient(new TelegramBotClientOptions("123456:test-token"), client));
+    }
+
+    public void Dispose()
+    {
+        foreach (var client in _clients) client.Dispose();
+    }
 
     private sealed class FileHandler(byte[] bytes, long? size) : HttpMessageHandler
     {
