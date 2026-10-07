@@ -71,6 +71,7 @@ test family; every message is invented. Use separate bots from CD: one poller pe
    os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = ",".join(entries)
    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
    os.environ["MCP_TRANSPORT"] = "stdio"
+   os.environ["TELEGRAM_SESSION_LOCK"] = "exclusive"
    os.environ["TELEGRAM_TRANSCRIBE"] = "off"
    os.environ["TELEGRAM_EXPOSED_TOOLS"] = (
        "read-only+send_message,reply_to_message,press_inline_button")
@@ -127,6 +128,44 @@ test family; every message is invented. Use separate bots from CD: one poller pe
 
 ## Agent runbook: connect and extend
 
+### Live session ownership and bounded runs
+
+Treat the Telegram account/session and connector environment as one shared resource across all
+worktrees. Only one live-test owner may use that resource at a time. Before any connector startup,
+including a connection-only SDK check, acquire an OS-held exclusive lock in a private directory
+outside every repository. All agents and worktrees use the same lock location and resource name.
+Keep it for the full ownership period and privately record the owner task, PID, and process start
+time. Connect on demand; implementation agents leave Telegram disconnected. Keep
+`TELEGRAM_SESSION_LOCK=exclusive`. Every connector launcher or wrapper must run under the acquired
+lock; a standalone SDK script must not bypass it.
+
+The runner must mechanically enforce the lock, hard send cap, overall timeout, and cleanup. If
+available tooling does not enforce these controls, do not start a live run; defer to an enforcing
+runner or continue offline work. On a busy lock, wait only for a bounded period, then defer.
+Never kill another agent's client. Handoff explicitly: finish cleanup, close the owned connector,
+verify exit, then release the lock. The next owner acquires it before startup; never release it
+while an owned connector remains active.
+
+Set a hard overall send budget and timeout before each run. Defaults are at most 20 attempted
+sends and 15 minutes; stricter user limits take precedence. Count every attempted send, including
+failed attempts and reruns, and never reset the cap to evade it. Permit at most two retries per
+failure, respecting flood-waits and timeouts. Never blindly retry an ambiguous send; inspect the
+destination first. Preserve private evidence and stop unresolved cases. Require owner authorization
+for blockers that exceed the approved scope or need a consequential action.
+
+Use context managers and `finally` cleanup so success, errors, timeout, and cancellation all
+restore changed settings and remove only verified synthetic records. Close only connector child
+processes owned by this run and verify exit before releasing the lock. Preserve saved authorization;
+do not log out or revoke the session. For crash recovery, check PID, process start time, and process
+identity to avoid PID reuse. Automatically stop only abandoned children owned by this run; get
+owner approval before stopping unrelated live processes.
+
+Parallel live tests require fully separate, authorized sessions, bot tokens and pollers, chats,
+and disposable databases. Coordinate account quotas even then; default to serialization. Reports
+distinguish automated, live, and skipped coverage and include generic release and attempted-send
+count status. Keep evidence and ownership records private. Do not claim a private runner enforces
+these controls unless its code has been inspected.
+
 Use the configured MCP tools when exposed in the current session. If absent, inspect the
 client's registered server configuration using its MCP inspection command (for example,
 `codex mcp get telegram_smoke`) or its configuration UI/file. Inspect only nonsecret
@@ -136,10 +175,9 @@ Read the pinned connector README above and the [official Python SDK client docs]
 before using its stdio client. Reuse the connector's installed SDK version; this example
 uses the v1 API, so adapt against the installed version's official docs rather than upgrading.
 
-One process may own the Telegram session at a time; another can hit a session/database lock.
-Reuse the active connector. Start a direct SDK client only after confirming its session is
-free; never kill the user's client or ask for a restart as the default workaround.
-A connection-check request authorizes initialization/tool listing, not reads or synthetic sends.
+Follow [Live session ownership and bounded runs](#live-session-ownership-and-bounded-runs)
+before starting or using any connector. A connection-check request authorizes initialization/tool
+listing, not reads or synthetic sends.
 For an authorized smoke run, send only invented messages within the user-approved test scope.
 Resolve the dedicated allowed chat from private local config in runtime memory only. The private launcher loads `.env`; never display it. A private helper
 may read only allowlist/handle values into memory without printing them or copying them here.
@@ -324,15 +362,14 @@ account or contact someone to fill the gap.
 
 ## Evidence and cleanup
 
-Publish only case labels, pass/fail/inconclusive, app commit/image tag, connector revision
-and generic failure descriptions. No raw MCP output, transcripts, screenshots, real IDs,
-names, bot usernames, credentials or session paths. Example:
+Publish only case labels, pass/fail/inconclusive, app commit/image tag, connector revision,
+generic release status, attempted-send count, and generic failure descriptions. No raw MCP output,
+transcripts, screenshots, real IDs, names, bot usernames, credentials or session paths. Example:
 “Addressing: pass; topic isolation: inconclusive (provider unavailable).”
 Keep detailed diagnostics privately outside repositories; do not print them in CI.
 
-Restore each recorded original reply-to-all and enabled state, and re-fetch `/settings` to
-verify restoration. Remove only this run's synthetic Health records by their verified sources;
-an ambiguous latest record is never permission to undo it. Record incomplete cleanup privately
-and report it generically. Stop only the disposable app/connector started for this run; do not
-stop an existing client. A human may revoke
-the MCP session in Telegram Settings → Devices and retain/remove test chats/bots in the UI.
+Apply [Live session ownership and bounded runs](#live-session-ownership-and-bounded-runs) for
+cleanup and lock release. Restore each changed setting and verify it in `/settings`; remove only
+synthetic records whose source is verified. An ambiguous latest record is never permission to undo
+it. Record incomplete cleanup privately and report it generically. A human may retain or remove
+test chats/bots in the UI. Preserve saved authorization; do not log out or revoke the session.
