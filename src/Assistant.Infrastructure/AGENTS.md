@@ -161,6 +161,15 @@
 
 ## Telegram
 
+- Attachment descriptors are neutral metadata on `IncomingMessage`; captions remain `Text`,
+  photo sizes are variants of one source, and media-group IDs identify transport albums.
+  Mapping never downloads. Filename/MIME display metadata strips controls and is bounded to 255;
+  opaque file IDs are not paths. Role handlers authorize and choose their own attachment source.
+- `ITelegramClient.DownloadFileAsync` writes into a caller-owned stream, enforcing actual bytes
+  as well as supplied size metadata, at most 20,000,000 bytes and a 60-second linked deadline.
+  Caller cancellation propagates; fixed typed failures must not expose tokens/remote messages.
+  A partial failed download is not usable input. Tracing forwards downloads without capturing bytes.
+
 - The `telegram` named HttpClient has its loggers removed on purpose: Bot API URLs contain the
   token. Any new HttpClient that talks to an API with secrets in the URL needs the same.
 - `TelegramClientAdapter` is the only place that touches `Telegram.Bot` types; map to our own
@@ -171,6 +180,18 @@
 - Reactions (`SetReactionAsync`): one `ReactionTypeEmoji`, or an empty list to clear. Bots may use
   only the emoji Telegram allows (✍ U+270D without a variation selector, and 👍, are allowed); a
   group can restrict reactions further, so callers fall back and never fail on a reaction.
+
+## Document text extraction (`Health/Documents/`)
+
+- `DocumentTextExtractor` uses PdfPig 0.1.16 for validated PDF signatures and content-order page
+  text, or strict UTF-8/BOM decoding for plain text/Markdown. Validate the entire bounded text input
+  even after its retained 200,000-character cap; invalid tails must not become readable prefixes.
+  Byte limit is 20,000,000 actual bytes. Never decode a renamed PDF/ZIP/binary file as plain text.
+- Password-protected, encrypted, corrupt, unsupported and no-text files return fixed metadata-only
+  failure categories. Do not expose parser diagnostics. PDF results preserve page boundaries and
+  declare text-only coverage; no OCR, image, embedded-file, script or network extraction is added.
+  Dispose the parser and owned memory, keep caller streams open, and check cancellation during
+  copying/decoding and between pages. Synchronous PDF open/page parsing cannot be preempted.
 
 ## LLM gateway and CLI providers (`Llm/`)
 
@@ -186,6 +207,16 @@
   web, collaboration and other unwanted capabilities must remain disabled. A read-only sandbox
   alone is insufficient. Unexpected tool/events fail the call; raw JSON events stay in memory
   and never enter ordinary logs, response metadata or traces. Temporary files are cleaned up.
+- Native image input is limited to the verified Codex 0.160.1/gpt-6.1-sol combination and one
+  signature-validated JPEG/PNG up to 20,000,000 bytes. The temporary input file goes through
+  native `--image`; `view_image` and all other tools remain disabled. No image bytes/paths/base64
+  enter prompts, traces or logs. `CODEX_IMAGE_INPUT_ENABLED=false` explicitly disables the otherwise
+  enabled capability in local host configuration; compose uses the default.
+- Image callers supply a durable GUID AttemptKey and stored TriggerMessageId. Commit a shared
+  `llm_calls` Dispatching row before provider dispatch; finalize that same unique row with usage.
+  Failed final accounting refuses the answer. Uncertain dispatches become OutcomeUnknown, and
+  reusing a key never dispatches again; another scope/model is refused. Guards create no attempt
+  row. Legacy text keys remain null; there is no second photo-specific usage ledger.
 - Codex final output must agree with `--output-last-message`; only final answer, token usage and
   sanitized failure categories leave the adapter. `LLM_MAX_OUTPUT_TOKENS` is an instruction target
   for this pinned CLI, not a verified hard generation limit. Final text is rejected above

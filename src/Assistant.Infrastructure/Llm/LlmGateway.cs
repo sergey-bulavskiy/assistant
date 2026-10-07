@@ -85,6 +85,8 @@ public class LlmGateway : ILlmGateway
                 return LlmResult.Refused(same ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed)
                     with { TraceAttemptId = same ? request.AttemptKey : null };
             }
+            if (request.PreferredModel is not null && request.PreferredModel != "gpt-6.1-sol")
+                return LlmResult.Refused(LlmRefusalReason.UnsupportedInput);
         }
         // Spec §8.8: take the concurrency semaphore FIRST, then check the rate guard. A single slot
         // covers the whole call including any fallback attempts across candidates -- fallback happens
@@ -504,9 +506,8 @@ public class LlmGateway : ILlmGateway
             return (LlmResult.Refused(HasImages(request) ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);
         }
 
-        // Everything from here on is OUTSIDE the try above, on purpose: the provider call already
-        // succeeded, so a failure recording the attempt (e.g. a transient DB error) must never turn a
-        // real answer into a Failed result -- see RecordCallAsync.
+        // Provider execution has succeeded. Legacy text keeps best-effort accounting;
+        // an image answer requires finalizing its durable attempt row below.
         stopwatch.Stop();
 
         // The provider answered: cost comes from its usage (0 for a zero-price entry). An empty
