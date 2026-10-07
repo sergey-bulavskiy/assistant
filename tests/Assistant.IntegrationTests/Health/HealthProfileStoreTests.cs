@@ -10,6 +10,102 @@ namespace Assistant.IntegrationTests.Health;
 
 public class HealthProfileStoreTests : IntegrationTestBase
 {
+    [Theory]
+    [InlineData(HealthProfileField.Conditions)]
+    [InlineData(HealthProfileField.Medications)]
+    [InlineData(HealthProfileField.Allergies)]
+    [InlineData(HealthProfileField.DoctorPlan)]
+    [InlineData(HealthProfileField.DoctorContacts)]
+    public async Task Consultation_field_exact_limit_retry_and_clear_persist_audit_without_touching_other_fields(HealthProfileField field)
+    {
+        var profile = await CreateProfileAsync(1, 10);
+        var other = await CreateProfileAsync(1, 20);
+        var value = new string('x', 1000);
+        var (context, store) = OpenScope(1);
+        await using (context)
+        {
+            await store.SaveFieldAsync(1, profile.Id, field, value, 111, CancellationToken.None);
+            await store.SaveFieldAsync(1, profile.Id, field, value, 111, CancellationToken.None);
+            var loaded = await store.GetOrCreateAsync(1, 10, CancellationToken.None);
+            FieldValue(loaded, field).ShouldBe(value);
+            (await store.GetOrCreateAsync(1, 20, CancellationToken.None)).ShouldBe(other);
+            await Should.ThrowAsync<ArgumentException>(() => store.SaveFieldAsync(1, profile.Id, field, new string('y', 1001), 222, CancellationToken.None));
+            FieldValue(await store.GetOrCreateAsync(1, 10, CancellationToken.None), field).ShouldBe(value);
+            await store.SaveFieldAsync(1, profile.Id, field, null, 222, CancellationToken.None);
+        }
+        FieldValue(await CreateProfileAsync(1, 10), field).ShouldBeNull();
+        var row = await Db.HealthProfiles.AsNoTracking().SingleAsync(p => p.Id == profile.Id);
+        row.UpdatedByUserId.ShouldBe(222);
+        row.UpdatedAt.ShouldBeGreaterThanOrEqualTo(row.CreatedAt);
+        (await Db.HealthProfiles.CountAsync()).ShouldBe(2);
+    }
+
+    private static string? FieldValue(HealthProfileInfo profile, HealthProfileField field) => field switch
+    {
+        HealthProfileField.Conditions => profile.Conditions,
+        HealthProfileField.Medications => profile.Medications,
+        HealthProfileField.Allergies => profile.Allergies,
+        HealthProfileField.DoctorPlan => profile.DoctorPlan,
+        HealthProfileField.DoctorContacts => profile.DoctorContacts,
+        _ => throw new ArgumentOutOfRangeException(nameof(field))
+    };
+
+    [Fact]
+    public async Task Concurrent_different_fields_and_stale_legacy_profile_edit_preserve_every_consultation_field()
+    {
+        var stale = await CreateProfileAsync(1, 10);
+        var (contextA, storeA) = OpenScope(1);
+        var (contextB, storeB) = OpenScope(1);
+        await using (contextA)
+        await using (contextB)
+        {
+            // Both scopes have read the same older profile before either field is written.
+            await storeA.GetOrCreateAsync(1, 10, CancellationToken.None);
+            await storeB.GetOrCreateAsync(1, 10, CancellationToken.None);
+            await Task.WhenAll(
+                storeA.SaveFieldAsync(1, stale.Id, HealthProfileField.Conditions, "condition-marker", 111, CancellationToken.None),
+                storeB.SaveFieldAsync(1, stale.Id, HealthProfileField.DoctorPlan, "plan-marker", 222, CancellationToken.None));
+            // An identical retry after both writes must preserve the other concurrently written field.
+            await storeA.SaveFieldAsync(1, stale.Id, HealthProfileField.Conditions, "condition-marker", 111, CancellationToken.None);
+            await storeA.SaveFieldAsync(1, stale.Id, HealthProfileField.Medications, "medication-marker", 111, CancellationToken.None);
+            await storeA.SaveFieldAsync(1, stale.Id, HealthProfileField.Allergies, "allergy-marker", 111, CancellationToken.None);
+            await storeA.SaveFieldAsync(1, stale.Id, HealthProfileField.DoctorContacts, "contact-marker", 111, CancellationToken.None);
+            await storeB.SaveProfileAsync(1, stale with { TimeZone = "Europe/Berlin", StageStartDate = new DateOnly(2030, 1, 1),
+                EmergencyPhone = "112", ContextNote = "legacy-note" }, 222, CancellationToken.None);
+        }
+        var loaded = await CreateProfileAsync(1, 10);
+        loaded.Conditions.ShouldBe("condition-marker");
+        loaded.DoctorPlan.ShouldBe("plan-marker");
+        loaded.Medications.ShouldBe("medication-marker");
+        loaded.Allergies.ShouldBe("allergy-marker");
+        loaded.DoctorContacts.ShouldBe("contact-marker");
+        loaded.ContextNote.ShouldBe("legacy-note");
+        loaded.TimeZone.ShouldBe("Europe/Berlin");
+        loaded.StageStartDate.ShouldBe(new DateOnly(2030, 1, 1));
+        loaded.EmergencyPhone.ShouldBe("112");
+    }
+
+    [Fact]
+    public async Task Consultation_field_access_fails_closed_for_unset_scope_other_family_and_unknown_profile()
+    {
+        var profile = await CreateProfileAsync(2, 20);
+        foreach (var scope in new long?[] { null, 1 })
+        {
+            var (context, store) = OpenScope(scope);
+            await using (context)
+            {
+                await Should.ThrowAsync<InvalidOperationException>(() => store.SaveFieldAsync(2, profile.Id, HealthProfileField.Conditions, "x", 111, CancellationToken.None));
+                await Should.ThrowAsync<InvalidOperationException>(() => store.SaveFieldAsync(1, profile.Id, HealthProfileField.DoctorPlan, "x", 111, CancellationToken.None));
+            }
+        }
+        var (ownContext, ownStore) = OpenScope(2);
+        await using (ownContext)
+        {
+            await Should.ThrowAsync<InvalidOperationException>(() => ownStore.SaveFieldAsync(2, profile.Id + 1000, HealthProfileField.Conditions, "x", 111, CancellationToken.None));
+        }
+        (await CreateProfileAsync(2, 20)).ShouldBe(profile);
+        (await Db.HealthProfiles.AsNoTracking().SingleAsync()).UpdatedByUserId.ShouldBeNull();
+    }
     private static readonly string[] SeedKeys =
     {
         "glucose.any", "glucose.fasting", "glucose.after_1h", "glucose.after_2h",

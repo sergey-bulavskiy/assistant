@@ -12,7 +12,7 @@ namespace Assistant.Application.Health;
 /// <summary>The `health` role bot: a health tracking assistant for one household member (one profile
 /// per bot, created lazily with the default safety rules). The entry point and dispatcher: commands go
 /// to <see cref="HealthCommands"/>, every other text message (new or edited) to
-/// <see cref="HealthMessagePipeline"/>, which uses <see cref="HealthAnswers"/> for eligible questions.
+/// <see cref="HealthMessagePipeline"/>, which uses <see cref="HealthAnswers"/> for eligible replies.
 /// Never logs message text, model answers or values.</summary>
 public class HealthAssistant : IHealthAssistant
 {
@@ -26,11 +26,8 @@ public class HealthAssistant : IHealthAssistant
     /// <summary>👍, tried once when the chat refuses ✍.</summary>
     public const string FallbackReaction = "\U0001F44D";
 
-    /// <summary>Ends every answer that came from the model (also one replaced by the dose filter).</summary>
+    /// <summary>Ends every complete answer that came from the model.</summary>
     public const string AnswerFooter = "Не заменяю врача.";
-
-    internal const string AddressedHintText =
-        "Слушаю. Запишите показатель (например: сахар 5.8 после обеда) или задайте вопрос.";
 
     private readonly IHealthProfileStore _profiles;
     private readonly HealthReplies _replies;
@@ -50,7 +47,6 @@ public class HealthAssistant : IHealthAssistant
         LlmConfig? config,
         IRolePrompts rolePrompts,
         FailureNoticeThrottle failureNotices,
-        AddressedHintThrottle hints,
         IClock clock,
         BuildInfo buildInfo,
         ILogger<HealthAssistant> logger,
@@ -64,7 +60,7 @@ public class HealthAssistant : IHealthAssistant
         _confirmations = new HealthConfirmations(events, pendingRecords, clock, _replies, safety, logger, _trace);
         _commands = new HealthCommands(profiles, ownership, events, _replies, clock, buildInfo);
         _pipeline = new HealthMessagePipeline(
-            profiles, events, gateway, rolePrompts, failureNotices, hints, clock, _replies, safety, answers, _confirmations, logger, _trace);
+            profiles, events, gateway, rolePrompts, failureNotices, clock, _replies, safety, answers, _confirmations, logger, _trace);
     }
 
     public async Task HandleAsync(

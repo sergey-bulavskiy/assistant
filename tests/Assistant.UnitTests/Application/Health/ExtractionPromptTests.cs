@@ -13,6 +13,10 @@ public class ExtractionPromptTests
 
         prompt.ShouldBe(
             "test instructions\n\n## Runtime\n\n" +
+            "- Private chat: false\n" +
+            "- Explicitly addressed or private: false\n" +
+            "- This approved place permits replies without addressing: false\n" +
+            "- Edited message: false\n" +
             "- Time zone: Europe/Berlin\n" +
             "- Current local date and time: 2030-02-07 11:00 (Thursday)\n" +
             "- The message was sent at local time: 2030-02-07 10:58 (Thursday)\n" +
@@ -57,4 +61,12 @@ public class ExtractionPromptTests
     {
         ExtractionPrompt.ShouldExtract(text).ShouldBe(expected);
     }
+
+    [Theory]
+    [InlineData("hi", true)]
+    [InlineData(" 7 ", true)]
+    [InlineData("👍👍", false)]
+    [InlineData("   ", false)]
+    public void Eligible_short_text_uses_the_same_interpretation(string text, bool expected) =>
+        ExtractionPrompt.ShouldExtract(text, eligible: true).ShouldBe(expected);
 }

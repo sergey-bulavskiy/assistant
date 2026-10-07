@@ -39,4 +39,4 @@ public sealed record ExtractedUnclear
 /// <summary>A parsed extraction answer (known event types only). Undo: the message asks to remove a
 /// recording or not to keep it (the model decides; code limits what is removed).</summary>
 public sealed record ExtractionOutput(
-    IReadOnlyList<ExtractedEvent> Events, IReadOnlyList<ExtractedUnclear> Unclear, bool IsQuestion, bool Undo = false);
+    IReadOnlyList<ExtractedEvent> Events, IReadOnlyList<ExtractedUnclear> Unclear, bool IsQuestion, bool Undo = false, bool NeedsReply = false);
