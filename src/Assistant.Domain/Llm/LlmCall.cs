@@ -6,6 +6,8 @@ namespace Assistant.Domain.Llm;
 public class LlmCall
 {
     public long Id { get; set; }
+    /// <summary>Durable image-dispatch identity. Legacy text attempts remain null.</summary>
+    public Guid? AttemptKey { get; set; }
     public long FamilyId { get; set; }
     public long BotId { get; set; }
     public string Tier { get; set; } = string.Empty;
