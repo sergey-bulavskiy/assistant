@@ -7,6 +7,9 @@ public enum LlmMessageRole { User, Assistant }
 /// null in private chats where there's nothing to disambiguate.</summary>
 public record LlmMessage(LlmMessageRole Role, string Text, string? Author = null);
 
+/// <summary>Private caller-owned JPEG/PNG bytes; no URLs or archive paths cross the gateway.</summary>
+public sealed record LlmImage(ReadOnlyMemory<byte> Data, string MediaType);
+
 /// <summary>ChatId/TopicId/TriggerMessageId: where the call was triggered and the triggering
 /// message's messages.id; the gateway copies them into every llm_calls attempt row. Optional:
 /// TriggerMessageId null means /tokens does not count the call.</summary>
@@ -19,11 +22,16 @@ public record LlmRequest(
     IReadOnlyList<LlmMessage> Messages,
     long? ChatId = null,
     int? TopicId = null,
-    long? TriggerMessageId = null);
+    long? TriggerMessageId = null)
+{
+    public IReadOnlyList<LlmImage>? Images { get; init; }
+    /// <summary>Durable caller identity for an image dispatch; text calls leave this null.</summary>
+    public Guid? AttemptKey { get; init; }
+}
 
 /// <summary>BudgetExhausted: the platform money budget leaves no callable model; its RetryAt is the
 /// reset of the binding budget period (next UTC day or month).</summary>
-public enum LlmRefusalReason { NotConfigured, RateLimited, DailyCapReached, AllModelsUnavailable, Failed, BudgetExhausted }
+public enum LlmRefusalReason { NotConfigured, RateLimited, DailyCapReached, AllModelsUnavailable, Failed, BudgetExhausted, UnsupportedInput, OutcomeUnknown }
 
 public record LlmResult(bool IsAnswer, string? Text, string? ModelName, LlmRefusalReason? RefusalReason, DateTimeOffset? RetryAt)
 {
@@ -35,7 +43,7 @@ public record LlmResult(bool IsAnswer, string? Text, string? ModelName, LlmRefus
     public static LlmResult Refused(LlmRefusalReason reason, DateTimeOffset? retryAt = null) => new(false, null, null, reason, retryAt);
 }
 
-public record ModelStatus(string Name, bool IsAvailable, DateTimeOffset? RetryAt);
+public record ModelStatus(string Name, bool IsAvailable, DateTimeOffset? RetryAt, bool SupportsImages = false);
 
 public interface ILlmGateway
 {
