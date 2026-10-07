@@ -32,4 +32,6 @@
   categories only; captured content belongs exclusively in the private trace tables and explicit
   local export. The gateway sees parsed final responses only, never raw provider process streams.
 - Bot polling itself (`BotPollingCoordinator`, one worker per bot) lives in
-  `src/Assistant.Infrastructure/Bots`; see that folder's guide.
+  `src/Assistant.Infrastructure/Bots`; see the Infrastructure guide's polling section. Vet admission
+  must succeed before its update offset advances. Its narrow bounded recovery hook starts with a
+  fresh family scope and current authorization; unknown provider calls never resume automatically.

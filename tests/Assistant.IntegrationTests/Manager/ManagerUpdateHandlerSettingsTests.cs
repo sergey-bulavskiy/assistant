@@ -346,6 +346,26 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task Vet_reply_control_is_owner_only_role_checked_and_idempotent_for_exact_topic()
+    {
+        var (handler, telegram) = await SetupAsync();
+        await SetBotRoleAsync(" vet ");
+        var buttons = await PlaceButtonsAsync(handler, telegram, 1);
+        buttons[2].Label.ShouldBe("Отвечать без упоминания: выкл");
+        buttons[2].CallbackData.ShouldBe($"settingsplace_vetquestions_on:{_placeId}");
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(2, 222, $"settingsplace_vetquestions_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(3, 111, $"settingsplace_vetquestions_on:{_placeId}"), CancellationToken.None);
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(4, 111, $"settingsplace_vetquestions_on:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeTrue();
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-3" && c.Text == "Готово: отвечаю без упоминания, когда сообщение ожидает ответа.");
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(5, 111, $"settingsplace_healthquestions_off:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeTrue();
+        await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(6, 111, $"settingsplace_vetquestions_off:{_placeId}"), CancellationToken.None);
+        (await StoredReplyToAllAsync()).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Health_place_has_distinct_question_control_and_owner_can_switch_it()
     {
         var (handler, telegram) = await SetupAsync();

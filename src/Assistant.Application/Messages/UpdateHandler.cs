@@ -4,6 +4,7 @@ using Assistant.Application.Families;
 using Assistant.Application.Health;
 using Assistant.Application.Manager;
 using Assistant.Application.Telegram;
+using Assistant.Application.Vet;
 using Assistant.Domain.Families;
 using Assistant.Domain.Places;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,7 @@ public class UpdateHandler
     private readonly IClock _clock;
     private readonly ILogger<UpdateHandler> _logger;
     private readonly ITraceSession _trace;
+    private readonly IVetAssistant? _vetAssistant;
 
     public UpdateHandler(
         IMessageStore store,
@@ -38,7 +40,8 @@ public class UpdateHandler
         BuildInfo buildInfo,
         IClock clock,
         ILogger<UpdateHandler> logger,
-        ITraceSession? trace = null)
+        ITraceSession? trace = null,
+        IVetAssistant? vetAssistant = null)
     {
         _store = store;
         _approvals = approvals;
@@ -51,6 +54,7 @@ public class UpdateHandler
         _clock = clock;
         _logger = logger;
         _trace = trace ?? NullTraceSession.Instance;
+        _vetAssistant = vetAssistant;
     }
 
     public async Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingUpdate update, CancellationToken cancellationToken)
@@ -125,7 +129,7 @@ public class UpdateHandler
             }
 
             // Use this approved place's own setting, never a parent or sibling topic's setting.
-            if (BotRoles.IsGeneral(bot.Role) || BotRoles.IsHealth(bot.Role))
+            if (BotRoles.IsGeneral(bot.Role) || BotRoles.IsHealth(bot.Role) || BotRoles.IsVet(bot.Role))
             {
                 replyToAll = await _approvals.GetPlaceReplyToAllAsync(placeId, cancellationToken);
             }
@@ -145,7 +149,21 @@ public class UpdateHandler
             }
         }
 
-        var result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
+        VetAdmittedSource? admitted = null;
+        StoreResult result;
+        try
+        {
+            if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null)
+                admitted = await _vetAssistant.AdmitAsync(bot, message, update.UpdateId, cancellationToken);
+            result = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && BotRoles.IsVet(bot.Role)
+            && _vetAssistant is not null && message.UserId is not null && message.Text is { Length: > 0 }
+            && VetIntakePersistenceException.IsRetryable(ex))
+        {
+            _logger.LogWarning("Vet intake persistence failed: {ExceptionType}", ex.GetType().Name);
+            throw new VetIntakePersistenceException();
+        }
         _logger.LogInformation("update {UpdateId} processed with outcome {Outcome}", update.UpdateId, result.Outcome);
 
         await TraceSafety.StartAsync(_trace, new TraceStart(
@@ -175,6 +193,10 @@ public class UpdateHandler
             {
                 await _healthAssistant.HandleAsync(bot, telegramClient, message, result, cancellationToken, replyToAll);
             }
+            else if (BotRoles.IsVet(bot.Role) && _vetAssistant is not null)
+            {
+                await _vetAssistant.HandleAsync(bot, telegramClient, message, result, admitted, cancellationToken, replyToAll);
+            }
             else
             {
                 var reply = ReplyPolicy.Decide(message, result, bot.Username, () => VersionText.Format(_buildInfo, _clock.UtcNow));
@@ -200,14 +222,23 @@ public class UpdateHandler
         }
     }
 
-    // Role-bot button taps. Only the health bot has buttons; any other role answers the callback with
+    public async Task ResumeAsync(ReceivingBot bot, ITelegramClient client, CancellationToken cancellationToken)
+    {
+        if (!BotRoles.IsVet(bot.Role) || bot.FamilyId is null || _vetAssistant is null) return;
+        _currentFamily.Set(bot.FamilyId);
+        await _vetAssistant.ResumeAsync(bot, client, cancellationToken);
+    }
+
+    // Role-bot button taps. Health and Vet have buttons; any other role answers the callback with
     // no text so the client stops spinning. Every tap re-checks the database and creates nothing: the
     // tapping user must be an approved member of the bot's family (any member, not only owners), and
     // outside private chats the place (chat/topic) must be approved.
     private async Task HandleCallbackAsync(
         ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, long updateId, CancellationToken cancellationToken)
     {
-        if (!BotRoles.IsHealth(bot.Role) || bot.FamilyId is not { } familyId)
+        if ((!BotRoles.IsHealth(bot.Role) && !BotRoles.IsVet(bot.Role)) || bot.FamilyId is not { } familyId
+            || BotRoles.IsVet(bot.Role) && (callback.MessageId <= 0 || callback.MessageChatId == 0
+                || callback.MessageChatType is not ("private" or "group" or "supergroup")))
         {
             await AnswerCallbackAsync(telegramClient, callback, null, cancellationToken);
             return;
@@ -228,7 +259,11 @@ public class UpdateHandler
             Guid.NewGuid(), familyId, bot.TelegramBotId, callback.MessageChatId, callback.MessageTopicId,
             updateId, null, false, null, "callback", _buildInfo.Sha));
         telegramClient = TraceSafety.Wrap(_trace, telegramClient);
-        await _healthAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+        if (BotRoles.IsHealth(bot.Role))
+            await _healthAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+        else if (_vetAssistant is not null)
+            await _vetAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+        else await AnswerCallbackAsync(telegramClient, callback, null, cancellationToken);
     }
 
     private async Task AnswerCallbackAsync(

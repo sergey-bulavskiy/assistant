@@ -78,11 +78,11 @@ public class RolePromptsTests
     }
 
     [Fact]
-    public void An_assembly_without_role_resources_reports_both_files_missing()
+    public void An_assembly_without_role_resources_reports_all_required_files_missing()
     {
         var prompts = new RolePrompts(typeof(RolePromptsTests).Assembly);
 
-        prompts.Missing.ShouldBe(new[] { "roles/health/prompt.md", "roles/health/extract.md" });
+        prompts.Missing.ShouldBe(new[] { "roles/health/prompt.md", "roles/health/extract.md", "roles/vet/prompt.md", "roles/vet/extract.md" });
         prompts.Find("health", "prompt.md").ShouldBeNull();
     }
 }

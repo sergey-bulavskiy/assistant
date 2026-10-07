@@ -1,6 +1,7 @@
 using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
+using Assistant.Application.Vet;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -64,6 +65,12 @@ public class BotPollingWorker
             try
             {
                 var offset = await GetOffsetAsync(stoppingToken);
+                if (BotRoles.IsVet(_bot.Role))
+                {
+                    using var recoveryScope = _scopeFactory.CreateScope();
+                    await recoveryScope.ServiceProvider.GetRequiredService<UpdateHandler>()
+                        .ResumeAsync(_bot, _telegramClient, stoppingToken);
+                }
                 var updates = await _telegramClient.GetUpdatesAsync(offset, _settings.LongPollTimeoutSeconds, _allowedUpdates, stoppingToken);
 
                 foreach (var update in updates)
@@ -108,6 +115,12 @@ public class BotPollingWorker
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (VetIntakePersistenceException)
+        {
+            // Without admission/transport persistence there is no recoverable role input. Advancing
+            // the offset here would lose it permanently, so it cannot use the ordinary poison cap.
             throw;
         }
         catch (Exception ex)

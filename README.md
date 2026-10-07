@@ -3,9 +3,9 @@
 A family assistant built from Telegram bots. A **manager bot** sets up a family and creates
 **role bots** for it; role bots quietly record the messages of approved people in approved chats
 into PostgreSQL, one role bot -- the **General assistant** -- can also answer with a real LLM
-(a CLI subscription provider or a deliberately configured API provider) once configured, and a **health** role bot keeps a household member's tracking profile and safety
-thresholds. Later milestones add more assistant
-features on top of this pipeline.
+(a CLI subscription provider or a deliberately configured API provider) once configured. A **health**
+role bot tracks one household member and safety thresholds; a **vet** role bot keeps one cat's
+glucose and administered-insulin diary with consultation through the ChatGPT subscription.
 
 ## What it does
 
@@ -15,7 +15,7 @@ features on top of this pipeline.
 |---|---|---|
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
 | `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
-| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot or place, set General's "Отвечать на все: выкл/вкл" or Health's "Отвечать без упоминания: выкл/вкл" for one approved place, allow/deny a user awaiting approval, disable/enable a user, or make an approved user an owner. A place line shows the bot username and its forum topic id, if any. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot or place, set General's "Отвечать на все: выкл/вкл" or Health/Vet's "Отвечать без упоминания: выкл/вкл" for one approved place, allow/deny a user awaiting approval, disable/enable a user, or make an approved user an owner. A place line shows the bot username and its forum topic id, if any. |
 | `/usage` | owners, private chat only | Platform-wide spend/state for today and this calendar month (if budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own family. |
 
 **Role bots:**
@@ -196,6 +196,58 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 
 Other members get "Только владелец семьи может менять профиль." for owner commands. Voice messages
 and photos in a private chat get a note that only text is supported for now.
+
+**Vet assistant** (`/newbot vet`): one cat profile and a separate confirmed diary for each bot.
+Turn off Group Privacy before using its approved tracking group/topic. Owners set the initially
+unset timezone and units once, using `/settz UTC`, `/setunit mmol/L` and `/setinsulin <product> U`,
+or an explicit natural-language profile change. No care facts are built into the prompt.
+
+Ordinary approved text makes one `fast` interpretation with independent reply intent and intent
+for every glucose/insulin fact. Actual measured glucose and insulin already administered are
+recorded, including exact fractional decimals; hypothetical doses remain discussion. Missing
+historical time, unsupported units and ambiguous intent get a review. Clear siblings can save
+while others remain pending. Current reports without a clock use the original message time;
+historical records require a reliable date/time and can be from any year. Glucose uses mmol/L,
+insulin uses U; there is no automatic mg/dL conversion or numeric veterinary alert threshold.
+
+Consultation requires both the interpretation's `needs_reply` and an approved DM, mention/reply,
+or the owner's enabled setting for that exact place. Passive off still records clear reports.
+An eligible request can receive one subsequent `smart` answer using the runtime profile and
+confirmed diary. It acknowledges missing coverage; ordinary questions use the last seven local
+days, explicit historical requests use their chosen period. At most 200 recent facts from that
+period fit in the bounded prompt, with omitted counts. Pending facts are excluded. Answers can
+help prepare questions for a veterinarian; they do not verify owner-reported guidance.
+
+Confirmed history is available across this bot's authorized places, with source/event handles
+withheld for facts from another place. Reviews and mutations remain in the original place.
+Any approved member can confirm a shown review; only the first valid acceptance/decline counts.
+Clarification creates a new reviewed version. Source authors remain separate from actors who
+confirm/correct/delete. Reviews expire after 24 hours. Text edits within 24 hours preserve stable
+event IDs, increase revisions only for changed facts, and protect independent corrections/deletes;
+ambiguous mapping requires explicit IDs. Older edits need an explicit correction.
+
+| Command | Who | What |
+|---|---|---|
+| `/start`, `/version` | approved members | DM introduction or running version. |
+| `/profile` | approved members | Profile/defaults and separately attributed owner/veterinary notes. |
+| `/setname <text>`, `/settz <IANA>` | owners | Name/timezone for future records; `-` clears a field. |
+| `/setunit mmol/L`, `/setinsulin <product> U` | owners | Runtime unit/product defaults; `-` clears the product. |
+| `/setnote [owner\|vet] <text>` | owners | Owner context or owner-reported veterinary guidance; `-` clears the selected note. |
+| `/today`, `/more` | approved members | Today's local diary or the next history page (50 facts per page). Natural requests can choose older periods. |
+| `/del <ID>` or `/del` as a reply | approved members | Soft-delete exact events in this place, preserving sources. Natural multi-record changes require review. |
+| `/undo` | approved members | Reverse your latest unreversed action here within 24 hours of its action time; later independent changes are protected. |
+| `/retry` as a reply | approved members | Explicit retry of a paused/failed source, at most three retries. Saved successful results are reused. |
+
+Natural corrections use an exact ID, a replied source or one unambiguous date/type match.
+Writes are atomic and revision checked. The source is durably admitted before its transport
+offset advances; recovery resumes exact saved work without another interpretation. Unknown
+provider outcomes pause for an explicit retry. A failed acknowledgement cannot duplicate an action.
+Text and captions are supported here; image import and photo archives are a later feature.
+
+Vet requires a configured, active ChatGPT subscription model chain containing only `codex-cli`
+entries (`LLM_MODELS` and any `LLM_FAST_MODELS`). Other providers cause a visible refusal for Vet;
+profile/history commands remain available. Calls use the shared gateway limits and actual attempt
+accounting with the original stored-message trigger; subscription cost is zero.
 
 ## Privacy
 
@@ -511,6 +563,13 @@ real bots and a real family.
   "Отвечать без упоминания: выкл", then send a synthetic question without a mention in
   that topic. It gets an answer. An unrelated approved topic stays off. Tap the matching "вкл"
   control to stop passive answers; explicitly addressed questions still work.
+- With an isolated synthetic Vet profile: create `/newbot vet`, disable Group Privacy and approve
+  one topic; set `/settz UTC`, `/setunit mmol/L`, `/setinsulin synthetic-product U`. Send an actual
+  synthetic glucose/insulin report and check both exact values in `/today`. Edit one value and check
+  its ID stays stable; `/undo` restores that change. A hypothetical dose must not become a record.
+  Enable that topic's "Отвечать без упоминания" and check an unmentioned request gets an answer,
+  while plain reports do not require one. An older-month list and `/more` must use stored history.
+  Keep these checks synthetic and isolated; no existing diary or live Telegram session is implied.
 - `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
   the defaults, each "не подтверждено врачом"; `/setstart` with a date exactly three weeks ago, then
   `/week` → "Неделя: 3 нед. 0 дн."; `/threshold glucose.any low_alert 4.0` → `/thresholds` shows that

@@ -35,7 +35,7 @@
   profile snapshot. Existing profile commands write only their original columns.
 - Role prompts: `roles/<role>/*.md` at the repo root are compiled into this assembly as embedded
   resources named `roles/<dir>/<file>` (`%(RecursiveDir)` gives `\` on Windows; `RolePrompts`
-  normalizes it). The csproj fails the build if `roles/health/prompt.md` or `extract.md` is missing.
+  normalizes it). The csproj fails the build if Health or Vet `prompt.md` or `extract.md` is missing.
   The Dockerfile copies `roles/`, and `.dockerignore` (which excludes `*.md`) re-includes
   `roles/**/*.md`; keep both when touching either file. A missing prompt is an Error at startup and
   turns that role's LLM features off, never the app.
@@ -67,6 +67,24 @@
   as the status change. Any failure rolls both back together and the row is left `pending`. Never
   delete a `pending_records` row directly, and never change its status anywhere outside
   `TryResolveAsync`.
+
+## Vet persistence (`Vet/`)
+
+- The eight `vet_*` text tables are separate from Health. Filters fail closed when CurrentFamily
+  is unset; stores also check family/bot/role and exact place. Set CurrentFamily in resumed scopes.
+- Source/input/result GUIDs, long event/pending/action IDs and immutable original attribution form
+  the text/photo extension contract. Text sources use slot 0. Do not add photo lifecycle tables to
+  the text migration. Numeric values are exact positive decimals without a human range or grid.
+- Per-bot PostgreSQL advisory transaction locking serializes source pointers, profile revisions,
+  pending accept/decline/review changes and action writes. The lock must run within a transaction.
+  Every mutation validates all expected revisions before any write and atomically commits action,
+  event states, before/after provenance, pending resolution and durable outcome. Reused keys require
+  an identical fingerprint; an empty change makes no action. Rollback detaches owned mutation entries.
+- Active and deleted candidate identities share the uniqueness constraint. Restores retain IDs and
+  increase revisions. Undo persists both reversed and protected subsets and never retargets on replay.
+- Bot-wide history withholds IDs for other-place events; pending/source/mutation reads stay in place.
+  Successful provider results and exact work plans remain durable across restart. Unknown provider
+  dispatches are paused, not replayed. Only subscription-only chains enable Vet model work.
 
 ## Private diagnostic traces (`Diagnostics/`)
 
@@ -107,7 +125,10 @@
   runs one `BotPollingWorker` per active `bots` row and starts or stops workers at runtime, without
   a process restart, when a role bot finishes creation or is disabled/enabled/removed in
   `/settings`. Each worker keeps its own per-update failure count and skips poison updates after
-  `PoisonUpdateFailureCap` attempts.
+  `PoisonUpdateFailureCap` attempts. Retryable Vet pre-offset admission/transport persistence errors
+  use a fixed-message wrapper and cannot advance the offset through that cap. Unsupported/malformed
+  permanent input is handled normally. Before each Vet poll, one serialized recovery pass handles
+  at most five linked durable sources after fresh authorization; other roles keep their existing flow.
   - Idle re-base: after a week without updates Telegram picks the next `update_id` randomly
     (Bot API, `Update.update_id`), possibly below `last_update_id`, which `MessageStore.StoreAsync`
     would confirm and drop forever. `StoreAsync` stamps `bots.last_update_at` whenever it advances
@@ -130,7 +151,7 @@
     its own design pass (ordering guarantees, per-chat isolation) out of scope here.
 - Allowed updates differ per bot (`BotPollingCoordinator.AllowedUpdates`): the manager gets messages,
   callback queries and `managed_bot` events; role bots get messages, callback queries (used by the
-  health bot's Да/Нет buttons; every other role answers a tap with no text) and `my_chat_member`
+  Health confirmations and Vet reviewed decisions; other roles answer a tap with no text) and `my_chat_member`
   (added to / removed from a chat). A role bot's tap is re-checked in `UpdateHandler` through the
   read-only `IApprovalService.FindFamilyMemberStatusAsync`/`FindPlaceStatusAsync` methods; never
   reuse the `GetOrCreate…` methods for a tap, since those create rows and DM the owners.
@@ -151,7 +172,8 @@
   set, or the dispatcher answers "Пока не реализовано". Every owner re-check goes through
   `ManagerOwnership.IsApprovedOwnerAsync`.
 - General reply-to-all buttons use `settingsplace_autoreply_on/off:<id>`; Health reply buttons
-  use `settingsplace_healthquestions_on/off:<id>`. Both carry the **target** state, so repeated taps
+  use `settingsplace_healthquestions_on/off:<id>`, and Vet uses `settingsplace_vetquestions_on/off:<id>`.
+  All carry the **target** state, so repeated taps
   do not flip it back. Each callback checks the bot's matching role and the owner's family.
   `places.reply_to_all` is per row: a topic never inherits the chat-wide row's flag. The
   `HealthTopicQuestionsDefaultOff` migration clears existing Health flags once; new rows default off.
