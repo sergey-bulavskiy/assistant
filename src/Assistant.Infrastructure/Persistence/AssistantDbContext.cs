@@ -63,6 +63,8 @@ public class AssistantDbContext : DbContext
     public DbSet<SafetyAlert> SafetyAlerts => Set<SafetyAlert>();
 
     public DbSet<PendingRecord> PendingRecords => Set<PendingRecord>();
+    public DbSet<HealthDocument> HealthDocuments => Set<HealthDocument>();
+    public DbSet<HealthDocumentAdmission> HealthDocumentAdmissions => Set<HealthDocumentAdmission>();
 
     public DbSet<VetProfile> VetProfiles => Set<VetProfile>();
     public DbSet<VetEvent> VetEvents => Set<VetEvent>();
@@ -103,6 +105,8 @@ public class AssistantDbContext : DbContext
         modelBuilder.Entity<HealthEvent>().HasQueryFilter(e => _currentFamily.FamilyId == null || e.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<SafetyAlert>().HasQueryFilter(a => _currentFamily.FamilyId == null || a.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<PendingRecord>().HasQueryFilter(p => _currentFamily.FamilyId == null || p.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<HealthDocument>().HasQueryFilter(d => _currentFamily.FamilyId != null && d.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<HealthDocumentAdmission>().HasQueryFilter(d => _currentFamily.FamilyId != null && d.FamilyId == _currentFamily.FamilyId);
         // Vet's direct reads and store methods both fail closed without an active family.
         modelBuilder.Entity<VetProfile>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<VetEvent>().HasQueryFilter(p => _currentFamily.FamilyId != null && p.FamilyId == _currentFamily.FamilyId);

@@ -397,3 +397,13 @@
   unstored trigger). `/tokens` (`LlmUsageQuery`) sums only `Ok` rows after the cutoff, scoped by
   family. `llm_calls.bot_id` holds the bot's **Telegram** id (as `messages.bot_id` does), not
   `bots.id`.
+
+
+## Health document persistence
+
+- `documents` retain extracted text and immutable source metadata; original file bytes are not archived.
+  `source_message_id` is a required `messages.id` FK. The separate `health_document_admissions`
+  table permits an unbound source before transport storage; uniqueness is family/Telegram bot/chat/message.
+  Both tables' direct reads fail closed without current family. Their stores must additionally validate
+  exact family/profile/internal bot/Telegram bot/source ownership; a query filter never grants access.
+  Deletion is a tombstone, and a repost under a new Telegram message is a separate source.
