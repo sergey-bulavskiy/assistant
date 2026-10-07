@@ -22,8 +22,8 @@ internal sealed class HealthCommands
         "Опасные значения и симптомы я сразу отмечаю фиксированным предупреждением по порогам из /thresholds " +
         "(пока врач их не подтвердил, они помечены «не подтверждено врачом»). Я не заменяю врача: " +
         "если самочувствие вызывает тревогу, звоните врачу или в скорую, не дожидаясь меня. " +
-        "Я никогда не советую лекарства и их дозы. Можно задать вопрос: в личном чате просто напишите его, " +
-        "в группе — упомяните меня или ответьте на моё сообщение.\n" +
+        "Можно попросить консультацию: в личном чате просто напишите, " +
+        "в группе — упомяните меня, ответьте на моё сообщение или включите ответы для этого места.\n" +
         "/today — записи за сегодня\n" +
         "/notes — последние заметки или /notes <тег>\n" +
         "/undo — отменить вашу последнюю запись\n" +
@@ -31,6 +31,7 @@ internal sealed class HealthCommands
         "/week — текущая неделя\n" +
         "/profile — профиль\n" +
         "/thresholds — пороги\n" +
+        "/setprofile <поле> <текст> — состояние, лекарства, аллергии, план или врач (владелец)\n" +
         "/version — версия\n" +
         "Владелец семьи: /setstart ДД.ММ.ГГГГ — начало отсчёта, /settz Area/City — часовой пояс, " +
         "/setphone — телефон для экстренных случаев, /setnote — заметка с контекстом для ответов на вопросы, " +
@@ -127,6 +128,7 @@ internal sealed class HealthCommands
             case "settz":
             case "setphone":
             case "setnote":
+            case "setprofile":
             case "threshold":
                 await HandleOwnerCommandAsync(command, familyId, profile, telegramClient, message, args, cancellationToken);
                 return;
@@ -153,6 +155,7 @@ internal sealed class HealthCommands
             "settz" => await SetTimeZoneAsync(familyId, profile, args, userId, cancellationToken),
             "setphone" => await SetPhoneAsync(familyId, profile, args, userId, cancellationToken),
             "setnote" => await SetNoteAsync(familyId, profile, args, userId, cancellationToken),
+            "setprofile" => await SetProfileFieldAsync(familyId, profile, args, userId, cancellationToken),
             _ => await SetThresholdAsync(familyId, profile, args, userId, cancellationToken)
         };
         await _replies.ReplyAsync(telegramClient, message, reply, cancellationToken);
@@ -169,7 +172,7 @@ internal sealed class HealthCommands
             ? date.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)
             : "не задано (/setstart)";
         var note = string.IsNullOrEmpty(profile.ContextNote)
-            ? "не задана (/setnote) — без неё ответы на вопросы не знают контекста"
+            ? "не задана (/setnote)"
             : profile.ContextNote;
         return "Профиль:\n" +
                $"Начало отсчёта: {start}\n" +
@@ -177,6 +180,11 @@ internal sealed class HealthCommands
                $"Часовой пояс: {profile.TimeZone}\n" +
                $"Телефон для экстренных случаев: {profile.EmergencyPhone}\n" +
                $"Заметка: {note}\n" +
+               $"Состояние: {profile.Conditions ?? "не задано"}\n" +
+               $"Лекарства: {profile.Medications ?? "не задано"}\n" +
+               $"Аллергии: {profile.Allergies ?? "не задано"}\n" +
+               $"План врача: {profile.DoctorPlan ?? "не задано"}\n" +
+               $"Врач: {profile.DoctorContacts ?? "не задано"}\n" +
                $"Пороги: правил {rules.Count}, от врача {doctorRules} (/thresholds)";
     }
 
@@ -184,6 +192,27 @@ internal sealed class HealthCommands
     {
         var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
         return $"{ThresholdsHeader}\n{string.Join("\n", rules.Select(SafetyRuleText.Format))}\n\n{ThresholdsFooter}";
+    }
+
+    private async Task<string> SetProfileFieldAsync(long familyId, HealthProfileInfo profile, string? args, long userId, CancellationToken cancellationToken)
+    {
+        const string usage = "Формат: /setprofile <поле> <текст> (до 1000 символов); поля: состояние, лекарства, аллергии, план, врач. Текст - очищает поле.";
+        var trimmed = args?.Trim();
+        var split = trimmed is null ? -1 : Array.FindIndex(trimmed.ToCharArray(), char.IsWhiteSpace);
+        if (split < 1) return usage;
+        var field = trimmed![..split].ToLowerInvariant() switch
+        {
+            "состояние" => HealthProfileField.Conditions,
+            "лекарства" => HealthProfileField.Medications,
+            "аллергии" => HealthProfileField.Allergies,
+            "план" => HealthProfileField.DoctorPlan,
+            "врач" => HealthProfileField.DoctorContacts,
+            _ => (HealthProfileField?)null
+        };
+        var value = trimmed[(split + 1)..].Trim();
+        if (field is null || value.Length is 0 or > 1000) return usage;
+        await _profiles.SaveFieldAsync(familyId, profile.Id, field.Value, value == "-" ? null : value, userId, cancellationToken);
+        return value == "-" ? "Поле профиля очищено." : "Поле профиля сохранено.";
     }
 
     private async Task<string> SetStartAsync(long familyId, HealthProfileInfo profile, string? args, long userId, CancellationToken cancellationToken)

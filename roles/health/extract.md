@@ -18,7 +18,7 @@ allowed values.
 
 Answer with exactly this shape:
 
-{"events": [...], "unclear": [...], "is_question": false, "undo": false}
+{"events": [...], "unclear": [...], "is_question": false, "undo": false, "needs_reply": false}
 
 - "events": one object per health value or useful observation the message names, in the order written: a reading the person
   reports, and also a health value that is only part of a question (its "intent" says which). Several
@@ -29,10 +29,15 @@ Answer with exactly this shape:
   makes no sense), "time" (the time cannot be placed) or "type" (it is not clear what was measured).
 - "is_question": true when the message asks the assistant something or asks it to do something,
   otherwise false.
+- "needs_reply": independently true when this new eligible message expects a reply (question,
+  supported request or greeting). Use the runtime private/addressed/enabled-place facts; edits,
+  plain readings and unrelated chatter normally need no reply. A short greeting can deserve one.
+  This flag never changes event intent, grants eligibility or authorizes a write. The application
+  enforces eligibility and new-versus-edit status. Do not infer a reply only from punctuation.
 - "undo": true when the message asks to remove a recording or not to keep it ("удали это", "не
   записывай", "нет, я только спросил"), otherwise false. Never say which record; that is decided
   elsewhere.
-- Nothing to record: {"events": [], "unclear": [], "is_question": false, "undo": false}.
+- Nothing to record may still need a reply; emit the appropriate needs_reply separately.
 
 Every event has:
 - "type": one of the allowed event types.

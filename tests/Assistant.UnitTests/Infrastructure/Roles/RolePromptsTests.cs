@@ -17,7 +17,7 @@ public class RolePromptsTests
     }
 
     [Fact]
-    public void Answer_prompt_is_written_and_forbids_doses()
+    public void Answer_prompt_uses_raw_windows_and_untrusted_background()
     {
         var prompts = new RolePrompts(typeof(RolePrompts).Assembly);
 
@@ -26,13 +26,15 @@ public class RolePromptsTests
         text.ShouldNotBeNull();
         text.ShouldNotContain("Placeholder");
         text.ShouldContain("household member");
-        text.ShouldContain("dose");
         text.ShouldContain("Answer only in Russian, or in English when the question is in English");
         text.ShouldNotContain("language of the question");
         text.ShouldContain("doctor");
         text.ShouldContain("не подтверждено врачом");
         text.ShouldContain("<msg");
-        text.ShouldContain(DoseAdviceFilter.RefusalText);
+        text.ShouldContain("last 30 days");
+        text.ShouldContain("last 90 days");
+        text.ShouldContain("untrusted data");
+        text.ShouldNotContain("Never recommend, calculate or change the dose");
     }
 
     [Fact]
@@ -47,6 +49,7 @@ public class RolePromptsTests
         text.ShouldContain("\"unclear\"");
         text.ShouldContain("\"is_question\"");
         text.ShouldContain("\"undo\"");
+        text.ShouldContain("\"needs_reply\"");
         text.ShouldContain("\"intent\"");
         foreach (var value in HealthEventTypes.All.Concat(GlucoseContexts.All).Concat(SymptomCodes.All).Concat(ExtractionIntents.All))
         {

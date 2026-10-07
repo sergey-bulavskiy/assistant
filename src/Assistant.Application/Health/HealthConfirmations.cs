@@ -116,7 +116,9 @@ internal sealed class HealthConfirmations
         }
 
         var pending = await _pending.FindAsync(familyId, id, cancellationToken);
-        if (pending is null || pending.BotId != bot.TelegramBotId || pending.ChatId != callback.MessageChatId
+        if (pending is null || pending.ProfileId != profile.Id || pending.BotId != bot.TelegramBotId
+            || pending.ChatId != callback.MessageChatId || pending.TopicId != callback.MessageTopicId
+            || pending.PromptMessageId is not { } promptMessageId || promptMessageId != callback.MessageId
             || pending.Status != PendingRecordStatuses.Pending)
         {
             await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "already_processed"));

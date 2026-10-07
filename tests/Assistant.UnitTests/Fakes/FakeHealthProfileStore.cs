@@ -33,6 +33,21 @@ public class FakeHealthProfileStore : IHealthProfileStore
 
     public bool ThrowOnGetRules { get; set; }
 
+    public Task SaveFieldAsync(long familyId, long profileId, HealthProfileField field, string? value, long updatedByUserId, CancellationToken cancellationToken)
+    {
+        Profile = field switch
+        {
+            HealthProfileField.Conditions => Profile with { Conditions = value },
+            HealthProfileField.Medications => Profile with { Medications = value },
+            HealthProfileField.Allergies => Profile with { Allergies = value },
+            HealthProfileField.DoctorPlan => Profile with { DoctorPlan = value },
+            HealthProfileField.DoctorContacts => Profile with { DoctorContacts = value },
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+        LastUpdatedByUserId = updatedByUserId;
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<SafetyRuleInfo>> GetRulesAsync(long familyId, long profileId, CancellationToken cancellationToken)
     {
         if (ThrowOnGetRules)

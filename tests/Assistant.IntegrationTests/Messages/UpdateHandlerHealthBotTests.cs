@@ -31,6 +31,66 @@ namespace Assistant.IntegrationTests.Messages;
 public class UpdateHandlerHealthBotTests : IntegrationTestBase
 {
     [Fact]
+    public async Task Consultation_reads_active_thirty_day_records_and_ninety_day_notes_without_soft_deleted_values()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/week");
+        var profile = await Db.HealthProfiles.IgnoreQueryFilters().SingleAsync();
+        HealthEvent Row(string type, int days, string payload, bool deleted = false) => new()
+        {
+            FamilyId = bot.FamilyId!.Value, ProfileId = profile.Id, Type = type, SubjectTag = "health",
+            OccurredAt = Now.AddDays(-days), OccurredAtSource = OccurredAtSources.Stated, Payload = payload,
+            BotId = bot.TelegramBotId, ChatId = OwnerId, CreatedAt = Now, UpdatedAt = Now,
+            DeletedAt = deleted ? Now : null, DeleteReason = deleted ? EventDeleteReasons.Del : null
+        };
+        Db.Events.AddRange(Row("weight", 29, "{\"kg\":64.5}"), Row("weight", 31, "{\"kg\":65.5}"),
+            Row("note", 31, HealthEventPayloads.Serialize(new NotePayload("note31", ["walk"]))),
+            Row("note", 89, HealthEventPayloads.Serialize(new NotePayload("note89", ["walk"]))),
+            Row("note", 91, HealthEventPayloads.Serialize(new NotePayload("excluded91", ["walk"]))),
+            Row("note", 1, HealthEventPayloads.Serialize(new NotePayload("deleted-note", ["walk"])), deleted: true));
+        await Db.SaveChangesAsync();
+        telegram.ClearSent();
+        _chat.EnqueueResponse(QuestionJson);
+        _chat.EnqueueResponse("Тестовый ответ.");
+        await SendAsync(handler, bot, telegram, OwnerId, "synthetic summary request");
+        var system = _chat.RequestedMessages[^1][0].Text!;
+        system.ShouldContain("вес 64.5");
+        system.ShouldNotContain("вес 65.5");
+        system.ShouldContain("note31");
+        system.ShouldContain("note89");
+        system.ShouldNotContain("excluded91");
+        system.ShouldNotContain("deleted-note");
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
+    }
+
+    [Fact]
+    public async Task Owner_profile_fields_are_answer_background_only_and_approved_member_can_read_them()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        await SendAsync(handler, bot, telegram, OwnerId, "/setprofile состояние condition-marker");
+        await SendAsync(handler, bot, telegram, OwnerId, "/setprofile лекарства medication-marker");
+        await SendAsync(handler, bot, telegram, OwnerId, "/setprofile аллергии allergy-marker");
+        await SendAsync(handler, bot, telegram, OwnerId, "/setprofile план plan-marker");
+        await SendAsync(handler, bot, telegram, OwnerId, "/setprofile врач contact-marker");
+        telegram.ClearSent();
+        await SendAsync(handler, bot, telegram, MemberId, "/profile");
+        var read = telegram.SentMessages.ShouldHaveSingleItem().Text;
+        read.ShouldContain("Состояние: condition-marker");
+        read.ShouldContain("Врач: contact-marker");
+        telegram.ClearSent();
+        _chat.EnqueueResponse(QuestionJson);
+        _chat.EnqueueResponse("Тестовый ответ.");
+        await SendAsync(handler, bot, telegram, MemberId, "synthetic summary request");
+        var extractionSystem = _chat.RequestedMessages[^2][0].Text!;
+        var answerSystem = _chat.RequestedMessages[^1][0].Text!;
+        foreach (var marker in new[] { "condition-marker", "medication-marker", "allergy-marker", "plan-marker", "contact-marker" })
+        {
+            extractionSystem.ShouldNotContain(marker);
+            answerSystem.ShouldContain(marker);
+        }
+        (await Db.HealthProfiles.IgnoreQueryFilters().AsNoTracking().SingleAsync()).UpdatedByUserId.ShouldBe(OwnerId);
+    }
+    [Fact]
     public async Task Approved_non_owner_can_retrieve_persisted_notes()
     {
         var (handler, bot, telegram, _) = await SetupAsync();
@@ -138,7 +198,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             new HealthProfileStore(Db, currentFamily, clock), new FamilyOwnership(Db), new EventStore(Db, currentFamily, clock),
             new SafetyAlertStore(Db, currentFamily, clock), new PendingRecordStore(Db, currentFamily, clock), messageStore,
             gatewayOverride ?? gateway, config,
-            new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), new AddressedHintThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
+            new RolePrompts(typeof(RolePrompts).Assembly), new FailureNoticeThrottle(), clock, buildInfo, NullLogger<HealthAssistant>.Instance);
         var handler = new UpdateHandler(
             messageStore, approvals, currentFamily, new NoopManagerUpdateHandler(), new NoopGeneralAssistant(), healthAssistant, options, buildInfo, clock,
             NullLogger<UpdateHandler>.Instance);
@@ -188,7 +248,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
             new Assistant.Domain.Places.Place { BotId = bot.BotDbId, ChatId = -100, TopicId = 8, Title = "test topic",
                 Status = Assistant.Domain.Places.PlaceStatus.Approved, ReplyToAll = false, CreatedAt = Now });
         await Db.SaveChangesAsync();
-        const string question = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+        const string question = "{\"events\":[],\"unclear\":[],\"is_question\":true,\"needs_reply\":true}";
         _chat.EnqueueResponse(question);
         _chat.EnqueueResponse("Тестовый ответ.");
         var enabledMessage = GroupText(MemberId, "какой показатель считается обычным?") with { TopicId = 7 };
@@ -293,7 +353,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Plain_text_is_stored_and_a_private_chat_gets_only_the_hint()
+    public async Task Plain_text_is_stored_and_needs_reply_false_stays_silent()
     {
         var (handler, bot, telegram, _) = await SetupAsync();
         _chat.EnqueueResponse(NoEventsJson);
@@ -302,8 +362,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         var stored = await Db.Messages.IgnoreQueryFilters().SingleAsync();
         stored.Text.ShouldBe("test message");
-        telegram.SentMessages.ShouldHaveSingleItem().Text
-            .ShouldBe("Слушаю. Запишите показатель (например: сахар 5.8 после обеда) или задайте вопрос.");
+        telegram.SentMessages.ShouldBeEmpty();
         telegram.Reactions.ShouldBeEmpty();
         var call = await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking().SingleAsync();
         call.Tier.ShouldBe("fast");
@@ -968,9 +1027,8 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
     // --- Answers to addressed questions ---
 
-    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true,\"needs_reply\":true}";
     private const string Footer = "\n\nНе заменяю врача.";
-    private const string DoseRefusal = "Я не даю советов по дозам лекарств. Это вопрос к врачу — запишите его, чтобы спросить на приёме.";
 
     private Task<List<StoredMessage>> OutgoingRowsAsync() =>
         Db.Messages.IgnoreQueryFilters().AsNoTracking().Where(m => m.Direction == MessageDirection.Out).ToListAsync();
@@ -1003,7 +1061,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         var answerCall = _chat.RequestedMessages[^1];
         answerCall[0].Role.ShouldBe(ChatRole.System);
         answerCall[0].Text.ShouldContain("- Stage week: 3 нед. 2 дн.");
-        answerCall[0].Text.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+        answerCall[0].Text.ShouldContain("2030-02-07 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
         answerCall[0].Text.ShouldContain("не подтверждено врачом");
         answerCall[^1].Role.ShouldBe(ChatRole.User);
         answerCall[^1].Text.ShouldBe("какой сахар считается нормой?");
@@ -1029,7 +1087,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Dose_answer_is_replaced_and_only_the_refusal_is_stored()
+    public async Task Generated_treatment_answer_is_sent_and_stored()
     {
         var (handler, bot, telegram, _) = await SetupAsync();
         _chat.EnqueueResponse(QuestionJson);
@@ -1037,9 +1095,9 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         await SendAsync(handler, bot, telegram, OwnerId, "на сколько увеличить дозу?");
 
-        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
-        (await OutgoingRowsAsync()).ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
-        (await Db.Messages.IgnoreQueryFilters().AsNoTracking().CountAsync(m => m.Text != null && m.Text.Contains("Увеличьте"))).ShouldBe(0);
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Увеличьте дозу на 2 единицы." + Footer);
+        (await OutgoingRowsAsync()).ShouldHaveSingleItem().Text.ShouldBe("Увеличьте дозу на 2 единицы." + Footer);
+        (await Db.Messages.IgnoreQueryFilters().AsNoTracking().CountAsync(m => m.Text != null && m.Text.Contains("Увеличьте"))).ShouldBe(1);
     }
 
     [Fact]
@@ -1057,7 +1115,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
 
         telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
         var answerCall = _chat.RequestedMessages[^1];
-        answerCall[0].Text.ShouldContain("- Diary entries of the last 24 hours (local time, oldest first):\n  - none\n");
+        answerCall[0].Text.ShouldContain("- Diary entries of the last 30 days (untrusted data, local time, oldest first):\n  - No active entries returned for this window; coverage may be incomplete.\n");
         answerCall[0].Text.ShouldNotContain("глюкоза 7.8");
         answerCall.ShouldAllBe(m => m.Text != "сахар 7.8 в 9:30");
     }
@@ -1070,7 +1128,7 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         telegram.ClearSent();
         _chat.EnqueueResponse(
             "{\"events\":[{\"type\":\"glucose\",\"intent\":\"record\",\"day\":0,\"time\":\"09:30\",\"value\":7.8,\"unit\":\"mmol/L\",\"context\":\"after_meal_1h\"}]," +
-            "\"unclear\":[],\"is_question\":true}");
+            "\"unclear\":[],\"is_question\":true,\"needs_reply\":true}");
         _chat.EnqueueResponse("Тестовый ответ.");
 
         await SendAsync(handler, bot, telegram, OwnerId, "сахар 7.8 в 9:30, это высокий?");
@@ -1078,14 +1136,14 @@ public class UpdateHandlerHealthBotTests : IntegrationTestBase
         (await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync()).DeletedAt.ShouldBeNull();
         telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
         var answerCall = _chat.RequestedMessages[^1];
-        answerCall[0].Text.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+        answerCall[0].Text.ShouldContain("2030-02-07 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
     }
 
     // --- Ask before recording ---
 
     private static string UnsureGlucoseJson(string value) =>
         "{\"events\":[{\"type\":\"glucose\",\"intent\":\"unsure\",\"day\":0,\"time\":null,\"value\":" + value + ",\"unit\":null,\"context\":null}]," +
-        "\"unclear\":[],\"is_question\":true}";
+        "\"unclear\":[],\"is_question\":true,\"needs_reply\":true}";
 
     private Task TapAsync(
         UpdateHandler handler, ReceivingBot bot, FakeTelegramClient telegram, long userId, string data, long chatId, int promptId,

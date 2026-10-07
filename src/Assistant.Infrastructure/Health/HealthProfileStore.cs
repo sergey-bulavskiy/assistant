@@ -84,6 +84,25 @@ public class HealthProfileStore : IHealthProfileStore
         await _db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task SaveFieldAsync(long familyId, long profileId, HealthProfileField field, string? value,
+        long updatedByUserId, CancellationToken cancellationToken)
+    {
+        EnsureFamilyScope(familyId);
+        if (value is { Length: > 1000 }) throw new ArgumentException("Profile field exceeds its limit.", nameof(value));
+        var query = _db.HealthProfiles.Where(p => p.Id == profileId && p.FamilyId == familyId);
+        var now = _clock.UtcNow;
+        var count = field switch
+        {
+            HealthProfileField.Conditions => await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.Conditions, value).SetProperty(p => p.UpdatedAt, now).SetProperty(p => p.UpdatedByUserId, updatedByUserId), cancellationToken),
+            HealthProfileField.Medications => await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.Medications, value).SetProperty(p => p.UpdatedAt, now).SetProperty(p => p.UpdatedByUserId, updatedByUserId), cancellationToken),
+            HealthProfileField.Allergies => await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.Allergies, value).SetProperty(p => p.UpdatedAt, now).SetProperty(p => p.UpdatedByUserId, updatedByUserId), cancellationToken),
+            HealthProfileField.DoctorPlan => await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.DoctorPlan, value).SetProperty(p => p.UpdatedAt, now).SetProperty(p => p.UpdatedByUserId, updatedByUserId), cancellationToken),
+            HealthProfileField.DoctorContacts => await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.DoctorContacts, value).SetProperty(p => p.UpdatedAt, now).SetProperty(p => p.UpdatedByUserId, updatedByUserId), cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+        if (count != 1) throw new InvalidOperationException("Health profile not found in this family.");
+    }
+
     public async Task<IReadOnlyList<SafetyRuleInfo>> GetRulesAsync(long familyId, long profileId, CancellationToken cancellationToken)
     {
         EnsureFamilyScope(familyId);
@@ -126,5 +145,6 @@ public class HealthProfileStore : IHealthProfileStore
     }
 
     private static HealthProfileInfo ToInfo(HealthProfile profile) =>
-        new(profile.Id, profile.StageStartDate, profile.TimeZone, profile.EmergencyPhone, profile.ContextNote);
+        new(profile.Id, profile.StageStartDate, profile.TimeZone, profile.EmergencyPhone, profile.ContextNote,
+            profile.Conditions, profile.Medications, profile.Allergies, profile.DoctorPlan, profile.DoctorContacts);
 }

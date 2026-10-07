@@ -12,8 +12,8 @@ namespace Assistant.Application.Health;
 /// <summary>A text message (new or edited) of the health bot: one `fast` extraction call (JSON
 /// answer, strict parser, code-side validation), safety rules on every new event (flags saved with
 /// it, one fixed alert per dangerous event), ✍ on recorded messages, one clarification when something
-/// cannot be recorded, the quick scan when extraction fails or missed a reading, and the answer or
-/// the hint for an addressed message. Never logs message text, model answers or values.</summary>
+/// cannot be recorded, the quick scan when extraction fails or missed a reading, and one eligible
+/// model-requested consultation after alerts. Never logs message text, model answers or values.</summary>
 internal sealed class HealthMessagePipeline
 {
     private const string ExtractInstructionsFile = "extract.md";
@@ -28,7 +28,6 @@ internal sealed class HealthMessagePipeline
     private readonly ILlmGateway _gateway;
     private readonly IRolePrompts _rolePrompts;
     private readonly FailureNoticeThrottle _failureNotices;
-    private readonly AddressedHintThrottle _hints;
     private readonly IClock _clock;
     private readonly HealthReplies _replies;
     private readonly HealthSafety _safety;
@@ -39,7 +38,7 @@ internal sealed class HealthMessagePipeline
 
     public HealthMessagePipeline(
         IHealthProfileStore profiles, IEventStore events, ILlmGateway gateway, IRolePrompts rolePrompts, FailureNoticeThrottle failureNotices,
-        AddressedHintThrottle hints, IClock clock, HealthReplies replies, HealthSafety safety, HealthAnswers answers,
+        IClock clock, HealthReplies replies, HealthSafety safety, HealthAnswers answers,
         HealthConfirmations confirmations, ILogger logger, ITraceSession? trace = null)
     {
         _profiles = profiles;
@@ -47,7 +46,6 @@ internal sealed class HealthMessagePipeline
         _gateway = gateway;
         _rolePrompts = rolePrompts;
         _failureNotices = failureNotices;
-        _hints = hints;
         _clock = clock;
         _replies = replies;
         _safety = safety;
@@ -134,7 +132,9 @@ internal sealed class HealthMessagePipeline
         IReadOnlyCollection<string>? alreadyAlertedRuleKeys = null, bool replyToAll = false)
     {
         var messageDbId = storeResult.MessageDbId;
-        if (!ExtractionPrompt.ShouldExtract(text))
+        var addressed = Addressing.IsAddressed(bot, message, text);
+        var eligible = addressed || replyToAll;
+        if (!ExtractionPrompt.ShouldExtract(text, eligible && !isEdit))
         {
             await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "no_extraction_candidate"));
             // No model call. An edit into such a text has no readings left.
@@ -162,7 +162,8 @@ internal sealed class HealthMessagePipeline
             bot.TelegramBotId,
             LlmConfig.FastTier,
             PreferredModel: null,
-            ExtractionPrompt.BuildSystemPrompt(instructions, _clock.UtcNow, message.SentAt, profile.TimeZone),
+            ExtractionPrompt.BuildSystemPrompt(instructions, _clock.UtcNow, message.SentAt, profile.TimeZone,
+                message.ChatType == "private", addressed, replyToAll, isEdit),
             new[] { new LlmMessage(LlmMessageRole.User, text) },
             ChatId: message.ChatId,
             TopicId: message.TopicId,
@@ -252,7 +253,7 @@ internal sealed class HealthMessagePipeline
 
         var recordIndexes = Enumerable.Range(0, valid.Count).Where(i => intents[i] == ExtractionIntents.Record).ToList();
         IReadOnlyList<SafetyEvaluation> evaluations = Array.Empty<SafetyEvaluation>();
-        var alertDecided = false;
+        var consult = !isEdit && eligible && output.NeedsReply;
         // An edit replaces the message's records even when the new text has none left.
         if (recordIndexes.Count > 0 || isEdit)
         {
@@ -322,7 +323,7 @@ internal sealed class HealthMessagePipeline
                 await UpdateEditReactionAsync(telegramClient, message, replaced, messageDbId, cancellationToken);
             }
 
-            alertDecided = await _safety.SendAlertsAsync(
+            await _safety.SendAlertsAsync(
                 telegramClient, message.ChatId, message.TopicId, message.MessageId, familyId, profile, saved,
                 recordIndexes.Select(i => evaluations[i]).ToList(), messageDbId, cancellationToken, alreadySent: alreadyAlertedRuleKeys);
         }
@@ -362,15 +363,14 @@ internal sealed class HealthMessagePipeline
             }
         }
 
-        if (problems.Count > 0)
+        if (problems.Count > 0 && !consult)
         {
             // One clarification per message, about the first problem; recorded values stay recorded and
             // unsure values are not asked about (the clarification wins).
             await _replies.ReplyAsync(telegramClient, message, ExtractionReplies.Clarification(problems[0], text), cancellationToken, quote: true);
         }
 
-        var quickScanSent = false;
-        if (output.Events.Count > 0 || output.Unclear.Count == 0)
+        if (consult || output.Events.Count > 0 || output.Unclear.Count == 0)
         {
             // A reading in one of the quick-scan formats that the model missed (no event of that
             // metric in its answer, e.g. it recorded a weight but not "сахар 2.5") still gets its fixed
@@ -380,8 +380,9 @@ internal sealed class HealthMessagePipeline
                 .Select(e => e.Type?.Trim().ToLowerInvariant())
                 .OfType<string>()
                 .ToHashSet();
-            quickScanSent = await TrySendQuickScanReplyAsync(
-                telegramClient, message, text, familyId, profile, messageDbId, extractedTypes, clarify: problems.Count == 0, cancellationToken);
+            await TrySendQuickScanReplyAsync(
+                telegramClient, message, text, familyId, profile, messageDbId, extractedTypes, clarify: problems.Count == 0 && !consult, cancellationToken,
+                uncertainty: consult ? problems : null);
         }
 
         var toAsk = problems.Count == 0
@@ -395,33 +396,15 @@ internal sealed class HealthMessagePipeline
             recordIndexes.Count > 0 ? "events_recorded" : toAsk.Count > 0 ? "pending_record" : problems.Count > 0 ? "clarification" : "no_events",
             AttemptId: result.TraceAttemptId, EventCount: recordIndexes.Count, ProblemCount: problems.Count));
 
-        // An answer for a new message that the model marked as a question, even
-        // when readings were recorded from the same message (the answer's context then already holds
-        // them). Never after an edit, a clarification, a quick-scan reply or an alert for a recorded
-        // value: that fixed reply is the answer. An alert for a value that was not saved does not stop
-        // the answer. The approved place setting also permits passive questions.
-        if (!isEdit && output.IsQuestion && problems.Count == 0 && !quickScanSent && !alertDecided
-            && (Addressing.IsAddressed(bot, message, text) || replyToAll))
+        // Safety alerts precede the one consultation; uncertainty belongs to its clarification.
+        if (consult)
         {
-            await _answers.AnswerQuestionAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, cancellationToken);
-        }
-        else if (output.IsQuestion)
-        {
-            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped",
-                alertDecided ? "alert_precedence" : problems.Count > 0 || quickScanSent || isEdit ? "answer_suppressed" : "not_addressed",
-                AttemptId: result.TraceAttemptId));
-        }
-        else if (!isEdit && !output.IsQuestion && valid.Count == 0 && problems.Count == 0 && !quickScanSent
-            && Addressing.IsAddressed(bot, message, text)
-            && _hints.TryAcquire(bot.TelegramBotId, message.ChatId, message.TopicId, _clock.UtcNow))
-        {
-            // Extraction succeeded and the addressed message produced nothing at all (a greeting,
-            // chatter): one short fixed hint, throttled per place so chatter does not trigger it every time.
-            await _replies.ReplyAsync(telegramClient, message, HealthAssistant.AddressedHintText, cancellationToken, quote: true);
+            await _answers.AnswerAsync(bot, telegramClient, message, text, familyId, profile, messageDbId, problems, cancellationToken);
         }
         else
         {
-            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "question_false",
+            await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped",
+                isEdit ? "edited_message" : !eligible ? "not_eligible" : "needs_reply_false",
                 AttemptId: result.TraceAttemptId));
         }
 
@@ -549,7 +532,8 @@ internal sealed class HealthMessagePipeline
     // on a fallback. Logs rule key and level only.
     private async Task<bool> TrySendQuickScanReplyAsync(
         ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        long? messageDbId, IReadOnlySet<string> skipTypes, bool clarify, CancellationToken cancellationToken)
+        long? messageDbId, IReadOnlySet<string> skipTypes, bool clarify, CancellationToken cancellationToken,
+        ICollection<ExtractedUnclear>? uncertainty = null)
     {
         SafetyDecision? decision = null;
         ExtractedUnclear? problem = null;
@@ -566,6 +550,7 @@ internal sealed class HealthMessagePipeline
                 else
                 {
                     problem ??= validation.Problem;
+                    if (validation.Problem is { } missed) uncertainty?.Add(missed);
                 }
             }
 

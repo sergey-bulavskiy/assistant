@@ -106,8 +106,8 @@ public class SettingsCommandHandler
             else if (BotRoles.IsHealth(placeBot.Role))
             {
                 buttons.Add(place.ReplyToAll
-                    ? new InlineButton("Отвечать на вопросы без упоминания: вкл", $"settingsplace_healthquestions_off:{place.Id}")
-                    : new InlineButton("Отвечать на вопросы без упоминания: выкл", $"settingsplace_healthquestions_on:{place.Id}"));
+                    ? new InlineButton("Отвечать без упоминания: вкл", $"settingsplace_healthquestions_off:{place.Id}")
+                    : new InlineButton("Отвечать без упоминания: выкл", $"settingsplace_healthquestions_on:{place.Id}"));
             }
 
             // Topics of one chat share its title; the topic id tells them apart.
@@ -265,7 +265,7 @@ public class SettingsCommandHandler
                 await telegramClient.AnswerCallbackAsync(
                     callback.CallbackQueryId,
                     healthQuestions
-                        ? turnOn ? "Готово: отвечаю на вопросы без упоминания." : "Готово: отвечаю на вопросы только при обращении."
+                        ? turnOn ? "Готово: отвечаю без упоминания, когда сообщение ожидает ответа." : "Готово: отвечаю только при обращении."
                         : turnOn ? "Готово: отвечаю на все сообщения." : "Готово: отвечаю только на обращения.",
                     cancellationToken);
                 return;

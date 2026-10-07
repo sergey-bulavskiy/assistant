@@ -4,6 +4,28 @@ namespace Assistant.UnitTests.Application.Health;
 
 public class ExtractionParserTests
 {
+    [Theory]
+    [InlineData("", false)]
+    [InlineData(",\"needs_reply\":null", false)]
+    [InlineData(",\"needs_reply\":false", false)]
+    [InlineData(",\"needs_reply\":true", true)]
+    public void Needs_reply_is_independent_of_is_question_and_defaults_false(string field, bool expected)
+    {
+        foreach (var isQuestion in new[] { "true", "false" })
+        {
+            var result = ExtractionParser.Parse("{\"events\":[],\"is_question\":" + isQuestion + field + "}");
+            result!.NeedsReply.ShouldBe(expected);
+            result.IsQuestion.ShouldBe(isQuestion == "true");
+        }
+    }
+
+    [Theory]
+    [InlineData("\"true\"")]
+    [InlineData("1")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void Wrong_type_needs_reply_invalidates_interpretation(string value) =>
+        ExtractionParser.Parse("{\"events\":[],\"needs_reply\":" + value + "}").ShouldBeNull();
     [Fact]
     public void Parses_note_text_tags_and_intent()
     {
