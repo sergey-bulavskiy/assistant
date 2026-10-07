@@ -62,22 +62,25 @@ public sealed class CodexCliChatClientTests
         response.AdditionalProperties!.Values.ShouldContain(0m);
     }
 
-    private static Task<ChatResponse> ImageCall(CodexCliChatClient client, byte[]? data = null) =>
+    private static Task<ChatResponse> ImageCall(CodexCliChatClient client, byte[]? data = null, string mediaType = "image/png") =>
         client.GetResponseAsync([new(ChatRole.User,
             [new TextContent("synthetic image caption"),
-             new DataContent(data ?? new byte[] {137,80,78,71,13,10,26,10}, "image/png")])],
+             new DataContent(data ?? new byte[] {137,80,78,71,13,10,26,10}, mediaType)])],
             new ChatOptions { ModelId = "gpt-6.1-sol" });
 
-    [Fact]
-    public async Task NativeImageIsExactPrivateFileWithDisabledToolsAndCleanup()
+    [Theory]
+    [InlineData("image/png", ".png")]
+    [InlineData("image/jpeg", ".jpg")]
+    public async Task NativeImageIsExactPrivateFileWithDisabledToolsAndCleanup(string mediaType, string extension)
     {
         string? directory = null;
-        var data = new byte[] {137,80,78,71,13,10,26,10,42};
+        var data = mediaType == "image/png" ? new byte[] {137,80,78,71,13,10,26,10,42} : new byte[] {255,216,255,42};
         var (client, _) = Create(images: true, inspect: request =>
         {
             directory = request.WorkingDirectory;
             var imagePath = request.Arguments[request.Arguments.IndexOf("--image") + 1];
             Path.GetDirectoryName(imagePath).ShouldBe(directory);
+            Path.GetExtension(imagePath).ShouldBe(extension);
             File.ReadAllBytes(imagePath).ShouldBe(data);
             request.StandardInput.ShouldNotContain(imagePath);
             request.StandardInput.ShouldNotContain(Convert.ToBase64String(data));
@@ -87,10 +90,39 @@ public sealed class CodexCliChatClientTests
             JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "models.json")))!["models"]![0]!["input_modalities"]!
                 .AsArray().Select(x => x!.GetValue<string>()).ShouldContain("image");
         });
-        var response = await ImageCall(client, data);
+        var response = await ImageCall(client, data, mediaType);
         response.Text.ShouldBe("synthetic answer");
         response.Usage!.InputTokenCount.ShouldBe(120);
         Directory.Exists(directory).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task DefaultOptionsAllowVerifiedNativeImages()
+    {
+        var (_, runner) = Create();
+        var client = new CodexCliChatClient(runner, new CodexCliOptions
+        {
+            ExecutablePath = Path.Combine(Path.GetTempPath(), "synthetic-codex"),
+            HomeDirectory = Path.Combine(Path.GetTempPath(), "synthetic-auth")
+        });
+        (await ImageCall(client)).Text.ShouldBe("synthetic answer");
+    }
+
+    [Theory]
+    [InlineData("count")]
+    [InlineData("model")]
+    [InlineData("role")]
+    [InlineData("mime")]
+    public async Task UnsupportedImageEnvelopeFailsBeforeProcess(string invalid)
+    {
+        var (client, runner) = Create(images: true);
+        var content = new DataContent(new byte[] {137,80,78,71,13,10,26,10},
+            invalid == "mime" ? "image/gif" : "image/png");
+        var message = new ChatMessage(invalid == "role" ? ChatRole.Assistant : ChatRole.User, [content]);
+        if (invalid == "count") message.Contents.Add(content);
+        var options = new ChatOptions { ModelId = invalid == "model" ? "unproved-model" : "gpt-6.1-sol" };
+        await Should.ThrowAsync<InvalidOperationException>(() => client.GetResponseAsync([message], options));
+        runner.LastRequest.ShouldBeNull();
     }
 
     [Fact]

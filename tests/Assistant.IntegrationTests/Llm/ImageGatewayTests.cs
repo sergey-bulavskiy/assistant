@@ -206,6 +206,19 @@ public sealed class ImageGatewayTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task ExplicitUnprovedImageModelDoesNotSubstituteVerifiedModel()
+    {
+        var client = new ImageClient();
+        var gateway = Gateway(client);
+        gateway.DescribeModels().Single(x => x.Name == "gpt-6.1-sol").SupportsImages.ShouldBeTrue();
+        gateway.DescribeModels().Single(x => x.Name == "unproved-model").SupportsImages.ShouldBeFalse();
+        var request = Request() with { PreferredModel = "unproved-model" };
+        (await gateway.CompleteAsync(request, default)).RefusalReason.ShouldBe(LlmRefusalReason.UnsupportedInput);
+        client.Calls.ShouldBe(0);
+        (await Db.LlmCalls.CountAsync()).ShouldBe(0);
+    }
+
+    [Fact]
     public async Task RateGuardCreatesNoImageAttemptAndLegacyTextKeepsNullKey()
     {
         var client = new ImageClient();
