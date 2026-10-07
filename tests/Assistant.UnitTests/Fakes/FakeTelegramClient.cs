@@ -15,6 +15,8 @@ public class FakeTelegramClient : ITelegramClient
 
     public List<(long ChatId, int? TopicId, string Action)> ChatActionsSent { get; } = new();
 
+    public CancellationToken? LastChatActionCancellationToken { get; private set; }
+
     public List<(string CallbackQueryId, string? Text)> AnsweredCallbacks { get; } = new();
 
     public List<(long ChatId, int MessageId, string? Emoji)> Reactions { get; } = new();
@@ -59,6 +61,7 @@ public class FakeTelegramClient : ITelegramClient
     public Task SendChatActionAsync(long chatId, int? topicId, string action, CancellationToken cancellationToken)
     {
         ChatActionsSent.Add((chatId, topicId, action));
+        LastChatActionCancellationToken = cancellationToken;
         if (ThrowOnChatAction)
         {
             throw new InvalidOperationException("simulated chat action failure");
