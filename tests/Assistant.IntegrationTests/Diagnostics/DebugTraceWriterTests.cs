@@ -18,6 +18,28 @@ namespace Assistant.IntegrationTests.Diagnostics;
 
 public sealed class DebugTraceWriterTests : IntegrationTestBase
 {
+    [Theory]
+    [InlineData("needs_reply_false")]
+    [InlineData("not_eligible")]
+    [InlineData("edited_message")]
+    [InlineData("context_budget_exceeded")]
+    [InlineData("question_false")]
+    [InlineData("dose_advice_replaced")]
+    public async Task Consultation_decision_reasons_and_legacy_reasons_remain_visible(string reason)
+    {
+        var clock = new TestClock();
+        var (services, writer, _, _) = Open(new TraceOptions(true, 60, 262_144, 104_857_600, 256, null), clock);
+        await using (services)
+        {
+            var start = Start(1);
+            (await writer.StartAsync(start, CancellationToken.None)).ShouldBe(start.TraceId);
+            await writer.AppendAsync(start.TraceId, 1, new TraceEventData("decision", "skipped", reason), CancellationToken.None);
+            var row = await Db.DebugTraceEvents.AsNoTracking().SingleAsync(e => e.TraceId == start.TraceId && e.Stage == "decision");
+            row.ReasonCode.ShouldBe(reason);
+            row.Stage.ShouldBe("decision");
+            row.Outcome.ShouldBe("skipped");
+        }
+    }
     private sealed class TestClock : IClock
     {
         public DateTimeOffset UtcNow { get; set; } = new(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);

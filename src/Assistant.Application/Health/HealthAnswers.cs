@@ -7,9 +7,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Assistant.Application.Health;
 
-/// <summary>The consultation answer: one `smart` call for an eligible question with the profile's
-/// context, passed through the dose-advice filter and ending with the fixed footer. Never logs the
-/// question, the note or the answer.</summary>
+/// <summary>One `smart` consultation after interpretation and safety, with a shared context bound
+/// and the fixed footer. Never logs profile values, incoming text or generated answers.</summary>
 internal sealed class HealthAnswers
 {
     private const string AnswerInstructionsFile = "prompt.md";
@@ -39,14 +38,9 @@ internal sealed class HealthAnswers
         _trace = trace ?? NullTraceSession.Instance;
     }
 
-    // One smart call for an eligible question: roles/health/prompt.md plus the runtime block (stage
-    // week, context note, thresholds, readings and notes of the last 24 hours) and the last few messages of this
-    // chat/topic. The answer passes the dose-advice filter (dose advice replaces the whole answer with
-    // the fixed refusal) and always ends with the footer. A refusal or failure gets a fixed text, never
-    // silence, and is not stored. Logs the outcome only, never the question, the note or the answer.
-    public async Task AnswerQuestionAsync(
+    public async Task AnswerAsync(
         ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, string text, long familyId, HealthProfileInfo profile,
-        long? messageDbId, CancellationToken cancellationToken)
+        long? messageDbId, IReadOnlyList<ExtractedUnclear> uncertainty, CancellationToken cancellationToken)
     {
         var instructions = _rolePrompts.Find(BotRoles.Health, AnswerInstructionsFile);
         if (_config is null || instructions is null)
@@ -64,19 +58,28 @@ internal sealed class HealthAnswers
             var rules = await _profiles.GetRulesAsync(familyId, profile.Id, cancellationToken);
             // Readings may be stated up to 10 minutes ahead of the message; the hour covers that.
             var readings = await _events.GetActiveAsync(
-                familyId, profile.Id, now - ConsultationPrompt.ReadingsWindow, now.AddHours(1), cancellationToken);
+                familyId, profile.Id, now - ConsultationPrompt.NotesWindow, now.AddHours(1), cancellationToken);
             // No /new for this role: the last few messages of this chat/topic; the question itself is
-            // excluded here and appended once by ContextBuilder.
+            // excluded here and appended once by the consultation assembler.
             var history = await _messages.GetRecentContextAsync(
                 bot.TelegramBotId, message.ChatId, message.TopicId, afterMessageId: null, beforeMessageId: messageDbId,
                 Math.Min(_config.MaxContextMessages, ConsultationPrompt.MaxHistoryMessages), cancellationToken);
+            var snapshot = HealthConsultationContext.Build(instructions, now, profile, rules, readings, history,
+                text, message.Username, message.ChatType != "private", _config.MaxInputChars, uncertainty);
+            if (snapshot is null)
+            {
+                await TraceSafety.RecordAsync(_trace, new TraceEventData("decision", "skipped", "context_budget_exceeded"));
+                LogAnswer("context_budget_exceeded", messageDbId);
+                await SendAnswerAsync(bot, telegramClient, message, GeneralAssistant.FailedText, storeAsContext: false, cancellationToken);
+                return;
+            }
             var request = new LlmRequest(
                 familyId,
                 bot.TelegramBotId,
                 LlmConfig.SmartTier,
                 PreferredModel: null,
-                ConsultationPrompt.BuildSystemPrompt(instructions, now, profile, CurrentWeek(profile), rules, readings),
-                ContextBuilder.Build(history, text, message.Username, message.ChatType != "private", _config.MaxInputChars),
+                snapshot.SystemPrompt,
+                snapshot.Messages,
                 ChatId: message.ChatId,
                 TopicId: message.TopicId,
                 TriggerMessageId: messageDbId);
@@ -131,27 +134,15 @@ internal sealed class HealthAnswers
             return;
         }
 
-        // The deterministic filter is the enforcement (D7); the prompt rule alone is not trusted. The
-        // model's own text of a replaced answer is never sent, logged or stored as conversation
-        // context; opted-in private diagnostics mark it not sent.
-        var blocked = DoseAdviceFilter.ContainsDoseAdvice(result.Text);
-        var answer = blocked ? DoseAdviceFilter.RefusalText : result.Text.Trim();
-        if (blocked)
-        {
-            await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "not_sent", "dose_advice_replaced",
-                AttemptId: result.TraceAttemptId, Text: result.Text, Sent: false));
-        }
-        await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "generated", blocked ? "dose_advice_replaced" : "normal",
+        var answer = result.Text.Trim();
+        await TraceSafety.RecordAsync(_trace, new TraceEventData("answer", "generated", "normal",
             AttemptId: result.TraceAttemptId, Text: $"{answer}\n\n{HealthAssistant.AnswerFooter}"));
-        LogAnswer(blocked ? "dose_advice_replaced" : "answered", messageDbId);
+        LogAnswer("answered", messageDbId);
         using (TracingTelegramClient.ForAttempt(result.TraceAttemptId))
         {
             await SendAnswerAsync(bot, telegramClient, message, $"{answer}\n\n{HealthAssistant.AnswerFooter}", storeAsContext: true, cancellationToken);
         }
     }
-
-    private StageWeekResult CurrentWeek(HealthProfileInfo profile) =>
-        StageWeek.Compute(ProfileTimeZone.LocalToday(_clock.UtcNow, profile.TimeZone), profile.StageStartDate);
 
     // Like the General assistant's replies: split for Telegram; in groups the first part is a reply to
     // the question, private chats never quote. Only answers are stored as outgoing context.
@@ -172,7 +163,7 @@ internal sealed class HealthAnswers
                 var replyToMessageId = isGroup && isFirstPart ? message.MessageId : (int?)null;
                 sentMessageId = await telegramClient.SendTextAsync(message.ChatId, message.TopicId, part, replyToMessageId, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 _logger.LogError("failed to send health answer: {ExceptionType}", ex.GetType().Name);
                 return;

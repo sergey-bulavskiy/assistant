@@ -128,7 +128,6 @@ public class HealthAssistantTests
     private readonly FakeLlmGateway _gateway = new() { NextResult = LlmResult.Answered(NoEventsJson, "haiku") };
     private readonly FakeRolePrompts _prompts = new();
     private readonly FailureNoticeThrottle _throttle = new();
-    private readonly AddressedHintThrottle _hints = new();
     private readonly CapturingLogger _log = new();
     private readonly FakeTraceSession _trace = new();
     private int _nextMessageId = 100;
@@ -144,13 +143,13 @@ public class HealthAssistantTests
         _ownership.OwnerUserIds.Add(111);
     }
 
-    private static LlmConfig Config() => new()
+    private static LlmConfig Config(int maxChars = 8000) => new()
     {
         Models = new[] { new ModelCatalogEntry("test", "sonnet"), new ModelCatalogEntry("test", "haiku") },
         CallsPerMinute = 10,
         CallsPerDay = 100,
         MaxContextMessages = 30,
-        MaxInputChars = 8000,
+        MaxInputChars = maxChars,
         MaxOutputTokens = 1000,
         CallTimeoutSeconds = 60,
         MaxConcurrentCalls = 2,
@@ -160,8 +159,8 @@ public class HealthAssistantTests
         FastModels = Array.Empty<ModelCatalogEntry>(),
     };
 
-    private HealthAssistant CreateAssistant(IClock? clock = null, bool llmOff = false) =>
-        new(_profiles, _ownership, _events, _alerts, _pending, _messages, _gateway, llmOff ? null : Config(), _prompts, _throttle, _hints,
+    private HealthAssistant CreateAssistant(IClock? clock = null, bool llmOff = false, LlmConfig? config = null, ILlmGateway? gateway = null) =>
+        new(_profiles, _ownership, _events, _alerts, _pending, _messages, gateway ?? _gateway, llmOff ? null : config ?? Config(), _prompts, _throttle,
             clock ?? new FixedClock(Now), new BuildInfo("abcdef1234", null, Now.AddHours(-1)), _log, _trace);
 
     private IncomingMessage Msg(
@@ -178,6 +177,180 @@ public class HealthAssistantTests
         CreateAssistant(clock).HandleAsync(Bot, _trace.Wrap(_telegram), message, new StoreResult(outcome, messageDbId), CancellationToken.None, replyToAll);
 
     private string SingleReply() => _telegram.Sent.ShouldHaveSingleItem().Text;
+
+    private sealed class BlockingConsultationGateway(FakeLlmGateway inner) : ILlmGateway
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsEnabled => inner.IsEnabled;
+        public IReadOnlyList<ModelStatus> DescribeModels() => inner.DescribeModels();
+        public bool IsKnownModel(string name) => inner.IsKnownModel(name);
+        public Task<LlmResult> CompleteAsync(LlmRequest request, CancellationToken cancellationToken)
+        {
+            if (request.Tier == LlmConfig.SmartTier)
+            {
+                inner.WaitBeforeAnswering = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                Entered.SetResult();
+            }
+            return inner.CompleteAsync(request, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task Cancellation_during_consultation_preserves_committed_record_and_emits_no_failure_notice()
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered(ReadingAndQuestionJson(5.5), "haiku"));
+        var blocking = new BlockingConsultationGateway(_gateway);
+        using var cancellation = new CancellationTokenSource();
+        var handling = CreateAssistant(gateway: blocking).HandleAsync(Bot, _telegram, Msg("сахар 5.5, synthetic question"),
+            new StoreResult(StoreOutcome.Stored, 1), cancellation.Token);
+        await blocking.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _events.Added.ShouldHaveSingleItem().Events.ShouldHaveSingleItem().PayloadJson.ShouldContain("5.5");
+        await cancellation.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(async () => await handling.WaitAsync(TimeSpan.FromSeconds(5)));
+        _telegram.Sent.ShouldBeEmpty();
+        _telegram.ChatActionsSent.ShouldContain((111L, (int?)null, "typing"));
+        _messages.OutgoingMessages.ShouldBeEmpty();
+        _gateway.Requests.Count.ShouldBe(2);
+    }
+
+    [Theory]
+    [InlineData(false, true, "private", false, 2)]
+    [InlineData(true, false, "private", false, 1)]
+    [InlineData(false, true, "group", false, 1)]
+    [InlineData(false, true, "group", true, 2)]
+    public async Task Needs_reply_controls_consultation_independently_within_deterministic_eligibility(
+        bool question, bool needsReply, string place, bool enabled, int expectedCalls)
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered($"{{\"events\":[],\"is_question\":{question.ToString().ToLowerInvariant()},\"needs_reply\":{needsReply.ToString().ToLowerInvariant()}}}", "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("appropriate reply", "sonnet"));
+        await HandleAsync(Msg("synthetic greeting", place), replyToAll: enabled);
+        _gateway.Requests.Count.ShouldBe(expectedCalls);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(expectedCalls == 2 ? new[] { "appropriate reply" + Footer } : Array.Empty<string>());
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Short_eligible_greeting_gets_one_model_reply_with_footer()
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered("{\"events\":[],\"is_question\":false,\"needs_reply\":true}", "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("Hello.", "sonnet"));
+        await HandleAsync(Msg("hi"));
+        _gateway.Requests.Count.ShouldBe(2);
+        _gateway.Requests[0].Messages.ShouldHaveSingleItem().Text.ShouldBe("hi");
+        _gateway.Requests[0].SystemPrompt.ShouldContain("Private chat: true");
+        SingleReply().ShouldBe("Hello." + Footer);
+    }
+
+    [Fact]
+    public async Task Wrong_type_needs_reply_never_calls_consultation()
+    {
+        Answer("{\"events\":[],\"is_question\":true,\"needs_reply\":\"true\"}");
+        await HandleAsync(Msg("synthetic question"));
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe(ExtractionReplies.FailureNotice);
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Quick_scan_uncertainty_goes_to_consultation_without_fixed_clarification()
+    {
+        AskAndAnswer("Уточните единицы.");
+        await HandleAsync(Msg("сахар 250, что делать?"));
+        _gateway.Requests.Count.ShouldBe(2);
+        SingleReply().ShouldBe("Уточните единицы." + Footer);
+        _gateway.Requests[1].SystemPrompt.ShouldContain("Current message uncertainties");
+        _gateway.Requests[1].SystemPrompt.ShouldContain("unit");
+        _pending.Added.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Failed_consultation_with_uncertainty_returns_only_provider_notice()
+    {
+        _gateway.Results.Enqueue(LlmResult.Answered("{\"events\":[],\"unclear\":[{\"fragment\":\"18\",\"reason\":\"unit\"}],\"needs_reply\":true}", "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Refused(LlmRefusalReason.Failed));
+        await HandleAsync(Msg("утром было 18, что делать?"));
+        SingleReply().ShouldBe(FailedText);
+        _pending.Added.ShouldBeEmpty();
+        _events.Added.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Tiny_consultation_budget_returns_fixed_failure_without_smart_call()
+    {
+        AskOnly();
+        await CreateAssistant(config: Config(10)).HandleAsync(Bot, _telegram, Msg("synthetic question"), new StoreResult(StoreOutcome.Stored, 1), CancellationToken.None);
+        _gateway.Requests.Count.ShouldBe(1);
+        SingleReply().ShouldBe(FailedText);
+        _messages.OutgoingMessages.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("состояние", "Состояние")]
+    [InlineData("лекарства", "Лекарства")]
+    [InlineData("аллергии", "Аллергии")]
+    [InlineData("план", "План врача")]
+    [InlineData("врач", "Врач")]
+    public async Task Profile_field_exact_limit_is_preserved_displayed_and_cleared(string field, string label)
+    {
+        var value = "line one  line two\n" + new string('x', 981);
+        value.Length.ShouldBe(1000);
+        await HandleAsync(Msg("/setprofile " + field.ToUpperInvariant() + "   " + value + "  "));
+        SingleReply().ShouldBe("Поле профиля сохранено.");
+        _profiles.LastUpdatedByUserId.ShouldBe(111);
+        _telegram.Sent.Clear();
+        await HandleAsync(Msg("/profile"));
+        string.Concat(_telegram.Sent.Select(s => s.Text)).ShouldContain(label + ": " + value);
+        _telegram.Sent.Clear();
+        await HandleAsync(Msg("/setprofile " + field + " -"));
+        SingleReply().ShouldBe("Поле профиля очищено.");
+        _telegram.Sent.Clear();
+        await HandleAsync(Msg("/profile"));
+        string.Concat(_telegram.Sent.Select(s => s.Text)).ShouldContain(label + ": не задано");
+        _gateway.Requests.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("/setprofile")]
+    [InlineData("/setprofile unknown x")]
+    [InlineData("/setprofile состояние")]
+    [InlineData("/setprofile состояние    ")]
+    public async Task Invalid_profile_field_argument_does_not_write(string command)
+    {
+        var before = _profiles.Profile;
+        await HandleAsync(Msg(command));
+        SingleReply().ShouldStartWith("Формат: /setprofile");
+        _profiles.Profile.ShouldBe(before);
+        _profiles.LastUpdatedByUserId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Over_limit_profile_field_and_non_owner_anonymous_changes_write_nothing()
+    {
+        var before = _profiles.Profile;
+        await HandleAsync(Msg("/setprofile состояние " + new string('x', 1001)));
+        SingleReply().ShouldStartWith("Формат: /setprofile");
+        _telegram.Sent.Clear();
+        await HandleAsync(Msg("/setprofile unknown", userId: 222));
+        SingleReply().ShouldBe(OwnerOnly);
+        _telegram.Sent.Clear();
+        await HandleAsync(Msg("/setprofile состояние x") with { UserId = null });
+        SingleReply().ShouldBe(OwnerOnly);
+        _profiles.Profile.ShouldBe(before);
+        _profiles.LastUpdatedByUserId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Long_profile_output_keeps_all_later_fields_and_splits_for_Telegram()
+    {
+        _profiles.Profile = _profiles.Profile with { Conditions = new string('a', 1000), Medications = new string('b', 1000),
+            Allergies = new string('c', 1000), DoctorPlan = new string('d', 1000), DoctorContacts = "last-field-" + new string('e', 980) };
+        await HandleAsync(Msg("/profile", userId: 222));
+        _telegram.Sent.Count.ShouldBeGreaterThan(1);
+        _telegram.Sent.ShouldAllBe(p => p.Text.Length <= 4096);
+        string.Concat(_telegram.Sent.Select(s => s.Text)).ShouldContain("Врач: last-field-");
+        string.Concat(_telegram.Sent.Select(s => s.Text)).ShouldContain("Пороги: правил 11");
+    }
 
     [Theory]
     [InlineData(StoreOutcome.Updated)]
@@ -204,8 +377,8 @@ public class HealthAssistantTests
     {
         await HandleAsync(Msg("test message", chatType));
 
-        // A private chat is always addressed: it gets the one-time hint (tests below); a group stays silent.
-        _telegram.Sent.Select(s => s.Text).ShouldBe(chatType == "private" ? new[] { Hint } : Array.Empty<string>());
+        // Interpretation did not request a reply in either place.
+        _telegram.Sent.ShouldBeEmpty();
         _profiles.GetOrCreateCalls.ShouldBe(1);
         _profiles.LastFamilyId.ShouldBe(42);
         _profiles.LastBotDbId.ShouldBe(1);
@@ -275,7 +448,8 @@ public class HealthAssistantTests
         SingleReply().ShouldBe(
             "Профиль:\nНачало отсчёта: не задано (/setstart)\nНеделя: не задана (/setstart)\nЧасовой пояс: UTC\n" +
             "Телефон для экстренных случаев: 103 или 112\n" +
-            "Заметка: не задана (/setnote) — без неё ответы на вопросы не знают контекста\n" +
+            "Заметка: не задана (/setnote)\n" +
+            "Состояние: не задано\nЛекарства: не задано\nАллергии: не задано\nПлан врача: не задано\nВрач: не задано\n" +
             "Пороги: правил 11, от врача 0 (/thresholds)");
 
         _telegram.Sent.Clear();
@@ -327,7 +501,7 @@ public class HealthAssistantTests
         foreach (var expected in new[]
                  {
                      "/today", "/undo", "/del", "/week", "/profile", "/thresholds", "/setstart", "/threshold", "не заменяю врача",
-                     "не подтверждено врачом", "не советую лекарства", "упомяните меня"
+                     "не подтверждено врачом", "/setprofile", "упомяните меня"
                  })
         {
             reply.ShouldContain(expected);
@@ -772,7 +946,7 @@ public class HealthAssistantTests
     [Fact]
     public async Task No_events_means_no_reaction_and_no_reply()
     {
-        // A group message that is not addressed to the bot (a private chat gets the hint instead).
+        // Interpretation did not request a reply; the unaddressed group stays quiet.
         await HandleAsync(Msg("просто разговор", "group"));
 
         _gateway.Requests.Count.ShouldBe(1);
@@ -786,9 +960,9 @@ public class HealthAssistantTests
     [InlineData(" 7 ")]
     [InlineData("👍👍")]
     [InlineData("!!!")]
-    public async Task Short_or_emoji_only_text_is_not_extracted(string text)
+    public async Task Ineligible_short_or_emoji_only_text_is_not_extracted(string text)
     {
-        await HandleAsync(Msg(text));
+        await HandleAsync(Msg(text, "group"));
 
         _gateway.Requests.ShouldBeEmpty();
         _telegram.Sent.ShouldBeEmpty();
@@ -1900,9 +2074,8 @@ public class HealthAssistantTests
 
     // --- Answers to addressed questions ---
 
-    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true}";
+    private const string QuestionJson = "{\"events\":[],\"unclear\":[],\"is_question\":true,\"needs_reply\":true}";
     private const string Footer = "\n\nНе заменяю врача.";
-    private const string DoseRefusal = "Я не даю советов по дозам лекарств. Это вопрос к врачу — запишите его, чтобы спросить на приёме.";
     private const string FailedText = "Не получилось ответить, попробуйте ещё раз.";
 
     private void AskAndAnswer(string answer)
@@ -1914,41 +2087,19 @@ public class HealthAssistantTests
     private void AskOnly() => _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
 
     [Fact]
-    public async Task Replaced_health_answer_is_marked_not_sent_and_only_replacement_is_delivered()
+    public async Task Generated_answer_is_delivered_traced_and_stored_without_replacement()
     {
-        const string rejected = "Increase the dose by 2 units.";
-        var extractionAttempt = Guid.NewGuid();
-        var answerAttempt = Guid.NewGuid();
+        const string generated = "Increase the dose by 2 units.";
+        var attempt = Guid.NewGuid();
         await _trace.StartAsync(new TraceStart(Guid.NewGuid(), 42, 999, 111, null, 1, 1, false, "synthetic question", "text"), CancellationToken.None);
-        var firstQuestion = Msg("synthetic question");
-        var firstSource = await _messages.StoreAsync(999, 1, firstQuestion, CancellationToken.None);
-        _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku") with { TraceAttemptId = extractionAttempt });
-        _gateway.Results.Enqueue(LlmResult.Answered(rejected, "sonnet") with { TraceAttemptId = answerAttempt });
-
-        await HandleAsync(firstQuestion, messageDbId: firstSource.MessageDbId!.Value);
-
-        var extraction = _trace.Events.Single(e => e.Stage == "extraction" && e.Outcome == "ok");
-        extraction.AttemptId.ShouldBe(extractionAttempt);
-        var notSent = _trace.Events.Single(e => e.Stage == "answer" && e.Outcome == "not_sent");
-        notSent.AttemptId.ShouldBe(answerAttempt);
-        notSent.Text.ShouldBe(rejected);
-        notSent.Sent.ShouldBe(false);
-        _trace.Events.ShouldNotContain(e => e.Stage == "delivery" && e.Text == rejected);
-        _trace.Events.ShouldContain(e => e.Stage == "delivery" && e.Outcome == "sent"
-            && e.AttemptId == answerAttempt && e.Text == DoseRefusal + Footer);
-        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
-        _messages.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
-
-        var secondQuestion = Msg("second synthetic question");
-        var secondSource = await _messages.StoreAsync(999, 2, secondQuestion, CancellationToken.None);
         _gateway.Results.Enqueue(LlmResult.Answered(QuestionJson, "haiku"));
-        _gateway.Results.Enqueue(LlmResult.Answered("safe synthetic answer", "sonnet"));
-
-        await HandleAsync(secondQuestion, messageDbId: secondSource.MessageDbId!.Value);
-
-        var nextAnswerRequest = _gateway.Requests.Last();
-        nextAnswerRequest.Messages.ShouldContain(m => m.Text.Contains(DoseRefusal, StringComparison.Ordinal));
-        nextAnswerRequest.Messages.ShouldNotContain(m => m.Text.Contains(rejected, StringComparison.Ordinal));
+        _gateway.Results.Enqueue(LlmResult.Answered(generated, "sonnet") with { TraceAttemptId = attempt });
+        await HandleAsync(Msg("synthetic question"));
+        _trace.Events.ShouldNotContain(e => e.Outcome == "not_sent" || e.ReasonCode == "dose_advice_replaced");
+        _trace.Events.ShouldContain(e => e.Stage == "delivery" && e.Outcome == "sent" && e.AttemptId == attempt && e.Text == generated + Footer);
+        SingleReply().ShouldBe(generated + Footer);
+        _messages.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe(generated + Footer);
+        _log.Entries.ShouldAllBe(e => !e.Message.Contains(generated));
     }
 
     [Fact]
@@ -1997,9 +2148,9 @@ public class HealthAssistantTests
         system.ShouldContain("- Stage week: 3 нед. 2 дн.");
         system.ShouldContain("test context note");
         system.ShouldContain("glucose.any: low_urgent 3.0, low_alert 3.9, high_alert 11.0, high_urgent 13.9 — не подтверждено врачом");
-        system.ShouldContain("07.02 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
+        system.ShouldContain("2030-02-07 09:30 глюкоза 7.8 ммоль/л (через 1 ч после еды)");
         _gateway.Requests[0].SystemPrompt.ShouldNotContain("test context note");
-        _events.LastRange.ShouldBe((42L, 1L, Now.AddHours(-24), Now.AddHours(1)));
+        _events.LastRange.ShouldBe((42L, 1L, Now.AddDays(-90), Now.AddHours(1)));
     }
 
     [Fact]
@@ -2114,7 +2265,7 @@ public class HealthAssistantTests
     private static string ReadingAndQuestionJson(double glucose, string unclear = "", string intent = "record") =>
         "{\"events\":[{\"type\":\"glucose\",\"intent\":\"" + intent + "\",\"day\":0,\"time\":null,\"value\":" +
         glucose.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-        ",\"unit\":\"mmol/L\",\"context\":\"fasting\"}],\"unclear\":[" + unclear + "],\"is_question\":true}";
+        ",\"unit\":\"mmol/L\",\"context\":\"fasting\"}],\"unclear\":[" + unclear + "],\"is_question\":true,\"needs_reply\":true}";
 
     // Deliberate rule change: a message that is a reading AND an addressed question used to get only
     // the reaction ("A_message_with_readings_is_not_also_answered"); the question is now answered too.
@@ -2151,41 +2302,45 @@ public class HealthAssistantTests
     }
 
     [Fact]
-    public async Task A_reading_and_a_question_that_triggers_an_alert_gets_only_the_alert()
+    public async Task A_recorded_dangerous_reading_alerts_before_consultation()
     {
         _gateway.Results.Enqueue(LlmResult.Answered(ReadingAndQuestionJson(2.5), "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("Тестовый ответ.", "sonnet"));
 
         await HandleAsync(Msg("сахар 2.5, что делать?"));
 
-        _gateway.Requests.Count.ShouldBe(1);
+        _gateway.Requests.Count.ShouldBe(2);
         _events.Added.ShouldHaveSingleItem();
-        SingleReply().ShouldBe(UrgentLow25);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer });
     }
 
     [Fact]
-    public async Task A_question_with_an_alert_that_could_not_be_sent_is_still_not_answered()
+    public async Task Consultation_is_attempted_even_when_the_alert_transport_fails()
     {
         _gateway.Results.Enqueue(LlmResult.Answered(ReadingAndQuestionJson(2.5), "haiku"));
         _telegram.ThrowOnSend = true;
 
         await Should.NotThrowAsync(() => HandleAsync(Msg("сахар 2.5, что делать?")));
 
-        _gateway.Requests.Count.ShouldBe(1);
+        _gateway.Requests.Count.ShouldBe(2);
         _telegram.Sent.ShouldBeEmpty();
         _log.Entries.ShouldContain((LogLevel.Error, "Safety alert glucose.any for message 1 could not be sent"));
     }
 
     [Fact]
-    public async Task A_reading_and_a_question_with_an_unclear_value_gets_only_the_clarification()
+    public async Task Consultation_handles_uncertainty_after_committed_readings_without_fixed_clarification()
     {
         _gateway.Results.Enqueue(LlmResult.Answered(
             ReadingAndQuestionJson(5.5, "{\"fragment\":\"18\",\"reason\":\"type\"}"), "haiku"));
+        _gateway.Results.Enqueue(LlmResult.Answered("Уточните показатель.", "sonnet"));
 
         await HandleAsync(Msg("сахар 5.5, потом 18, это нормально?"));
 
-        _gateway.Requests.Count.ShouldBe(1);
+        _gateway.Requests.Count.ShouldBe(2);
         _events.Added.ShouldHaveSingleItem();
-        SingleReply().ShouldBe("Не понял «18» — уточните что это за показатель.");
+        SingleReply().ShouldBe("Уточните показатель." + Footer);
+        _gateway.Requests[1].SystemPrompt.ShouldContain("Current message uncertainties");
+        _pending.Added.ShouldBeEmpty();
     }
 
     [Fact]
@@ -2200,69 +2355,13 @@ public class HealthAssistantTests
         _messages.OutgoingMessages.ShouldBeEmpty();
     }
 
-    // --- Hint for an addressed message that produced nothing ---
-
-    private const string Hint = "Слушаю. Запишите показатель (например: сахар 5.8 после обеда) или задайте вопрос.";
-
     [Fact]
-    public async Task An_addressed_group_greeting_gets_the_hint_as_a_reply()
-    {
-        var message = Msg("@test_health_bot привет", "group", topicId: 7);
-
-        await HandleAsync(message);
-
-        _telegram.Sent.ShouldBe(new[] { (-100L, (int?)7, Hint, (int?)message.MessageId) });
-    }
-
-    [Fact]
-    public async Task The_hint_is_sent_once_per_five_minutes_per_place()
-    {
-        await HandleAsync(Msg("@test_health_bot привет", "group", topicId: 7));
-        await HandleAsync(Msg("@test_health_bot привет", "group", topicId: 7), clock: new FixedClock(Now.AddMinutes(4)));
-        _telegram.Sent.Count.ShouldBe(1);
-
-        await HandleAsync(Msg("@test_health_bot привет", "group", topicId: 7), clock: new FixedClock(Now.AddMinutes(6)));
-        _telegram.Sent.Count.ShouldBe(2);
-    }
-
-    [Fact]
-    public async Task A_not_addressed_group_message_that_produced_nothing_stays_silent()
-    {
-        await HandleAsync(Msg("всем привет", "group", topicId: 7));
-
-        _telegram.Sent.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public async Task Private_chatter_gets_one_hint_then_silence_within_five_minutes()
+    public async Task Private_chatter_with_needs_reply_false_stays_silent_on_repeated_messages()
     {
         await HandleAsync(Msg("понятно, спасибо"));
-        await HandleAsync(Msg("понятно, спасибо"), clock: new FixedClock(Now.AddMinutes(1)));
-
-        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(Hint);
-    }
-
-    [Fact]
-    public async Task A_recorded_reading_or_an_answered_question_gets_no_hint()
-    {
-        Answer(GlucoseAt930Json);
-        await HandleAsync(Msg("сахар 7.8 в 9:30"));
-        _telegram.Sent.ShouldBeEmpty();
-
-        AskAndAnswer("Тестовый ответ.");
-        await HandleAsync(Msg("какой сахар считается нормой?"));
-        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe("Тестовый ответ." + Footer);
-    }
-
-    [Fact]
-    public async Task An_edit_and_a_failed_extraction_get_no_hint()
-    {
-        await HandleAsync(Msg("понятно, спасибо") with { IsEdit = true, EditedAt = Now }, StoreOutcome.Updated);
-        _telegram.Sent.ShouldBeEmpty();
-
-        _gateway.NextResult = LlmResult.Refused(LlmRefusalReason.RateLimited);
         await HandleAsync(Msg("понятно, спасибо"));
-        SingleReply().ShouldBe(ExtractionReplies.FailureNotice);
+        _telegram.Sent.ShouldBeEmpty();
+        _gateway.Requests.Count.ShouldBe(2);
     }
 
     [Fact]
@@ -2277,14 +2376,14 @@ public class HealthAssistantTests
     }
 
     [Fact]
-    public async Task A_question_with_a_quick_scan_alert_is_not_also_answered()
+    public async Task Quick_scan_alert_precedes_consultation_when_interpretation_missed_the_reading()
     {
-        AskOnly();
+        AskAndAnswer("Тестовый ответ.");
 
         await HandleAsync(Msg("сахар 2.5, что делать?"));
 
-        _gateway.Requests.Count.ShouldBe(1);
-        SingleReply().ShouldBe(UrgentLow25 + NotRecorded);
+        _gateway.Requests.Count.ShouldBe(2);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25 + NotRecorded, "Тестовый ответ." + Footer });
     }
 
     [Fact]
@@ -2309,37 +2408,17 @@ public class HealthAssistantTests
         SingleReply().ShouldBe(ExtractionReplies.FailureNotice);
     }
 
-    [Theory]
-    [InlineData("Увеличьте дозу на 2 единицы.")]
-    [InlineData("Сахар в норме. Можно убавить 2 ед перед ужином.")]
-    [InlineData("Increase the dose by 2 units.")]
-    public async Task Dose_advice_is_replaced_by_the_fixed_refusal(string modelAnswer)
-    {
-        AskAndAnswer(modelAnswer);
-
-        await HandleAsync(Msg("на сколько увеличить дозу?"));
-
-        SingleReply().ShouldBe(DoseRefusal + Footer);
-        _messages.OutgoingMessages.ShouldHaveSingleItem().Text.ShouldBe(DoseRefusal + Footer);
-        _telegram.Sent.ShouldAllBe(s => !s.Text.Contains(modelAnswer));
-        _messages.OutgoingMessages.ShouldAllBe(m => !m.Text.Contains(modelAnswer));
-        _log.Entries.ShouldContain(e => e.Message.Contains("dose_advice_replaced"));
-        _log.Entries.ShouldAllBe(e => !e.Message.Contains(modelAnswer));
-    }
-
     [Fact]
-    public async Task Dose_advice_after_the_first_telegram_part_is_still_replaced()
+    public async Task Generated_treatment_text_in_a_later_part_is_sent_with_one_footer()
     {
-        const string doseSentence = "Увеличьте дозу на 2 единицы.";
-        var longAnswer = string.Concat(Enumerable.Repeat("Сахар в норме, записи за день выглядят ровно. ", 120));
-        longAnswer.Length.ShouldBeGreaterThan(4096);
-        AskAndAnswer(longAnswer + doseSentence);
-
-        await HandleAsync(Msg("расскажите подробно про сахар"));
-
-        SingleReply().ShouldBe(DoseRefusal + Footer);
-        _telegram.Sent.ShouldAllBe(s => !s.Text.Contains(doseSentence));
-        _messages.OutgoingMessages.ShouldAllBe(m => !m.Text.Contains(doseSentence));
+        var answer = new string('x', 4200) + " Increase the dose by 2 units.";
+        AskAndAnswer(answer);
+        await HandleAsync(Msg("synthetic detailed request"));
+        _telegram.Sent.Count.ShouldBeGreaterThan(1);
+        var complete = string.Concat(_telegram.Sent.Select(p => p.Text));
+        complete.ShouldContain("Increase the dose by 2 units.");
+        complete.ShouldEndWith(Footer);
+        _messages.OutgoingMessages.Select(p => p.Text).ShouldBe(_telegram.Sent.Select(p => p.Text));
     }
 
     [Theory]
@@ -2441,7 +2520,7 @@ public class HealthAssistantTests
         "{\"events\":[" + string.Join(",", values.Select(v =>
             "{\"type\":\"glucose\",\"intent\":\"" + v.Intent + "\",\"day\":0,\"time\":null,\"value\":" +
             v.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"unit\":null,\"context\":null}")) +
-        "],\"unclear\":[],\"is_question\":" + (isQuestion ? "true" : "false") + "}";
+        "],\"unclear\":[],\"is_question\":" + (isQuestion ? "true" : "false") + ",\"needs_reply\":" + (isQuestion ? "true" : "false") + "}";
 
     private void ExtractThenAnswer(string extractionJson)
     {
@@ -2559,12 +2638,12 @@ public class HealthAssistantTests
     }
 
     [Fact]
-    public async Task Enabled_topic_answer_is_suppressed_by_saved_alert_but_not_unsaved_alert()
+    public async Task Enabled_topic_consultation_follows_saved_alert()
     {
-        Answer(IntentJson(true, ("record", 2.5)));
+        ExtractThenAnswer(IntentJson(true, ("record", 2.5)));
         await HandleAsync(Msg("сахар 2.5, что делать?", "group", topicId: 7), replyToAll: true);
-        _telegram.Sent.ShouldHaveSingleItem().Text.ShouldBe(UrgentLow25);
-        _gateway.Requests.Count.ShouldBe(1);
+        _telegram.Sent.Select(s => s.Text).ShouldBe(new[] { UrgentLow25, "Тестовый ответ." + Footer });
+        _gateway.Requests.Count.ShouldBe(2);
     }
 
     [Fact]

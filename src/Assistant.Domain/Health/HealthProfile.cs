@@ -24,7 +24,7 @@ public class HealthProfile
     /// <summary>Emergency number text shown in alerts (/setphone).</summary>
     public string EmergencyPhone { get; set; } = DefaultEmergencyPhone;
 
-    /// <summary>Owner-written context, at most 500 characters (/setnote); only for question answers.</summary>
+    /// <summary>Owner-written context, at most 500 characters (/setnote); consultation only.</summary>
     public string? ContextNote { get; set; }
 
     public string? Conditions { get; set; }

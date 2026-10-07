@@ -6,7 +6,7 @@ namespace Assistant.Application.Messages;
 /// <summary>Whether a message is addressed to a role bot (the M3a rule, shared by the General and
 /// health assistants): a private chat, an @username mention of this bot, or a genuine reply to one of
 /// this bot's messages. Pure. A place's reply_to_all setting is not part of this rule: the General
-/// assistant adds it on top, the health assistant never reads it.</summary>
+/// and Health assistants add the exact approved place's flag on top.</summary>
 public static class Addressing
 {
     public static bool IsAddressed(ReceivingBot bot, IncomingMessage message, string text)

@@ -352,16 +352,16 @@ public class ManagerUpdateHandlerSettingsTests : IntegrationTestBase
         await SetBotRoleAsync(" health ");
 
         var buttons = await PlaceButtonsAsync(handler, telegram, 1);
-        buttons[2].Label.ShouldBe("Отвечать на вопросы без упоминания: выкл");
+        buttons[2].Label.ShouldBe("Отвечать без упоминания: выкл");
         buttons[2].CallbackData.ShouldBe($"settingsplace_healthquestions_on:{_placeId}");
 
         await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(2, 111, $"settingsplace_healthquestions_on:{_placeId}"), CancellationToken.None);
         (await StoredReplyToAllAsync()).ShouldBeTrue();
-        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-2" && c.Text == "Готово: отвечаю на вопросы без упоминания.");
+        telegram.AnsweredCallbacks.ShouldContain(c => c.CallbackQueryId == "cbq-2" && c.Text == "Готово: отвечаю без упоминания, когда сообщение ожидает ответа.");
 
         telegram.ClearSent();
         buttons = await PlaceButtonsAsync(handler, telegram, 3);
-        buttons[2].Label.ShouldBe("Отвечать на вопросы без упоминания: вкл");
+        buttons[2].Label.ShouldBe("Отвечать без упоминания: вкл");
         buttons[2].CallbackData.ShouldBe($"settingsplace_healthquestions_off:{_placeId}");
 
         await handler.HandleAsync(ManagerBot, telegram, CallbackUpdate(4, 111, $"settingsplace_healthquestions_off:{_placeId}"), CancellationToken.None);

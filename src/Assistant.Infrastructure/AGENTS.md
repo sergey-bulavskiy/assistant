@@ -30,6 +30,9 @@
   fresh-scope pattern works only for the unfiltered `budget_notices`). `safety_rules.profile_id` is
   the model's first real FK (cascade delete, no navigation properties). A profile is created with its
   default rules (`SafetyRuleDefaults`) in one transaction.
+- Nullable consultation profile fields have a 1,000-character bound each. `SaveFieldAsync` updates
+  exactly one column plus audit fields using scoped SQL; never save new fields from a stale whole
+  profile snapshot. Existing profile commands write only their original columns.
 - Role prompts: `roles/<role>/*.md` at the repo root are compiled into this assembly as embedded
   resources named `roles/<dir>/<file>` (`%(RecursiveDir)` gives `\` on Windows; `RolePrompts`
   normalizes it). The csproj fails the build if `roles/health/prompt.md` or `extract.md` is missing.
@@ -147,7 +150,7 @@
   live in `SettingsCommandHandler`. A new settings callback must be added to its `CallbackActions`
   set, or the dispatcher answers "Пока не реализовано". Every owner re-check goes through
   `ManagerOwnership.IsApprovedOwnerAsync`.
-- General reply-to-all buttons use `settingsplace_autoreply_on/off:<id>`; Health question buttons
+- General reply-to-all buttons use `settingsplace_autoreply_on/off:<id>`; Health reply buttons
   use `settingsplace_healthquestions_on/off:<id>`. Both carry the **target** state, so repeated taps
   do not flip it back. Each callback checks the bot's matching role and the owner's family.
   `places.reply_to_all` is per row: a topic never inherits the chat-wide row's flag. The

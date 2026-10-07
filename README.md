@@ -15,7 +15,7 @@ features on top of this pipeline.
 |---|---|---|
 | `/claim <code>` | anyone, once | Creates the family and makes the sender its first owner. While no family exists, each start prints a fresh code in the log. |
 | `/newbot <role>` | owners | Replies with a Telegram link that creates a new role bot (role: up to 64 characters). Once confirmed, the bot starts polling without a restart. The role is kept for a day, across restarts, until you confirm. |
-| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot or place, set General's "Отвечать на все: выкл/вкл" or Health's "Отвечать на вопросы без упоминания: выкл/вкл" for one approved place, allow/deny a user awaiting approval, disable/enable a user, or make an approved user an owner. A place line shows the bot username and its forum topic id, if any. |
+| `/settings` | owners | Lists bots, places and users with buttons: disable/enable/remove a bot or place, set General's "Отвечать на все: выкл/вкл" or Health's "Отвечать без упоминания: выкл/вкл" for one approved place, allow/deny a user awaiting approval, disable/enable a user, or make an approved user an owner. A place line shows the bot username and its forum topic id, if any. |
 | `/usage` | owners, private chat only | Platform-wide spend/state for today and this calendar month (if budgets are configured) plus a per-bot/per-model call/token/cost breakdown for your own family. |
 
 **Role bots:**
@@ -61,13 +61,13 @@ published-guideline default thresholds on its first message). Turn off Group Pri
 > (alerts say "не подтверждено врачом" until then). Enter the doctor's thresholds as soon as you
 > have them, and call the doctor or emergency services whenever in doubt — don't wait for the bot.
 
-Every new ordinary text message in the health bot's chats (at least 3 characters, not only emoji)
+Every new ordinary text message in the health bot's chats (at least 3 characters, or shorter eligible text, not only emoji)
 goes to the model once, on the `fast` tier: `LLM_FAST_MODELS` first, then the rest of `LLM_MODELS`.
-An owner can enable answers to unmentioned questions for one approved group or topic in `/settings`.
+An owner can enable replies without mentioning the bot for one approved group or topic in `/settings`.
 The existing `reply_to_all` flag is off for new Health places, and a one-time migration turns off
-previously unused Health flags. General settings are unchanged. When enabled, a Health question
-gets an answer without a mention after the existing alert and clarification checks; ordinary
-chatter remains silent. Direct mentions and replies work with the setting off. Recording and
+previously unused Health flags. General settings are unchanged. When enabled, the model's independent
+`needs_reply` decision permits an answer after safety checks; plain readings and chatter can remain
+silent. Direct mentions and replies work with the setting off. Recording and
 confirmation run regardless of this answer setting.
 The model turns the message into records (glucose, insulin, meal, symptom, weight, blood
 pressure, or a note); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
@@ -111,27 +111,33 @@ gets the fixed alert followed by "Ничего не записано — пов�
 that is not plausible (e.g. "сахар 250", most likely another unit) gets the clarification; neither
 is throttled. Readings written any other way get only the failure notice when extraction failed.
 
-**Questions.** In a private chat, the bot can answer a question without a mention. In a group or
-topic, it answers when a message mentions the bot (`@username`), replies to one of its messages,
-or the owner has enabled "Отвечать на вопросы без упоминания" for that approved place. The extraction call tells
-whether a message is a question; an eligible question is answered even when readings were recorded
-from the same message (the answer's context already includes them), but never when the message got a
-clarification, a quick-scan reply or a safety alert for a recorded reading (that fixed reply is the answer) or is an edit.
-An addressed new message that produced nothing at all (extraction worked, but no reading, no question,
-no clarification or alert, e.g. a greeting) gets one short fixed hint as a reply, "Слушаю. Запишите
-показатель (например: сахар 5.8 после обеда) или задайте вопрос.", at most once per 5 minutes per chat/topic
-(in memory); the hint also fires on any addressed group reply to the bot (e.g. a thank-you after an answer), under the same throttle; very short or emoji-only texts are not extracted and get no hint. If extraction fails on an addressed question, only the
-failure notice is sent, no answer. The answer is a second model call on the `smart` tier
-(`LLM_MODELS` order) with the profile's context: the stage week, the context note (`/setnote`), the
-thresholds with their source and the readings and notes of the last 24 hours, plus the last few messages of the
-chat. Answers never contain dose advice: besides the instruction in the prompt, a fixed filter in
-code replaces any answer that looks like dose advice with "Я не даю советов по дозам лекарств. Это
-вопрос к врачу — …". The filter is conservative and may over-refuse a harmless answer: it also
-refuses a number with a dose unit next to a time of day, and any answer with letters other than Latin
-or Cyrillic (answers are asked for in Russian, or in English for an English question). Every answer
-ends with "Не заменяю врача." When the model is unavailable the bot replies with the General
-assistant's short notices ("Слишком много запросов, подождите минуту.", …). Answers are kept as
-conversation context; alerts and other fixed texts are not.
+**Consultation.** New text is eligible for a reply in private chats, when it mentions the bot or
+genuinely replies to it, or when the owner enables "Отвечать без упоминания" for that exact approved
+place. The existing interpretation call independently returns `needs_reply`: a question, supported
+request or greeting can receive one `smart` answer; plain readings and chatter can remain quiet.
+`is_question` still controls the missing event-intent fallback, not whether to answer. Short eligible
+greetings enter the same interpretation; whitespace and emoji alone remain quiet. Edits and failed
+interpretations never produce a consultation. There is no fixed greeting hint.
+
+Clear reported values are saved before answering; hypothetical or pending values stay outside the
+confirmed diary. Fixed safety alerts, including quick-scan alerts, always precede the consultation.
+When an answer is attempted, it handles uncertainty itself; no duplicate fixed clarification is sent,
+including when the answer fails. Otherwise the existing fixed clarification behavior remains.
+Pending Да/Нет confirmation follows the answer and is omitted when a value needs clarification.
+
+The answer uses the profile, stage week, context note, sourced thresholds, raw active readings from
+30 days and notes from 90 days, plus at most ten recent text messages from this bot/chat/topic. The
+profile's emergency phone is excluded from answer context. One `LLM_MAX_INPUT_CHARS` bound covers
+instructions, runtime and conversation: oldest readings, notes and conversation are omitted in that
+order, with coverage notices. Only if protected context plus the current turn alone exceeds the
+bound is current text explicitly truncated; an unusably small bound returns the normal failure
+notice without a model call. The model derives trends from raw data and acknowledges missing coverage.
+Profile/diary/conversation are untrusted background, never instructions or permission to write.
+
+Answers can discuss the supplied doctor's plan and help prepare summaries/questions without
+diagnosing. Provider answers are sent with "Не заменяю врача."; no application dose-advice replacement
+filter is applied. Provider failures use the existing short operational notices. Only successfully
+sent answer parts become outgoing conversation; alerts and other fixed texts do not.
 
 **Ask before recording.** Besides the values themselves, the model also classifies what the sender
 meant by each one. A value reported as a fact is recorded as described above. A value that only
@@ -173,7 +179,7 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 |---|---|---|
 | `/start` | anyone, private chat | What the bot does and its commands. |
 | `/week` | any approved member | Current stage week and day ("3 нед. 2 дн."), counted from the stage start date in the profile's time zone. |
-| `/profile` | any approved member | Stage start date, stage week, time zone, emergency phone, context note, thresholds summary. |
+| `/profile` | any approved member | Stage start date, stage week, time zone, emergency phone, context note, conditions, prescribed medicines, allergies, doctor plan/contacts and thresholds summary; long output is split. |
 | `/thresholds` | any approved member | Every safety rule with its values and source: "врач" (entered with `/threshold`) or "не подтверждено врачом" (published-guideline defaults). |
 | `/today` | any approved member | Today's records (the profile's local day), oldest first, each with its number (`#12`). |
 | `/notes` or `/notes <tag>` | any approved member | Last 10 notes across all dates, or up to 20 notes with the exact tag from the past 90 days, newest first; dates use the profile's time zone. |
@@ -183,6 +189,7 @@ the General bot — raise `LLM_CALLS_PER_DAY` accordingly. An answered question 
 | `/settz Area/City` | owners | Sets the profile's time zone (IANA id such as `Europe/Berlin`; default `UTC`). |
 | `/setphone <text>` | owners | Emergency number text for alerts (default "103 или 112"; up to 100 characters). |
 | `/setnote <text>` | owners | Context note for answering questions (up to 500 characters); `/setnote -` clears it. |
+| `/setprofile <field> <text>` | owners | Fields: `состояние`, `лекарства`, `аллергии`, `план`, `врач` (case-insensitive); up to 1,000 characters each. Exact `-` clears that field. Internal spaces/newlines are preserved; other fields and thresholds are unchanged. |
 | `/threshold <rule> <field> <value>` | owners | Sets one value of a rule (only the fields `/thresholds` shows for it); the rule's source becomes "врач". Enter the doctor's values. |
 | `/threshold <rule> default` | owners | Restores that rule's default values. |
 | `/version` | anyone | Running version. |
@@ -486,7 +493,7 @@ real bots and a real family.
   group's place → an ordinary message without a mention gets an answer; `/tokens` in the group then
   shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
 - With a Health assistant in an approved forum topic: `/settings` → find that bot and topic, tap
-  "Отвечать на вопросы без упоминания: выкл", then send a synthetic question without a mention in
+  "Отвечать без упоминания: выкл", then send a synthetic question without a mention in
   that topic. It gets an answer. An unrelated approved topic stays off. Tap the matching "вкл"
   control to stop passive answers; explicitly addressed questions still work.
 - `/newbot health`, turn off its Group Privacy, then in a private chat with it: `/thresholds` lists
@@ -509,10 +516,12 @@ real bots and a real family.
   "Сахар 2.5" → no second alert.
 - In a private chat with the health bot (stage start set, one reading posted): "какой сахар считается
   нормой натощак?" → an answer that can refer to the stage week or the thresholds, ending with "Не
-  заменяю врача."; "на сколько единиц увеличить дозу?" → "Я не даю советов по дозам лекарств. …"
-  followed by "Не заменяю врача.". In a tracking group with the Health question setting off, the
+  заменяю врача."; an eligible greeting can also receive a model reply. In a tracking group with the Health reply setting off, the
   same question without a mention gets no answer; with `@<health bot username>` it gets an answer.
   With the setting on for that place, the unmentioned question gets an answer too.
+- `/setprofile план synthetic plan`, then `/profile` shows it; `/setprofile план -` clears it.
+  A dangerous clear report plus consultation request gets its fixed alert before the answer.
+  An unclear value plus consultation request gets one model clarification, with no fixed duplicate.
 - In a private chat with the health bot: "сахар 10 - высокий?" → an answer, followed by "Записать
   глюкоза 10.0 ммоль/л?" with Да/Нет buttons; tapping Да → "Записано: …" and ✍ on the original
   question; tapping Да again → "Уже решено.". `/today` shows the value exactly once. "а если сахар
