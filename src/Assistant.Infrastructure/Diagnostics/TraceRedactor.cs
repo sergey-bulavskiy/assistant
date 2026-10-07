@@ -27,7 +27,8 @@ public sealed class TraceRedactor
         "extraction_failed", "invalid_extraction", "question_false", "answer_suppressed",
         "alert_precedence", "dose_advice_replaced", "pending_record", "delivery_failure",
         "delivery_timeout", "no_extraction_candidate", "fixed_alert", "events_recorded",
-        "clarification", "no_events", "undo", "normal"
+        "clarification", "no_events", "undo", "normal", "needs_reply_false", "not_eligible",
+        "edited_message", "context_budget_exceeded"
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new()

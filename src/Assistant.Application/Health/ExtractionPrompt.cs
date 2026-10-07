@@ -11,12 +11,12 @@ public static class ExtractionPrompt
 {
     public const int MinTextLength = 3;
 
-    /// <summary>Fewer than 3 characters after trimming, or no letter and no digit at all
-    /// (emoji-only), is not sent to the model.</summary>
-    public static bool ShouldExtract(string text)
+    /// <summary>Ineligible text needs 3 characters; eligible new text can be shorter. Text without
+    /// any letter or digit (including emoji only) never enters interpretation.</summary>
+    public static bool ShouldExtract(string text, bool eligible = false)
     {
         var trimmed = text.Trim();
-        if (trimmed.Length < MinTextLength)
+        if (!eligible && trimmed.Length < MinTextLength)
         {
             return false;
         }
@@ -32,11 +32,16 @@ public static class ExtractionPrompt
         return false;
     }
 
-    public static string BuildSystemPrompt(string instructions, DateTimeOffset utcNow, DateTimeOffset messageSentAt, string timeZoneId)
+    public static string BuildSystemPrompt(string instructions, DateTimeOffset utcNow, DateTimeOffset messageSentAt, string timeZoneId,
+        bool isPrivate = false, bool isAddressed = false, bool replyToAll = false, bool isEdit = false)
     {
         var zone = ProfileTimeZone.Find(timeZoneId);
         var builder = new StringBuilder(instructions.TrimEnd());
         builder.Append("\n\n## Runtime\n\n");
+        builder.Append("- Private chat: ").Append(isPrivate ? "true" : "false").Append('\n');
+        builder.Append("- Explicitly addressed or private: ").Append(isAddressed ? "true" : "false").Append('\n');
+        builder.Append("- This approved place permits replies without addressing: ").Append(replyToAll ? "true" : "false").Append('\n');
+        builder.Append("- Edited message: ").Append(isEdit ? "true" : "false").Append('\n');
         builder.Append("- Time zone: ").Append(ProfileTimeZone.DisplayId(timeZoneId)).Append('\n');
         builder.Append("- Current local date and time: ").Append(Describe(TimeZoneInfo.ConvertTime(utcNow, zone))).Append('\n');
         builder.Append("- The message was sent at local time: ").Append(Describe(TimeZoneInfo.ConvertTime(messageSentAt, zone))).Append('\n');

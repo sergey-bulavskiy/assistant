@@ -61,7 +61,7 @@ public static class ExtractionParser
             .Concat(typed.Where(e => e.Type is null || !HealthEventTypes.All.Contains(e.Type))
                 .Select(_ => new ExtractedUnclear { Fragment = null, Reason = UnclearReasons.Type }))
             .ToArray();
-        return new ExtractionOutput(events, unclear, isQuestion, dto.Undo ?? false);
+        return new ExtractionOutput(events, unclear, isQuestion, dto.Undo ?? false, dto.NeedsReply ?? false);
     }
 
     private sealed class OutputDto
@@ -70,6 +70,7 @@ public static class ExtractionParser
         public List<ExtractedUnclear?>? Unclear { get; set; }
         public bool? IsQuestion { get; set; }
         public bool? Undo { get; set; }
+        public bool? NeedsReply { get; set; }
     }
 
     /// <summary>Accepts 7.8, "7.8" and "7,8"; a string that is not a number becomes null.</summary>
