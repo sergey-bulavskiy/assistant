@@ -218,6 +218,8 @@ except Exception as exc:
 ```
 
 Direct SDK access bypasses the client's tool filter: call only the eight allowed tools above.
+An explicitly authorized document/photo run may additionally use the narrowly scoped
+synthetic upload extension below. This does not change the registered client's default filter.
 For smoke runs, discover senders from scoped test-chat history or targeted metadata through
 already permitted tools; never enumerate account chats/contacts or widen permissions.
 An initial bot list can become stale. Do not classify another human as a bot by name;
@@ -230,6 +232,53 @@ A private runner may exist beside the configured launcher; inspect its code, not
 Extend it privately if present, otherwise use the SDK; never commit local handles or credentials.
 Verify classification changes offline with synthetic messages before an authorized live run.
 Record case labels and generic outcomes as described in Evidence; keep detailed evidence private.
+
+### Synthetic document and photo upload extension
+
+Use this extension only with current-session authorization to upload synthetic files to the
+dedicated disposable app. Establish the same exclusive session ownership and private database,
+bot and profile binding proof required for Health inputs before either Health or Vet uploads.
+Keep the ordinary registered launcher and eight-tool filter unchanged. A separate private
+runner/launcher may expose `send_file` for this run only; do not enable `upload_file`, downloads,
+forwarding, albums, scheduled sends, account tools or broader file roots.
+
+Create a private fixture directory outside every repository containing only generated synthetic
+files. Freeze an exact manifest before connecting: each file's resolved path, SHA-256, byte size,
+type, dedicated destination and optional exact forum topic root. The enforcing runner must reject
+unlisted paths/destinations, symlinks/reparse points, changed hashes, file lists, scheduling and
+account overrides. Limit each fixture to 1,000,000 bytes and to UTF-8 `.txt`/`.md`, readable-text
+`.pdf`, or actual `.png`/`.jpg` bytes. Check content/type rather than trusting the suffix. Never
+upload a chat export, downloaded original, configuration, credential or existing personal file.
+
+The separate launcher's process-local settings are:
+
+```text
+TELEGRAM_EXPOSED_TOOLS=read-only+send_message,reply_to_message,press_inline_button,send_file
+TELEGRAM_ALLOWED_ROOTS=<absolute-private-fixture-directory>
+TELEGRAM_FILE_EXTENSIONS=send_file:.txt,.md,.pdf,.png,.jpg
+```
+
+Keep its chat allowlist restricted to verified dedicated destinations. Direct SDK callers must
+enforce precisely the original eight tools plus `send_file`, regardless of other read tools the
+server exposes. The pinned connector accepts one `file_path`, `caption` and optional `topic_id`;
+`topic_id` is also usable as a reply source. It infers photo versus document transport from the
+file. Verify the delivered media kind, exact source and routing before evaluating application
+behavior. It has no `force_document` argument; do not invent one or silently change file transport.
+
+Count every attempted upload and inline-button press in the same hard outward-attempt budget as
+text sends, before calling the tool, including failures. No new budget is created by switching
+tools or rerunning the script. Full 60-second positive windows, 30-second silence plus working
+controls, sender/source correlation and bounded history coverage still apply. The pinned
+`get_history` has no pagination cursor: if a bounded page cannot reach the previous boundary,
+mark the case inconclusive rather than claiming complete coverage.
+
+Read the entire current review before accepting an import; supply required synthetic date,
+year, time and unit context in the caption so a missing field does not require unbudgeted sends.
+Verify confirmed rows by exact synthetic source through the disposable operator helper.
+Health document removal uses `/del` in reply to the uploaded source, followed by `/docs` and
+private source-scoped absence proof. Never guess a document-delete command or use blanket undo.
+Restore any changed synthetic profile/settings in `finally`, close only owned connector children,
+verify their exit before releasing the session lock, and preserve saved account authorization.
 
 ## Execution
 
