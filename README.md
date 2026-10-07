@@ -538,6 +538,9 @@ the automated suite or CD gate. Follow the linked runbook for shared session own
 bounded runs, and required connector cleanup when multiple agents work in parallel.
 They include settings/topic isolation, restart observations and optional Health record/removal
 checks; Health inputs require proof of an isolated disposable database and dedicated bot/profile.
+Explicitly authorized document/photo checks can use the runbook's synthetic upload extension:
+one private fixture directory, exact file/destination manifests and the same bounded attempt
+budget. The ordinary connector keeps its eight-tool filter and file uploads disabled.
 
 Manual checklist, for after setup and after any release that changes bot behaviour. It creates
 real bots and a real family.
