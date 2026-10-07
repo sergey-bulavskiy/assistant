@@ -121,7 +121,7 @@ public sealed class TelegramUser : IAsyncDisposable
             var match = _received.Skip(since).FirstOrDefault(predicate);
             if (match is not null)
             {
-                throw new InvalidOperationException($"Unexpected message matching '{description}', message id {match.id}");
+                throw new InvalidOperationException($"Unexpected message matching '{description}'");
             }
         }
     }
@@ -135,7 +135,7 @@ public sealed class TelegramUser : IAsyncDisposable
             .Select(b => b.type)
             .OfType<InlineButtonTypeCallback>()
             .FirstOrDefault()
-            ?? throw new InvalidOperationException($"No button '{buttonLabel}' on message id {message.id}");
+            ?? throw new InvalidOperationException($"No button '{buttonLabel}'");
         try
         {
             await _client.Messages_GetBotCallbackAnswer(peer, message.id, callback.data);
