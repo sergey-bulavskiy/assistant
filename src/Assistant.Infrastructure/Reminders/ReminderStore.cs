@@ -13,6 +13,7 @@ namespace Assistant.Infrastructure.Reminders;
 
 public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, IClock clock) : IReminderStore
 {
+    private readonly Assistant.Infrastructure.Expectations.NonurgentRules _shared = new(db, family);
     private IQueryable<Reminder> Rows(ReminderScope s) => db.Set<Reminder>().Where(x =>
         x.FamilyId == s.FamilyId && x.BotDbId == s.BotDbId && x.BotId == s.BotId
         && x.Role == s.Role && x.ChatId == s.ChatId && x.TopicId == s.TopicId && x.ActorUserId == s.ActorUserId);
@@ -94,12 +95,12 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
         }
         var now = clock.UtcNow;
         if (request.DueAt.Offset != TimeSpan.Zero || request.DueAt <= now || request.DueAt > now.AddDays(366)) return null;
-        await db.Set<Reminder>().Where(x => x.FamilyId == s.FamilyId && x.BotDbId == s.BotDbId
+        var expired = await db.Set<Reminder>().Where(x => x.FamilyId == s.FamilyId && x.BotDbId == s.BotDbId
             && x.Status == "draft" && x.CreatedAt <= now.AddHours(-24))
-            .ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, "skipped").SetProperty(x => x.UpdatedAt, now), ct);
-        if (await Rows(s).CountAsync(x => x.Status == "draft" || x.Status == "active", ct) >= 20
-            || await db.Set<Reminder>().CountAsync(x => x.FamilyId == s.FamilyId && x.BotDbId == s.BotDbId
-                && (x.Status == "draft" || x.Status == "active"), ct) >= 200) return null;
+            .OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).Select(x => x.Id).Take(100).ToListAsync(ct);
+        await db.Set<Reminder>().Where(x => expired.Contains(x.Id)).ExecuteUpdateAsync(u =>
+            u.SetProperty(x => x.Status, "skipped").SetProperty(x => x.UpdatedAt, now), ct);
+        if (!await _shared.HasCapacityAsync(s, now, ct)) return null;
         var row = new Reminder { Id = Guid.NewGuid(), FamilyId = s.FamilyId, BotDbId = s.BotDbId,
             BotId = s.BotId, Role = s.Role, ChatId = s.ChatId, TopicId = s.TopicId, ChatType = s.ChatType,
             ActorUserId = s.ActorUserId, SourceMessageId = sourceMessageId, Text = request.Text,
@@ -159,7 +160,9 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
         }
         return began ? "cancelled_started" : "cancelled";
     }
-    public async Task<ReminderDispatch?> ClaimDueAsync(ReceivingBot bot, CancellationToken ct)
+    public Task<ReminderDispatch?> ClaimDueAsync(ReceivingBot bot, CancellationToken ct) => ClaimCoreAsync(bot, null, ct);
+    internal Task<ReminderDispatch?> ClaimSpecificAsync(ReceivingBot bot, Guid id, CancellationToken ct) => ClaimCoreAsync(bot, id, ct);
+    private async Task<ReminderDispatch?> ClaimCoreAsync(ReceivingBot bot, Guid? candidateId, CancellationToken ct)
     {
         if (bot.FamilyId is not { } familyId) return null;
         CheckFamily(familyId);
@@ -167,7 +170,8 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
         await LockAsync(familyId, bot.TelegramBotId, ct);
         var now = clock.UtcNow;
         var candidates = await db.Set<Reminder>().Where(x => x.FamilyId == familyId && x.BotDbId == bot.BotDbId
-            && x.BotId == bot.TelegramBotId && x.Role == bot.Role && x.Status == "active" && x.DueAt <= now)
+            && x.BotId == bot.TelegramBotId && x.Role == bot.Role && x.Status == "active" && x.DueAt <= now
+            && (candidateId == null || x.Id == candidateId))
             .OrderBy(x => x.DueAt).ThenBy(x => x.Id).Take(200).ToListAsync(ct);
         foreach (var row in candidates)
         {
@@ -184,9 +188,7 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
             }
             var preferences = await PreferencesAsync(familyId, row.ActorUserId, ct);
             if (ReminderTimePolicy.IsQuiet(now, preferences)) continue;
-            var day = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
-            if (await db.Set<ReminderAttempt>().CountAsync(x => x.FamilyId == familyId && x.Role == bot.Role
-                && x.StartedAt >= day && x.StartedAt < day.AddDays(1), ct) >= 10) continue;
+            if (!await _shared.HasBudgetAsync(familyId, bot.Role, now, ct)) continue;
             var attempt = new ReminderAttempt { Id = Guid.NewGuid(), ReminderId = row.Id, FamilyId = familyId,
                 Role = row.Role, OccurrenceDueAt = row.DueAt, StartedAt = now };
             db.Add(attempt); row.LastOutcome = "unknown"; row.LastAttemptAt = now;
@@ -230,11 +232,13 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(familyId, bot.TelegramBotId, ct);
         var now = clock.UtcNow; var old = now.AddDays(-60);
-        await db.Set<Reminder>().Where(x => x.FamilyId == familyId && x.BotDbId == bot.BotDbId && x.Status == "draft"
-            && x.CreatedAt <= now.AddHours(-24)).ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, "skipped")
+        var expiredDrafts = await db.Set<Reminder>().Where(x => x.FamilyId == familyId && x.BotDbId == bot.BotDbId && x.Status == "draft"
+            && x.CreatedAt <= now.AddHours(-24)).OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).Select(x => x.Id).Take(100).ToListAsync(ct);
+        await db.Set<Reminder>().Where(x => expiredDrafts.Contains(x.Id)).ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, "skipped")
                 .SetProperty(x => x.UpdatedAt, now), ct);
         var terminal = await db.Set<Reminder>().Where(x => x.FamilyId == familyId && x.BotDbId == bot.BotDbId
-            && x.Status != "draft" && x.Status != "active" && x.UpdatedAt <= old).OrderBy(x => x.Id).Select(x => x.Id).Take(100).ToListAsync(ct);
+            && x.Status != "draft" && x.Status != "active" && x.UpdatedAt <= old
+            && !db.Set<ReminderAttempt>().Any(a => a.ReminderId == x.Id)).OrderBy(x => x.Id).Select(x => x.Id).Take(100).ToListAsync(ct);
         await db.Set<Reminder>().Where(x => terminal.Contains(x.Id)).ExecuteDeleteAsync(ct);
         var attempts = await db.Set<ReminderAttempt>().Where(x => x.FamilyId == familyId && x.StartedAt <= old)
             .OrderBy(x => x.StartedAt).Select(x => x.Id).Take(100).ToListAsync(ct);

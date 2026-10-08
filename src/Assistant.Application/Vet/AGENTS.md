@@ -1,5 +1,12 @@
 # Vet text diary invariants
 
+- Shared reminder/expectation commands are intercepted before Vet interpretation. Expectations need
+  an existing named profile and remain independent of diary interpretation and clinical semantics.
+  Only active confirmed glucose/insulin facts in the exact profile/bot/place and inclusive saved
+  occurrence window count, including confirmed photo imports. Pending reviews and hypothetical facts
+  do not count; no unit/product/dose matching or treatment-compliance inference. Confirmed mutations
+  participate in Infrastructure's ordering gate; satisfied days never reopen after edits or deletion.
+
 - Keep Vet profile, events, validation and stores separate from Health clinical semantics. Reuse
   only neutral transport, addressing, gateway, splitting, typing and diagnostic contracts.
 - Admission precedes MessageStore offset persistence. Source transport/author/original timestamp

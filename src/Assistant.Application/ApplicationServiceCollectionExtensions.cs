@@ -16,6 +16,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<UpdateHandler>();
         services.AddScoped<Assistant.Application.Reminders.IReminderAssistant, Assistant.Application.Reminders.ReminderAssistant>();
+        services.AddScoped<Assistant.Application.Expectations.IExpectationAssistant, Assistant.Application.Expectations.ExpectationAssistant>();
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
         services.AddScoped<GeneralMemoryService>();
         services.AddScoped<IHealthAssistant, HealthAssistant>();
