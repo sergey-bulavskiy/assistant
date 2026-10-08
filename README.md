@@ -539,6 +539,8 @@ Empty `LLM_MODELS` keeps model access off. General replies and Health text extra
 gateway, with separate smart and fast chains. The Linux amd64 image includes pinned Codex CLI
 `0.160.1` at `/usr/local/bin/codex`; its private authentication volume is `codex-home`, mounted at
 `/home/app/.codex`. Packaging does not prove account access, disabled tools or extraction quality.
+Failed Codex calls log a fixed operational category (for example, `authentication` or
+`invalid-json`) without raw provider output or credentials.
 Local runs can set absolute `CODEX_CLI_PATH` and `CODEX_HOME`; the CLI must still be exactly the
 pinned native binary. Production compose uses the image paths and private auth volume.
 Confirm these before switching an existing deployment; changing the home deployment requires the

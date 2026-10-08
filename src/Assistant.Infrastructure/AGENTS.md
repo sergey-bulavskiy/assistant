@@ -306,6 +306,9 @@
   Failed final accounting refuses the answer. Uncertain dispatches become OutcomeUnknown, and
   reusing a key never dispatches again; another scope/model is refused. Guards create no attempt
   row. Legacy text keys remain null; there is no second photo-specific usage ledger.
+- Codex failures expose only `CodexCliProviderFailureException.Category`, normalized to a fixed
+  allowlist. The gateway logs that category and the exception type, never exception messages,
+  attached data or raw process output. Unknown categories become `process`.
 - Codex final output must agree with `--output-last-message`; only final answer, token usage and
   sanitized failure categories leave the adapter. `LLM_MAX_OUTPUT_TOKENS` is an instruction target
   for this pinned CLI, not a verified hard generation limit. Final text is rejected above
