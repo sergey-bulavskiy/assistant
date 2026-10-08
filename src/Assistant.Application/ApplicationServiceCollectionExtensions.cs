@@ -2,6 +2,7 @@ using Assistant.Application.Common;
 using Assistant.Application.Health;
 using Assistant.Application.Health.Documents;
 using Assistant.Application.Messages;
+using Assistant.Application.Memory;
 using Assistant.Application.Vet;
 using Assistant.Application.Vet.Photos;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<UpdateHandler>();
         services.AddScoped<IGeneralAssistant, GeneralAssistant>();
+        services.AddScoped<GeneralMemoryService>();
         services.AddScoped<IHealthAssistant, HealthAssistant>();
         services.AddScoped<HealthDocumentProcessor>();
         services.AddSingleton<HealthDocumentExecutionGate>();

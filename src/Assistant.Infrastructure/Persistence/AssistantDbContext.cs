@@ -33,6 +33,9 @@ public class AssistantDbContext : DbContext
 
     public DbSet<StoredMessage> Messages => Set<StoredMessage>();
 
+    public DbSet<Assistant.Domain.Memory.GeneralMemoryFact> GeneralMemoryFacts => Set<Assistant.Domain.Memory.GeneralMemoryFact>();
+    public DbSet<Assistant.Domain.Memory.GeneralMemoryState> GeneralMemoryStates => Set<Assistant.Domain.Memory.GeneralMemoryState>();
+
     public DbSet<ChatMigration> ChatMigrations => Set<ChatMigration>();
 
     public DbSet<Family> Families => Set<Family>();
@@ -95,6 +98,8 @@ public class AssistantDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AssistantDbContext).Assembly);
+        modelBuilder.Entity<Assistant.Domain.Memory.GeneralMemoryFact>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Memory.GeneralMemoryState>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
 
         // Family isolation (spec §4.1): a null CurrentFamily.FamilyId disables the filter entirely
         // (used by the manager bot's own scope and by design-time/migration tooling, where

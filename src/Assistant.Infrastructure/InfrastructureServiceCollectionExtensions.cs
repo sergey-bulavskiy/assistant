@@ -54,6 +54,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHostedService<TraceCleanupService>();
 
         services.AddScoped<IMessageStore, MessageStore>();
+        services.AddScoped<Assistant.Application.Memory.IGeneralMemoryStore, Assistant.Infrastructure.Memory.GeneralMemoryStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();
         services.AddScoped<IApprovalService, ApprovalService>();
         services.AddScoped<IFamilyOwnership, FamilyOwnership>();

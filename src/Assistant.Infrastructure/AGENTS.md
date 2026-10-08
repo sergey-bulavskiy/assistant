@@ -474,3 +474,20 @@
 - Bounded filename/MIME normalization must cut before a complete UTF-16 surrogate pair, retaining
   recognized filename suffixes. Npgsql encodes strings strictly; a dangling surrogate rejects an
   otherwise valid upload before its transport offset commits. Keep existing metadata column bounds.
+
+## General memory persistence (`Memory/`)
+
+- Facts and derived summaries are separate. Fact rows are explicit user commands, exact-place scoped,
+  family-tagged and retired with tombstones. Summaries never create or retire facts. Every store
+  operation rechecks CurrentFamily, active General bot, approved member and exact place; private
+  chat scope must match the requesting user.
+- One PostgreSQL advisory transaction lock keyed by Telegram bot ID serializes memory writes,
+  summary installation, General source-edit invalidation and context resets. Acquire it only inside
+  the DB transaction; never retain a lock/transaction across model or Telegram calls.
+- Summary preparation covers one bounded older window. Installation rechecks reset cutoff,
+  source generation, previous watermark and exact selected-source fingerprint. Source edits
+  increment generation and clear summaries covering that source in the message/offset transaction.
+  /new clears summary coverage but preserves explicit facts; search cannot cross the reset boundary.
+- NULLS NOT DISTINCT protects exact-place state uniqueness. Russian/simple expression GIN indexes
+  cover incoming text retrieval. No raw payload, retained image, private trace or other place enters
+  General memory context. Logs may contain fixed categories/types, never remembered text or queries.

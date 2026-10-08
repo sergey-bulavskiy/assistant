@@ -51,6 +51,18 @@ of just storing messages.
   below) — without them it replies "Ассистент пока не настроен." and every other bot keeps working
   normally.
 
+- General keeps a bounded, fallible summary of older conversation in the exact current chat/topic.
+  An addressed answer folds at most one older window through the configured subscription gateway;
+  unavailable or stale summary work falls back to recent context. Internal summary calls count in
+  /tokens and /usage. Source edits invalidate affected summaries.
+- /search <query> retrieves up to ten older incoming text messages after this place's last /new,
+  with dates and source references. Search uses Russian and simple lexical matching, without
+  embeddings or a provider call. It never searches another bot, chat or topic.
+- /remember <text> saves an explicit fact (up to 500 characters); /memory lists this place's saved
+  facts and their IDs; /forget <id> retires one. At most 50 active facts are allowed per place.
+  /new excludes prior conversation/search/summary but keeps these deliberately saved facts. Retiring
+  a fact removes it from the explicit memory section; it does not erase separate conversation mentions.
+
 **Health assistant** (a role bot created with `/newbot health`): a health tracking assistant for one
 household member. One health bot tracks exactly one person (its profile, created with
 published-guideline default thresholds on its first message). Turn off Group Privacy for it
@@ -682,6 +694,11 @@ real bots and a real family.
 - With a General assistant in an approved group: `/settings` → tap "Отвечать на все: выкл" on that
   group's place → an ordinary message without a mention gets an answer; `/tokens` in the group then
   shows one answered call. Tap "Отвечать на все: вкл" → plain messages are ignored again.
+- In a disposable General chat/topic, save an invented fact with `/remember`, verify `/memory`
+  and an ordinary answer can use it, then retire its displayed ID with `/forget`. Search an invented
+  older keyword; after `/new` it is no longer found, while a separately saved fact survives until
+  retired. Editing a summarized source invalidates affected derived memory. This checklist does
+  not claim live provider or Telegram verification.
 - With a Health assistant in an approved forum topic: `/settings` → find that bot and topic, tap
   "Отвечать без упоминания: выкл", then send a synthetic question without a mention in
   that topic. It gets an answer. An unrelated approved topic stays off. Tap the matching "вкл"
