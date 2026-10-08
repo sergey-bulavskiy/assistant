@@ -2,6 +2,7 @@ using System.Globalization;
 using Assistant.Application.Common;
 using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
+using Assistant.Application.Memory;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Messages;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,7 @@ public class GeneralAssistant : IGeneralAssistant
         "Привет! Я отвечаю на вопросы с помощью модели. В личных сообщениях отвечаю на всё; " +
         "в группах — только если обратиться по имени или ответить на моё сообщение " +
         "(владелец может включить ответы на все сообщения группы или темы в /settings бота-менеджера). " +
-        "/new — начать разговор заново. /model — выбрать модель. /tokens — расход токенов. /version — версия.";
+        "/new — начать разговор заново. /model — выбрать модель. /tokens — расход токенов. /version — версия. " + GeneralMemoryService.HelpText;
 
     private const string NewConversationText = "Начинаем новый разговор.";
 
@@ -31,6 +32,7 @@ public class GeneralAssistant : IGeneralAssistant
     private readonly BuildInfo _buildInfo;
     private readonly ILogger<GeneralAssistant> _logger;
     private readonly ITraceSession _trace;
+    private readonly GeneralMemoryService? _memory;
 
     /// <param name="config">Null when LLM is off or its config is invalid: every question then gets
     /// <see cref="NotConfiguredText"/> without touching settings, context or the gateway.</param>
@@ -43,7 +45,8 @@ public class GeneralAssistant : IGeneralAssistant
         IClock clock,
         BuildInfo buildInfo,
         ILogger<GeneralAssistant> logger,
-        ITraceSession? trace = null)
+        ITraceSession? trace = null,
+        GeneralMemoryService? memory = null)
     {
         _store = store;
         _gateway = gateway;
@@ -54,6 +57,7 @@ public class GeneralAssistant : IGeneralAssistant
         _buildInfo = buildInfo;
         _logger = logger;
         _trace = trace ?? NullTraceSession.Instance;
+        _memory = memory;
     }
 
     public async Task HandleAsync(
@@ -97,6 +101,16 @@ public class GeneralAssistant : IGeneralAssistant
     private async Task HandleCommandAsync(
         string command, ReceivingBot bot, ITelegramClient telegramClient, IncomingMessage message, long familyId, StoreResult storeResult, CancellationToken cancellationToken)
     {
+        if (_memory is not null)
+        {
+            var response = await _memory.CommandAsync(command, bot, message, storeResult.MessageDbId, cancellationToken);
+            if (response is not null)
+            {
+                await ReplyAsync(bot, telegramClient, message, response, cancellationToken);
+                return;
+            }
+        }
+
         switch (command)
         {
             case "start" when message.ChatType == "private":
@@ -238,6 +252,8 @@ public class GeneralAssistant : IGeneralAssistant
             return;
         }
 
+        var memory = _memory is null ? new GeneralMemorySnapshot([], null)
+            : await _memory.BeforeAnswerAsync(bot, message, storeResult.MessageDbId, cancellationToken);
         var chatSetting = await _chatSettings.GetAsync(familyId, bot.TelegramBotId, message.ChatId, message.TopicId, cancellationToken);
         var isGroup = message.ChatType != "private";
 
@@ -250,7 +266,7 @@ public class GeneralAssistant : IGeneralAssistant
             _config.MaxContextMessages,
             cancellationToken);
 
-        var llmMessages = ContextBuilder.Build(history, text, message.Username, isGroup, _config.MaxInputChars);
+        var llmMessages = GeneralMemoryContext.Build(history, text, message.Username, isGroup, _config.MaxInputChars, memory);
         var request = new LlmRequest(
             familyId, bot.TelegramBotId, LlmConfig.SmartTier, chatSetting.PreferredModel, BuildSystemPrompt(isGroup), llmMessages,
             ChatId: message.ChatId, TopicId: message.TopicId, TriggerMessageId: storeResult.MessageDbId);

@@ -66,6 +66,8 @@ public class MessageStore : IMessageStore
             ?? throw new InvalidOperationException($"bots row for telegram bot id {botId} not found; the bot must be registered before polling starts.");
 
         var now = _clock.UtcNow;
+        if (message?.IsEdit == true && BotRoles.IsGeneral(state.Role))
+            await _db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({botId})", cancellationToken);
 
         if (updateId <= state.LastUpdateId)
         {
@@ -115,6 +117,16 @@ public class MessageStore : IMessageStore
                 existing.Text = message.Text;
                 existing.EditedAt = message.EditedAt ?? now;
                 existing.Raw = message.RawJson;
+                if (BotRoles.IsGeneral(state.Role))
+                {
+                    await _db.GeneralMemoryStates.Where(x => x.FamilyId == state.FamilyId && x.BotId == botId
+                            && x.ChatId == existing.ChatId && x.TopicId == existing.TopicId && x.ResetCutoff < existing.Id)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.SourceVersion, x => x.SourceVersion + 1)
+                            .SetProperty(x => x.SummaryText, x => x.ThroughMessageId >= existing.Id ? "" : x.SummaryText)
+                            .SetProperty(x => x.SourceFingerprint, x => x.ThroughMessageId >= existing.Id ? "" : x.SourceFingerprint)
+                            .SetProperty(x => x.ThroughMessageId, x => x.ThroughMessageId >= existing.Id ? x.ResetCutoff : x.ThroughMessageId), cancellationToken);
+                }
                 await _db.SaveChangesAsync(cancellationToken);
                 messageDbId = existing.Id;
                 outcome = StoreOutcome.Updated;
