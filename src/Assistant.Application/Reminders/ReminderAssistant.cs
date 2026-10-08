@@ -17,10 +17,21 @@ public sealed class ReminderAssistant(IReminderStore store, IClock clock, ICurre
         + TimeSpan.FromMinutes(Math.Abs(minutes)).ToString(@"hh\:mm", CultureInfo.InvariantCulture);
     private static string Minute(int minute) => TimeOnly.FromTimeSpan(TimeSpan.FromMinutes(minute)).ToString("HH:mm", CultureInfo.InvariantCulture);
     public static string SettingsText(ReminderPreferences p) => $"Фиксированное смещение UTC{Offset(p.OffsetMinutes)}, без перехода на летнее время. Тихие часы {Minute(p.QuietStartMinute)}–{Minute(p.QuietEndMinute)}. Лимит: 10 начатых отправок за день UTC на роль всей семьи.";
-    public static string ItemText(ReminderItem r) => $"{r.Id:N}: {r.Text}\n{r.DueAt.ToOffset(TimeSpan.FromMinutes(r.OffsetMinutes)):yyyy-MM-dd HH:mm} UTC{Offset(r.OffsetMinutes)}"
+    private static string StatusText(string status) => status switch
+    {
+        "draft" => "ожидает сохранения", "active" => "запланировано", "sent" => "отправлено",
+        "cancelled" => "отменено", "skipped" => "пропущено", "unknown" => "результат отправки неизвестен",
+        _ => "состояние недоступно"
+    };
+    private static string OutcomeText(string? outcome) => outcome switch
+    {
+        null => "не начата", "sent" => "отправлено", "skipped" => "пропущено",
+        "unknown" => "результат неизвестен (могла не дойти; автоматически не повторяется)",
+        _ => "результат недоступен"
+    };
+    public static string ItemText(ReminderItem r) => $"{r.Text}\n{r.DueAt.ToOffset(TimeSpan.FromMinutes(r.OffsetMinutes)):yyyy-MM-dd HH:mm} UTC{Offset(r.OffsetMinutes)}"
         + (r.DailyMinute == null ? "; один раз" : "; ежедневно")
-        + $"; {r.Status}; последняя отправка: {r.LastOutcome ?? "не начата"}"
-        + (r.LastOutcome == "unknown" ? " (могла не дойти; автоматически не повторяется)" : "");
+        + $"; {StatusText(r.Status)}; последняя отправка: {OutcomeText(r.LastOutcome)}";
     public async Task<ReminderIntake?> AdmitAsync(ReceivingBot bot, IncomingMessage message, bool replyToAll, CancellationToken ct)
     {
         if (bot.FamilyId == null || bot.Role is not ("general" or "health" or "vet")

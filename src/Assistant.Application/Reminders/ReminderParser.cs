@@ -40,11 +40,11 @@ public static class ReminderParser
         }
         if (command == "remind") input = CommandParser.ParseArgs(text) ?? "";
         else if (input.StartsWith('/') || !LooksConversational(input)) return new(false, "none");
-        var relative = Match(input, @"^in (?<n>\d{1,6})(?<unit>[mhd])\s+(?<text>.+)$");
-        var russianRelative = Match(input, @"^напомни через (?<n>\d{1,6}) (?<unit>минут(?:у|ы)?|час(?:а|ов)?|д(?:ень|ня|ней))\s+(?<text>.+)$");
-        var absolute = Match(input, @"^at (?<date>\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\s+(?<text>.+)$");
-        var russianAbsolute = Match(input, @"^напомни (?<date>\d{2}\.\d{2}\.\d{4}) в (?<time>\d{2}:\d{2})\s+(?<text>.+)$");
-        var daily = Match(input, @"^(?:daily|напоминай каждый день в) (?<time>\d{2}:\d{2})\s+(?<text>.+)$");
+        var relative = Match(input, @"^in (?<n>[0-9]{1,6})(?<unit>[mhd])\s+(?<text>.+)$");
+        var russianRelative = Match(input, @"^напомни через (?<n>[0-9]{1,6}) (?<unit>минут(?:у|ы)?|час(?:а|ов)?|д(?:ень|ня|ней))\s+(?<text>.+)$");
+        var absolute = Match(input, @"^at (?<date>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2})\s+(?<text>.+)$");
+        var russianAbsolute = Match(input, @"^напомни (?<date>[0-9]{2}\.[0-9]{2}\.[0-9]{4}) в (?<time>[0-9]{2}:[0-9]{2})\s+(?<text>.+)$");
+        var daily = Match(input, @"^(?:daily|напоминай каждый день в) (?<time>[0-9]{2}:[0-9]{2})\s+(?<text>.+)$");
         DateTimeOffset due;
         int? dailyMinute = null;
         string task;
@@ -93,7 +93,7 @@ public static class ReminderParser
     public static bool TryOffset(string value, out int minutes)
     {
         minutes = 0;
-        var match = Match(value, @"^(?<sign>[+-])(?<hour>\d{2}):(?<minute>\d{2})$");
+        var match = Match(value, @"^(?<sign>[+-])(?<hour>[0-9]{2}):(?<minute>[0-9]{2})$");
         if (!match.Success) return false;
         var hour = int.Parse(match.Groups["hour"].Value, CultureInfo.InvariantCulture);
         var minute = int.Parse(match.Groups["minute"].Value, CultureInfo.InvariantCulture);

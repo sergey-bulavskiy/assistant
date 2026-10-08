@@ -379,18 +379,32 @@ public sealed class ReminderStoreTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task List_prioritizes_live_due_order_then_newest_history_without_cross_actor()
+    public async Task List_orders_live_due_and_id_ties_then_latest_terminal_and_caps_twenty()
     {
-        await SeedAsync(); var active = await ActiveAsync(); var history = await ActiveAsync(101);
-        var other = await ActiveAsync(102, Scope with { ActorUserId = 222 });
-        await using var db = Context(); var store = Store(db);
-        await store.CancelAsync(Scope, history.Id, default);
-        var listed = await store.ListAsync(Scope, default);
-        listed.Select(x => x.Id).ShouldBe([active.Id, history.Id]);
-        listed.Select(x => x.Status).ShouldBe(["active", "cancelled"]);
-        listed.ShouldNotContain(x => x.Id == other.Id);
+        await SeedAsync();
+        static Guid Id(int n)=>Guid.Parse($"10000000-0000-0000-0000-{n:D12}");
+        Reminder Row(int n,string status,DateTimeOffset due,DateTimeOffset updated,long actor=111)=>new()
+        {
+            Id=Id(n),FamilyId=11,BotDbId=22,BotId=999,Role="general",ChatId=Scope.ChatId,TopicId=7,
+            ChatType="supergroup",ActorUserId=actor,SourceMessageId=1000+n,Text=$"synthetic row {n}",
+            Status=status,DueAt=due,CreatedAt=Initial,UpdatedAt=updated
+        };
+        await using var db=Context();
+        db.AddRange(Row(1,"active",Initial.AddMinutes(20),Initial),Row(3,"active",Initial.AddMinutes(10),Initial),
+            Row(2,"active",Initial.AddMinutes(10),Initial),Row(4,"sent",Initial,Initial.AddHours(-1)),
+            Row(5,"cancelled",Initial,Initial.AddMinutes(-30)),Row(6,"active",Initial,Initial,222));
+        await db.SaveChangesAsync();
+        (await Store(db).ListAsync(Scope,default)).Select(x=>x.Id).ShouldBe([Id(2),Id(3),Id(1),Id(5),Id(4)]);
+        // Reverse insertions make a missing SQL ordering observable; expected IDs are literal contract order.
+        for(var i=19;i>=1;i--) db.Add(Row(100+i,"sent",Initial,Initial.AddMinutes(i)));
+        await db.SaveChangesAsync();
+        var listed=await Store(db).ListAsync(Scope,default);
+        listed.Count.ShouldBe(20);
+        listed.Select(x=>x.Id).ShouldBe([Id(2),Id(3),Id(1),Id(119),Id(118),Id(117),Id(116),Id(115),Id(114),Id(113),
+            Id(112),Id(111),Id(110),Id(109),Id(108),Id(107),Id(106),Id(105),Id(104),Id(103)]);
+        var oldest=Id(101);var nextOldest=Id(102);var otherActor=Id(6);
+        listed.ShouldNotContain(x=>x.Id==oldest||x.Id==nextOldest||x.Id==otherActor);
     }
-
     [Theory]
     [InlineData(199, true)]
     [InlineData(200, false)]
@@ -492,5 +506,37 @@ public sealed class ReminderStoreTests : IntegrationTestBase
         await Should.ThrowAsync<OperationCanceledException>(()=>Store(db).ClaimDueAsync(Bot,stop.Token));
         (await RowAsync(item.Id)).Status.ShouldBe("active");(await db.Set<ReminderAttempt>().CountAsync()).ShouldBe(0);
         (await Store(db).ClaimDueAsync(Bot,default))!.ReminderId.ShouldBe(item.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Completion_after_other_context_cancel_keeps_cancelled_state_and_records_sent_attempt(bool daily)
+    {
+        await SeedAsync();var item=await ActiveAsync(daily:daily?730:null);_clock.UtcNow=item.DueAt;
+        await using var claiming=Context();var original=Store(claiming);var dispatch=(await original.ClaimDueAsync(Bot,default))!;
+        await using(var cancelling=Context())
+            (await Store(cancelling).CancelAsync(Scope,item.Id,default)).ShouldBe("cancelled_started");
+        await original.CompleteAsync(Bot,dispatch,900,default);
+        var row=await RowAsync(item.Id);row.Status.ShouldBe("cancelled");row.LastOutcome.ShouldBe("sent");row.LastTelegramMessageId.ShouldBe(900);
+        await using var read=Context();var attempt=await read.Set<ReminderAttempt>().SingleAsync(x=>x.Id==dispatch.AttemptId);
+        attempt.Outcome.ShouldBe("sent");attempt.TelegramMessageId.ShouldBe(900);
+    }
+
+    [Fact]
+    public async Task Older_completion_cannot_overwrite_newer_daily_unknown_summary()
+    {
+        await SeedAsync();var item=await ActiveAsync(daily:730);_clock.UtcNow=item.DueAt;
+        await using var originalContext=Context();var original=Store(originalContext);
+        var older=(await original.ClaimDueAsync(Bot,default))!;
+        _clock.UtcNow=new DateTimeOffset(2026,1,3,12,10,0,TimeSpan.Zero);
+        ReminderDispatch newer;
+        await using(var nextContext=Context())newer=(await Store(nextContext).ClaimDueAsync(Bot,default))!;
+        await original.CompleteAsync(Bot,older,900,default);
+        var row=await RowAsync(item.Id);row.Status.ShouldBe("active");row.LastOutcome.ShouldBe("unknown");
+        row.LastAttemptAt.ShouldBe(new DateTimeOffset(2026,1,3,12,10,0,TimeSpan.Zero));row.LastTelegramMessageId.ShouldBeNull();
+        await using var read=Context();
+        (await read.Set<ReminderAttempt>().SingleAsync(x=>x.Id==older.AttemptId)).Outcome.ShouldBe("sent");
+        (await read.Set<ReminderAttempt>().SingleAsync(x=>x.Id==newer.AttemptId)).Outcome.ShouldBe("unknown");
     }
 }

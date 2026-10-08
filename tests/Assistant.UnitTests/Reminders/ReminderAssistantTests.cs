@@ -210,4 +210,15 @@ public sealed class ReminderAssistantTests
         var ex=await Should.ThrowAsync<ReminderPersistenceException>(()=>Sut().AdmitAsync(Bot,Message(),false,default));
         ex.Message.ShouldBe("Reminder persistence failed."); ex.InnerException.ShouldBeNull(); _store.PreviewBegan.ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("sent","sent","отправлено; последняя отправка: отправлено")]
+    [InlineData("skipped","skipped","пропущено; последняя отправка: пропущено")]
+    [InlineData("unknown","unknown","результат отправки неизвестен; последняя отправка: результат неизвестен (могла не дойти; автоматически не повторяется)")]
+    public void List_item_uses_Russian_outcomes_without_database_identifier(string status,string outcome,string expected)
+    {
+        var row=_store.Item with {Status=status,LastOutcome=outcome};
+        ReminderAssistant.ItemText(row).ShouldBe("synthetic task\n2026-01-02 12:10 UTC+00:00; один раз; "+expected);
+        ReminderAssistant.ItemText(row).ShouldNotContain(row.Id.ToString("N"));
+    }
 }

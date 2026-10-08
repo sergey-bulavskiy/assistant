@@ -208,7 +208,12 @@ public sealed class ReminderStore(AssistantDbContext db, ICurrentFamily family, 
             && x.BotDbId == bot.BotDbId && x.BotId == bot.TelegramBotId && x.Role == bot.Role, ct);
         var attempt = await db.Set<ReminderAttempt>().SingleOrDefaultAsync(x => x.Id == dispatch.AttemptId
             && x.ReminderId == dispatch.ReminderId && x.FamilyId == familyId, ct);
-        if (row == null || attempt == null || attempt.Outcome != "unknown") return;
+        if (row == null || attempt == null) return;
+        // Tracking queries reuse the claim's instances; refresh after acquiring the transaction locks.
+        await db.Entry(row).ReloadAsync(ct);
+        await db.Entry(attempt).ReloadAsync(ct);
+        if (db.Entry(row).State == EntityState.Detached || db.Entry(attempt).State == EntityState.Detached
+            || attempt.Outcome != "unknown") return;
         attempt.Outcome = "sent"; attempt.TelegramMessageId = telegramMessageId;
         if (row.LastAttemptAt == attempt.StartedAt)
         {
