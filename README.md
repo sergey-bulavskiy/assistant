@@ -378,6 +378,29 @@ environment switch, API fallback or model substitution; archive/status/diary ope
 available when image extraction is unavailable. The image request carries only source/input IDs,
 the selected image and its immutable caption, with tools disabled and no profile/history.
 
+## Reminders
+
+General, Health and Vet support durable reminders in the current approved chat/topic:
+
+- `/remind in 10m synthetic task`
+- `/remind at 2026-10-09T14:30 synthetic task`
+- `/remind daily 14:30 synthetic task`
+- `напомни через 10 минут synthetic task`
+- `напомни 09.10.2026 в 14:30 synthetic task`
+- `напоминай каждый день в 14:30 synthetic task`
+- `/reminders` lists your current-place reminders and recent outcomes with Cancel buttons.
+- `/reminder_settings +03:00 22:00 08:00` sets your fixed UTC offset and quiet hours.
+
+Creation shows a preview; Save schedules it, Cancel stops future occurrences. Defaults are
+UTC+00:00 and quiet 22:00–08:00. Fixed offsets do not adjust for daylight saving time. Schedule
+offset/time is frozen per reminder; current settings govern quiet hours. There is a family-wide
+limit of 10 dispatch attempts per role per UTC day. Drafts expire after 24h; Save rejects passed
+times. Jobs 24h late are skipped; daily jobs advance to the next future occurrence. Delivery with
+an unknown result is never automatically repeated; cancellation cannot recall a started send.
+Supported conversational forms work in private chat, when replying to the bot or in places with
+reply-to-all enabled. Other phrasing beginning with напомни/напоминай shows help. This slice
+excludes expected-event checks, medical schedule automation and arbitrary language interpretation.
+
 ## Privacy
 
 This project is designed to later handle personal and health data at runtime, in the database. **No
@@ -649,6 +672,11 @@ month (when budgets are configured) plus a per-bot/per-model call/token/cost bre
 family, covering both today and this calendar month.
 
 ## 8. Smoke test
+
+When the supervised smoke owner tests reminders in an isolated synthetic environment, verify
+create → preview → Save → `/reminders` → Cancel in one exact place. Test a short due reminder
+outside configured quiet hours and confirm one delivery. Unknown sends need separate controlled
+failure evidence; registry promotion alone proves neither reminder delivery nor home runtime.
 
 An automated smoke test drives real Telegram through one throwaway account: once the repository
 variable `SMOKE_ENABLED` is `true`, CD runs it on every merge to `main` and moves `latest` (what

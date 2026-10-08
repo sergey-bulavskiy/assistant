@@ -166,6 +166,25 @@
   never reconstruct content or infer switch-state periods or causes from missing traces. Exported timelines do
   not claim exhaustive callback/reaction capture or guaranteed 60-day coverage.
 
+## User reminders (`Reminders/`)
+
+- Reminder rows, preferences, attempts and settings receipts fail closed on unset CurrentFamily.
+  Recheck family, active bot/role, approved creator and exact chat/topic for each mutation; private
+  destinations require creator chat identity and no topic. Listing/cancellation are creator-only.
+- Every reminder mutation locks dedicated family advisory namespace 61008 first, then the existing
+  per-bot transaction lock. This serializes preferences and the family/role cap across actors and
+  bot IDs. Count all dispatched attempts, including unknown outcomes, against 10 per UTC day.
+- Preview dispatch is fenced before transport; Save requires the actual bound delivered preview
+  message. Due dispatch commits unique unknown attempt and future-only recurrence advancement
+  before Telegram send. No external network call runs under a database transaction. Never retry an
+  unknown send automatically, including after send succeeded but completion persistence failed.
+- The coordinator joins polling, reminder background loop and Vet photos under one cancellation
+  lifetime. Reuse its existing client; reminder ticks use fresh family scopes, at most five sends,
+  15-second send timeout and 30-second pass interval. Pre-offset reminder persistence failures
+  bypass poison-update skipping. Quiet hours use current preferences; recurrence offset is frozen.
+- Terminal rows and attempts are retained 60 days; clean old active-reminder attempts separately
+  while preserving the latest outcome on Reminder. Logs use fixed text and exception type only.
+
 ## Bot polling (`Bots/`)
 
 - Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,
