@@ -126,6 +126,56 @@ test family; every message is invented. Use separate bots from CD: one poller pe
    A hand-created role bot needs operator registration in the disposable database; creating
    it alone does not register it with this app.
 
+## Reuse machine-local smoke configuration
+
+Before asking for credentials or creating a new test database, check the private tools root
+`%LOCALAPPDATA%/assistant-tools/telegram-smoke` on the operator's Windows machine. Keep this
+root outside every repository. An operator may choose another private root; use its existing
+local guide and setup receipt to locate the configured resources. The public repo records only
+this discovery convention, never credential values, real identifiers or private receipts.
+
+- `telegram-client-app.credentials.clixml` stores the Telegram client application credentials
+  as a Windows DPAPI-protected PowerShell `PSCredential`: its username holds the API ID and
+  its password holds the API hash. Import it only in an authorized local process under the
+  Windows user and machine that saved it; never print the object or decrypted values.
+  This credential file does not replace the saved Telegram account authorization.
+- The existing private `.env` supplies the Telegram client API keys, saved session and dedicated
+  chat allowlist to the private launcher. Load only the expected Telegram keys; do not use it
+  as general application configuration or dump its contents. Reuse valid saved authorization;
+  do not request another login or revoke the session during cleanup.
+- `combined-disposable.env` holds the separate dedicated-bot and synthetic-fixture run
+  configuration. Load it only through the private runner that validates its expected keys.
+  It must not select household bots, profiles or databases. Its contents stay private.
+- `persistent-synthetic/` contains the isolated database's `README.private.md` guide,
+  `ownership.private.json` receipt and
+  `database.ps1` lifecycle helper. Consult the guide/receipt for the actual connection binding,
+  resource ownership and synthetic-only provenance; report only whether those checks passed.
+
+When those local helpers already exist, the lifecycle entrypoints are:
+
+```powershell
+$smokeToolsRoot = Join-Path $env:LOCALAPPDATA 'assistant-tools/telegram-smoke'
+& (Join-Path $smokeToolsRoot 'persistent-synthetic/database.ps1') -Action Status
+& (Join-Path $smokeToolsRoot 'persistent-synthetic/database.ps1') -Action Start
+# After stopping this run's disposable app and its owned database clients:
+& (Join-Path $smokeToolsRoot 'persistent-synthetic/database.ps1') -Action Stop
+```
+
+These are machine-local helpers, not scripts shipped by this repository. Their absence is a
+setup prerequisite, not a reason to fall back to production configuration. Start/Stop follow
+current-session authorization and resource ownership; Status does not authorize Telegram sends.
+The helper retains the external named Docker volume on Stop so synthetic fixtures survive
+container restarts. Do not delete that volume or initialize another database merely because
+its container is stopped. Reusing it still requires the private isolation proof below before
+any Health or Vet input: the dedicated app must be bound to this isolated database and every
+retained profile/source must be synthetic. Retention does not grant permission to remove
+unknown rows or bypass a case's fresh-baseline requirement. Use a fresh run-scoped synthetic
+family/profile or an explicitly authorized, recorded reset of the prior synthetic fixtures;
+never substitute a shared production database. Stop on unexpected data.
+
+Persisted setup is not evidence of a working live executor, configured dedicated bot tokens or
+completed coverage. Check those prerequisites separately and report blocked cases honestly.
+
 ## Agent runbook: connect and extend
 
 ### Live session ownership and bounded runs
