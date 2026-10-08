@@ -126,6 +126,24 @@ test family; every message is invented. Use separate bots from CD: one poller pe
    A hand-created role bot needs operator registration in the disposable database; creating
    it alone does not register it with this app.
 
+   Before ordinary mention, reply-to-all or passive-recording probes, the private operator
+   must verify `getMe.can_read_all_group_messages == true`, or verify that the dedicated bot
+   is an administrator in that exact group. If privacy was changed after joining, remove
+   and re-add the bot. A typed `@username` alone does not establish delivery to a
+   privacy-enabled non-admin bot. [Telegram documents targeted commands, replies and
+   via-bot messages as its supported privacy-mode paths](https://core.telegram.org/bots/faq#what-messages-will-my-bot-get).
+
+   When privacy remains enabled, a separately authorized minimal group control may send
+   `/version@<test-bot-username>` and then reply to that bot's exact version answer with a
+   synthetic arithmetic question. Freeze both inputs, the actual-answer dependency and the
+   shared attempt budget before sending; a failed version control blocks the question.
+   This tests command delivery and a model answer through the reply path, not ordinary
+   mentions or passive recording. Respect an owner's stricter reply deadline and report a
+   late answer as a latency failure; it cannot pass by extending the deadline. Keep sender,
+   source, whole-chat coverage, private isolation proof and cleanup requirements in force.
+   An empty application message table alone is insufficient to prove non-delivery: place
+   and user approval gates run before message storage.
+
 ## Agent runbook: connect and extend
 
 ### Live session ownership and bounded runs
