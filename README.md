@@ -542,7 +542,9 @@ gateway, with separate smart and fast chains. The Linux amd64 image includes pin
 Failed Codex calls log a fixed operational category (for example, `authentication` or
 `invalid-json`) without raw provider output or credentials.
 Local runs can set absolute `CODEX_CLI_PATH` and `CODEX_HOME`; the CLI must still be exactly the
-pinned native binary. Production compose uses the image paths and private auth volume.
+pinned native binary. `CODEX_HOME` must be writable for CLI initialization, even with ephemeral
+execution and a read-only sandbox; redirecting SQLite state alone is insufficient.
+Production compose uses the image paths and private auth volume.
 Confirm these before switching an existing deployment; changing the home deployment requires the
 owner's explicit approval.
 

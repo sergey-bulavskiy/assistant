@@ -290,7 +290,9 @@
 - `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
   must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and
   `CODEX_HOME` are optional absolute local paths; production defaults are `/usr/local/bin/codex`
-  and `/home/app/.codex`. Never read/log credential files or pass API credentials to CLI children.
+  and `/home/app/.codex`. The CLI home must allow runtime initialization writes, including
+  `installation_id`; neither ephemeral execution nor a writable `sqlite_home` removes that requirement.
+  Never read/log credential files or pass API credentials to CLI children.
 - Each Codex call uses a fresh temporary workspace, ephemeral execution, ignored user config/rules,
   replaced system/model instructions and a reduced pinned model catalog. Shell, MCP/plugin/app,
   web, collaboration and other unwanted capabilities must remain disabled. A read-only sandbox
