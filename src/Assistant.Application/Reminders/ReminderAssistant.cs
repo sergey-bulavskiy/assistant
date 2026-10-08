@@ -90,6 +90,8 @@ public sealed class ReminderAssistant(IReminderStore store, IClock clock, ICurre
             && !(message.IsEdit && stored.Outcome == StoreOutcome.Updated && intake.Kind == "invalid")) return;
         if (intake.Kind == "list")
         {
+            if (intake.Scope.Role is "health" or "vet")
+                await client.SendTextAsync(message.ChatId, message.TopicId, "Проверки наличия записей: /expectations. Общий лимит отправок с напоминаниями.", message.MessageId, ct);
             var items = await store.ListAsync(intake.Scope, ct);
             await client.SendTextAsync(message.ChatId, message.TopicId,
                 SettingsText(await store.GetPreferencesAsync(intake.Scope, ct)), message.MessageId, ct);

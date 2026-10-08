@@ -1,4 +1,4 @@
-﻿using Assistant.Application.Common;
+using Assistant.Application.Common;
 using Assistant.Application.Messages;
 using Assistant.Application.Reminders;
 using Assistant.Domain.Bots;
@@ -352,7 +352,7 @@ public sealed class ReminderStoreTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Cleanup_expires_drafts_protects_active_bounds_history_and_cascades_attempts()
+    public async Task Cleanup_expires_drafts_and_deletes_history_in_bounded_child_first_passes()
     {
         await SeedAsync(); var active = await ActiveAsync(); var draft = await DraftAsync(101);
         var oldIds = new List<Guid>();
@@ -372,10 +372,15 @@ public sealed class ReminderStoreTests : IntegrationTestBase
         }
         _clock.UtcNow = Initial.AddHours(24);
         await using var db = Context(); await Store(db).CleanupAsync(Bot, default);
-        (await db.Set<Reminder>().CountAsync(x => oldIds.Contains(x.Id))).ShouldBe(1);
+        (await db.Set<Reminder>().CountAsync(x => oldIds.Contains(x.Id))).ShouldBe(101);
         (await RowAsync(active.Id)).Status.ShouldBe("active");
         (await RowAsync(draft.Id)).Status.ShouldBe("skipped");
+        (await db.Set<ReminderAttempt>().CountAsync()).ShouldBe(1);
+        await Store(db).CleanupAsync(Bot, default);
+        (await db.Set<Reminder>().CountAsync(x => oldIds.Contains(x.Id))).ShouldBe(1);
         (await db.Set<ReminderAttempt>().CountAsync()).ShouldBe(0);
+        await Store(db).CleanupAsync(Bot, default);
+        (await db.Set<Reminder>().CountAsync(x => oldIds.Contains(x.Id))).ShouldBe(0);
     }
 
     [Fact]
