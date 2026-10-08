@@ -54,6 +54,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHostedService<TraceCleanupService>();
 
         services.AddScoped<IMessageStore, MessageStore>();
+        services.AddScoped<Assistant.Application.Reminders.IReminderStore, Assistant.Infrastructure.Reminders.ReminderStore>();
+        services.AddSingleton<Assistant.Infrastructure.Reminders.ReminderBackgroundLoop>();
         services.AddScoped<Assistant.Application.Memory.IGeneralMemoryStore, Assistant.Infrastructure.Memory.GeneralMemoryStore>();
         services.AddScoped<ICurrentFamily, CurrentFamily>();
         services.AddScoped<IApprovalService, ApprovalService>();
