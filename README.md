@@ -769,11 +769,13 @@ Credential-free [offline runner primitives](tests/Assistant.SmokeTests/TELEGRAM-
 preserve spent attempts and original deadlines between bounded batches; private integration
 and live validation remain separate. Direct user clients also require the connector's own
 credential-derived session lock to exclude automatically restarted connectors.
+
 For later local runs, the runbook's [machine-local configuration discovery](tests/Assistant.SmokeTests/TELEGRAM-MCP.md#reuse-machine-local-smoke-configuration)
 points to `%LOCALAPPDATA%/assistant-tools/telegram-smoke`: encrypted client credentials,
 saved authorization, separate private test-run configuration, and an isolated synthetic database
 whose external named volume survives Stop/Start. Consult its private setup guide and receipt
 before reusing it; credentials, identifiers and database contents stay outside repositories.
+
 
 They include settings/topic isolation, restart observations and optional Health record/removal
 checks; Health inputs require proof of an isolated disposable database and dedicated bot/profile.
