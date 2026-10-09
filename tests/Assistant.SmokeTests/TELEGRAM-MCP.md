@@ -302,6 +302,23 @@ bot answer and match that exact scoped active fact/source before use.
 Preserve the original failed harness receipt and append the unique source reconciliation;
 successful product persistence does not retroactively turn a failed observation into a pass.
 
+On Windows, private Python/PowerShell process pipes may default to a legacy code page while
+the database client expects UTF-8. A correct Cyrillic bot acknowledgement can therefore be
+followed by a failed source query. This is a harness observation failure, not proof that the
+application failed to save. Use explicit UTF-8 bytes for SQL stdin and captured stdout/stderr,
+decode strictly after privately preserving the raw receipt, and set `PGCLIENTENCODING=UTF8`
+for the actual `psql` child (including inside a Docker exec when used). Do not rely on console
+encoding or silently replace invalid characters. Python's [binary subprocess pipe API](https://docs.python.org/3/library/subprocess.html#subprocess.run)
+and PostgreSQL's [client encoding setting](https://www.postgresql.org/docs/current/libpq-envars.html)
+describe these controls.
+
+Before any Telegram send, run a bounded read-only Cyrillic round-trip through the exact
+private query adapter against the verified isolated database, for example
+`SELECT 'синтетическая проверка'::text;`, and assert the exact decoded result. No row write,
+production connection, chat read or credential output is needed. A failed preflight blocks
+sends. If encoding fails after a charged send, retain that failure and reconcile the existing
+unique source read-only; never resend a successful input to repair an observation.
+
 A private adapter can import the checked-out module without copying its source. Its receipt
 paths, credentials, source verification and cleanup callbacks remain private. For example,
 after both locks and isolation proof have been established:
