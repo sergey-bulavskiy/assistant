@@ -28,4 +28,12 @@ This repo is public; workflows run on code from anyone who opens a PR.
 - Keep `permissions:` minimal and explicit per workflow.
 - `ci.yml` builds with `-warnaserror` and runs all tests in Release; the local gate in the root
   `AGENTS.md` mirrors it — change both together.
+- Before Docker fixtures start, CI merges Google's documented Docker Hub cache mirror into the
+  disposable runner's existing daemon configuration, restarts that runner's Docker daemon and
+  preloads the canonical `pgvector/pgvector:pg17` test image. Do not apply this step to a developer
+  or home daemon. Keep fixture/Compose image references and Ryuk cleanup unchanged. The
+  [official cache documentation](https://docs.cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images)
+  requires daemon routing; a cache miss falls back to Docker Hub and can still be rate-limited.
+  This does not prove digest equivalence with an older local image or change image provenance,
+  and Docker Hub mirrors do not route the separate GHCR IntegreSQL image. No credentials are used.
 - Dependabot PRs: review and merge together with the owner, not automatically.
