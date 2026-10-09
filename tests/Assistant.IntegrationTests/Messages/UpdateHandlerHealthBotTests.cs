@@ -1,5 +1,6 @@
 using Assistant.Application.Common;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Assistant.Application.Health;
 using Assistant.Application.Llm;
 using Assistant.Application.Manager;
@@ -30,6 +31,71 @@ namespace Assistant.IntegrationTests.Messages;
 /// (scripted chat client).</summary>
 public class UpdateHandlerHealthBotTests : IntegrationTestBase
 {
+    [Fact]
+    public async Task Duplicate_dangerous_health_candidate_keeps_one_fact_and_one_source_linked_alert()
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        var root = JsonNode.Parse(LowGlucoseJson)!;
+        var candidates = (JsonArray)root["events"]!;
+        candidates.Add(candidates[0]!.DeepClone());
+        _chat.EnqueueResponse(root.ToJsonString());
+        var message = PrivateText(OwnerId, "synthetic measured glucose reading");
+        await HandleUpdateAsync(handler, bot, telegram, new(1, message));
+        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        var source = await Db.Messages.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(m => m.BotId == bot.TelegramBotId && m.TelegramMessageId == message.MessageId);
+        saved.SourceMessageId.ShouldBe(source.Id);
+        using var payload = JsonDocument.Parse(saved.Payload);
+        payload.RootElement.GetProperty("value").GetDecimal().ShouldBe(2.5m);
+        var alert = (await AlertRowsAsync()).ShouldHaveSingleItem();
+        alert.EventId.ShouldBe(saved.Id); alert.FamilyId.ShouldBe(bot.FamilyId!.Value);
+        telegram.SentMessages.ShouldHaveSingleItem().Text.ShouldBe(UrgentLow25);
+        (await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking().SingleAsync()).TriggerMessageId.ShouldBe(source.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exact_duplicate_health_candidates_save_once_but_distinct_times_and_sources_remain(bool distinctTimes)
+    {
+        var (handler, bot, telegram, _) = await SetupAsync();
+        var json = JsonSerializer.Serialize(new { events = new[]
+        {
+            new { type = "weight", intent = "record", day = 0, time = "09:30", kg = 64.5m },
+            new { type = "weight", intent = "record", day = 0, time = distinctTimes ? "09:31" : "09:30", kg = 64.5m }
+        }, is_question = false, needs_reply = false });
+        _chat.EnqueueResponse(json);
+        var message = PrivateText(OwnerId, "synthetic single weight reading");
+        var update = new IncomingUpdate(1, message);
+        await HandleUpdateAsync(handler, bot, telegram, update);
+        var source = await Db.Messages.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(m => m.BotId == bot.TelegramBotId && m.TelegramMessageId == message.MessageId);
+        var saved = await Db.Events.IgnoreQueryFilters().AsNoTracking().OrderBy(e => e.OccurredAt).ToArrayAsync();
+        saved.Length.ShouldBe(distinctTimes ? 2 : 1);
+        saved.Select(e => e.OccurredAt).ShouldBe(distinctTimes
+            ? new[] { DateTimeOffset.Parse("2030-02-07T09:30:00Z"), DateTimeOffset.Parse("2030-02-07T09:31:00Z") }
+            : new[] { DateTimeOffset.Parse("2030-02-07T09:30:00Z") });
+        foreach (var reading in saved)
+        {
+            reading.Type.ShouldBe("weight"); reading.FamilyId.ShouldBe(bot.FamilyId!.Value);
+            reading.BotId.ShouldBe(bot.TelegramBotId); reading.ChatId.ShouldBe(OwnerId);
+            reading.SourceMessageId.ShouldBe(source.Id); reading.RecordedByUserId.ShouldBe(OwnerId);
+            using var payload = JsonDocument.Parse(reading.Payload);
+            payload.RootElement.GetProperty("kg").GetDecimal().ShouldBe(64.5m);
+        }
+        var call = await Db.LlmCalls.IgnoreQueryFilters().AsNoTracking().SingleAsync();
+        call.TriggerMessageId.ShouldBe(source.Id);
+        call.Outcome.ShouldBe(Assistant.Domain.Llm.LlmCallOutcome.Ok);
+        await HandleUpdateAsync(handler, bot, telegram, update);
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(saved.Length);
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(1);
+        _chat.EnqueueResponse(json);
+        await HandleUpdateAsync(handler, bot, telegram, new(2, PrivateText(OwnerId, "synthetic independent weight reading")));
+        (await Db.Events.IgnoreQueryFilters().CountAsync()).ShouldBe(saved.Length * 2);
+        (await Db.Events.IgnoreQueryFilters().Select(e => e.SourceMessageId).Distinct().CountAsync()).ShouldBe(2);
+        (await Db.LlmCalls.IgnoreQueryFilters().CountAsync()).ShouldBe(2);
+    }
+
     [Fact]
     public async Task Consultation_reads_active_thirty_day_records_and_ninety_day_notes_without_soft_deleted_values()
     {

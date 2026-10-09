@@ -82,6 +82,10 @@ previously unused Health flags. General settings are unchanged. When enabled, th
 `needs_reply` decision permits an answer after safety checks; plain readings and chatter can remain
 silent. Direct mentions and replies work with the setting off. Recording and
 confirmation run regardless of this answer setting.
+Exact repeated parsed candidates within one interpretation are processed once. Distinct times,
+values, units, intent and ordered tags remain distinct; separately posted messages remain separate
+sources.
+
 The model turns the message into records (glucose, insulin, meal, symptom, weight, blood
 pressure, or a note); the bot validates them, saves them and sets ✍ on the message (👍 where ✍ is not allowed).
 The model can also record short observations as notes in the person's words, with one to five
