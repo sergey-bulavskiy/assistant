@@ -30,10 +30,16 @@ This repo is public; workflows run on code from anyone who opens a PR.
   `AGENTS.md` mirrors it — change both together.
 - Before Docker fixtures start, CI merges Google's documented Docker Hub cache mirror into the
   disposable runner's existing daemon configuration, restarts that runner's Docker daemon and
-  preloads the canonical `pgvector/pgvector:pg17` test image. Do not apply this step to a developer
+  preloads the locally verified immutable upstream test-image digest, then aliases those exact
+  bytes to the unchanged `pgvector/pgvector:pg17` fixture tag. Do not apply this step to a developer
   or home daemon. Keep fixture/Compose image references and Ryuk cleanup unchanged. The
   [official cache documentation](https://docs.cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images)
   requires daemon routing; a cache miss falls back to Docker Hub and can still be rate-limited.
-  This does not prove digest equivalence with an older local image or change image provenance,
-  and Docker Hub mirrors do not route the separate GHCR IntegreSQL image. No credentials are used.
+  If the bounded canonical digest pull fails, print only whitelisted daemon endpoint/error
+  categories and try that same immutable digest directly from the verified cache once. This
+  fallback is a narrowly verified recovery path, not a general supported mirror substitution or
+  availability guarantee; never fall back to a floating tag, new version or arbitrary registry.
+  Both failures stop CI before fixtures. Verify the fixture alias has the pulled image ID. Keep
+  raw daemon diagnostics in runner temporary storage, outside published artifacts/logs.
+  Docker Hub mirrors do not route the separate GHCR IntegreSQL image. No credentials are used.
 - Dependabot PRs: review and merge together with the owner, not automatically.

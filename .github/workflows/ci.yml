@@ -41,7 +41,33 @@ jobs:
           PY
           sudo systemctl restart docker
           docker info --format '{{json .RegistryConfig.Mirrors}}'
-          docker pull pgvector/pgvector:pg17
+          test_image="pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+          pulled_image="$test_image"
+          if ! timeout 120s docker pull "$test_image"; then
+            sudo journalctl -u docker --since '-2 minutes' --no-pager -n 80 > "$RUNNER_TEMP/test-image-daemon.private.log"
+            python3 - "$RUNNER_TEMP/test-image-daemon.private.log" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          hosts = ("mirror.gcr.io", "registry-1.docker.io", "index.docker.io")
+          reasons = ("toomanyrequests", "unauthorized", "denied", "manifest unknown",
+                     "connection refused", "timeout", "tls", "certificate", "next endpoint",
+                     "unexpected status", "400", "401", "403", "404", "429", "500", "502")
+          for line in Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines():
+              lower = line.lower()
+              endpoints = [host for host in hosts if host in lower]
+              categories = [reason for reason in reasons if reason in lower]
+              if endpoints or categories:
+                  print(json.dumps({"docker_endpoints": endpoints, "failure_categories": categories}))
+          PY
+            pulled_image="mirror.gcr.io/$test_image"
+            timeout 120s docker pull "$pulled_image"
+          fi
+          pulled_id=$(docker image inspect "$pulled_image" --format '{{.Id}}')
+          docker tag "$pulled_image" pgvector/pgvector:pg17
+          test "$(docker image inspect pgvector/pgvector:pg17 --format '{{.Id}}')" = "$pulled_id"
+          docker image inspect pgvector/pgvector:pg17 --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}'
 
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
