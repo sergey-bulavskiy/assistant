@@ -98,6 +98,16 @@ public class AssistantDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AssistantDbContext).Assembly);
+        modelBuilder.Entity<Assistant.Domain.Expectations.Expectation>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Expectations.ExpectationVersion>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Expectations.ExpectationDraft>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Expectations.ExpectationOccurrence>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Expectations.ExpectationAttempt>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Expectations.ExpectationReceipt>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Reminders.Reminder>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Reminders.ReminderPreference>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Reminders.ReminderAttempt>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
+        modelBuilder.Entity<Assistant.Domain.Reminders.ReminderSettingsReceipt>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<Assistant.Domain.Memory.GeneralMemoryFact>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
         modelBuilder.Entity<Assistant.Domain.Memory.GeneralMemoryState>().HasQueryFilter(x => _currentFamily.FamilyId != null && x.FamilyId == _currentFamily.FamilyId);
 

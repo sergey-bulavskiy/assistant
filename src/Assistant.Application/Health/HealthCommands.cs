@@ -9,7 +9,7 @@ using Assistant.Domain.Health;
 namespace Assistant.Application.Health;
 
 /// <summary>The health bot's deterministic `/…` commands: profile and thresholds (owner-only
-/// changes), /today, /notes, /week, /undo, /del, /version and /start. No model call.</summary>
+/// changes), /today, /notes, /docs, /week, /undo, /del, /version and /start. No model call.</summary>
 internal sealed class HealthCommands
 {
     private const int MaxPhoneLength = 100;

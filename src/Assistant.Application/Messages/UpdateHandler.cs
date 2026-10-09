@@ -31,6 +31,8 @@ public class UpdateHandler
     private readonly ITraceSession _trace;
     private readonly IVetAssistant? _vetAssistant;
     private readonly IVetPhotoAssistant? _vetPhotos;
+    private readonly Assistant.Application.Reminders.IReminderAssistant? _reminders;
+    private readonly Assistant.Application.Expectations.IExpectationAssistant? _expectations;
 
     public UpdateHandler(
         IMessageStore store,
@@ -45,7 +47,9 @@ public class UpdateHandler
         ILogger<UpdateHandler> logger,
         ITraceSession? trace = null,
         IVetAssistant? vetAssistant = null,
-        IVetPhotoAssistant? vetPhotos = null)
+        IVetPhotoAssistant? vetPhotos = null,
+        Assistant.Application.Reminders.IReminderAssistant? reminders = null,
+        Assistant.Application.Expectations.IExpectationAssistant? expectations = null)
     {
         _store = store;
         _approvals = approvals;
@@ -60,6 +64,8 @@ public class UpdateHandler
         _trace = trace ?? NullTraceSession.Instance;
         _vetAssistant = vetAssistant;
         _vetPhotos = vetPhotos;
+        _reminders = reminders;
+        _expectations = expectations;
     }
 
     public async Task HandleAsync(ReceivingBot bot, ITelegramClient telegramClient, IncomingUpdate update, CancellationToken cancellationToken)
@@ -152,6 +158,28 @@ public class UpdateHandler
                 await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, null, cancellationToken);
                 return;
             }
+        }
+
+        var expectation = _expectations == null ? null : await _expectations.AdmitAsync(bot, message, cancellationToken);
+        if (expectation != null)
+        {
+            StoreResult expectationStored;
+            try { expectationStored = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken); }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested && Assistant.Application.Reminders.ReminderPersistenceException.IsRetryable(ex))
+            { throw new Assistant.Application.Reminders.ReminderPersistenceException(); }
+            await _expectations!.HandleAsync(expectation, telegramClient, message, expectationStored, cancellationToken);
+            return;
+        }
+
+        var reminder = _reminders == null ? null : await _reminders.AdmitAsync(bot, message, replyToAll, cancellationToken);
+        if (reminder != null)
+        {
+            StoreResult reminderStored;
+            try { reminderStored = await _store.StoreAsync(bot.TelegramBotId, update.UpdateId, message, cancellationToken); }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested && Assistant.Application.Reminders.ReminderPersistenceException.IsRetryable(ex))
+            { throw new Assistant.Application.Reminders.ReminderPersistenceException(); }
+            await _reminders!.HandleAsync(reminder, telegramClient, message, reminderStored, cancellationToken);
+            return;
         }
 
         VetAdmittedSource? admitted = null;
@@ -258,7 +286,11 @@ public class UpdateHandler
     private async Task HandleCallbackAsync(
         ReceivingBot bot, ITelegramClient telegramClient, CallbackQueryInfo callback, long updateId, CancellationToken cancellationToken)
     {
-        if ((!BotRoles.IsHealth(bot.Role) && !BotRoles.IsVet(bot.Role)) || bot.FamilyId is not { } familyId
+        var expectationCallback = _expectations != null && (callback.Data.StartsWith("exp_save:", StringComparison.Ordinal)
+            || callback.Data.StartsWith("exp_cancel:", StringComparison.Ordinal));
+        var reminderCallback = _reminders != null && (callback.Data.StartsWith("rem_save:", StringComparison.Ordinal)
+            || callback.Data.StartsWith("rem_cancel:", StringComparison.Ordinal));
+        if ((!expectationCallback && !reminderCallback && !BotRoles.IsHealth(bot.Role) && !BotRoles.IsVet(bot.Role)) || bot.FamilyId is not { } familyId
             || BotRoles.IsVet(bot.Role) && (callback.MessageId <= 0 || callback.MessageChatId == 0
                 || callback.MessageChatType is not ("private" or "group" or "supergroup")))
         {
@@ -281,7 +313,11 @@ public class UpdateHandler
             Guid.NewGuid(), familyId, bot.TelegramBotId, callback.MessageChatId, callback.MessageTopicId,
             updateId, null, false, null, "callback", _buildInfo.Sha));
         telegramClient = TraceSafety.Wrap(_trace, telegramClient);
-        if (BotRoles.IsHealth(bot.Role))
+        if (expectationCallback)
+            await _expectations!.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+        else if (reminderCallback)
+            await _reminders!.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
+        else if (BotRoles.IsHealth(bot.Role))
             await _healthAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);
         else if (_vetAssistant is not null)
             await _vetAssistant.HandleCallbackAsync(bot, telegramClient, callback, cancellationToken);

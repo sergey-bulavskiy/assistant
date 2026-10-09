@@ -108,7 +108,7 @@ public sealed class CodexCliChatClient(IProcessRunner runner, CodexCliOptions se
         catch (OperationCanceledException) { throw; }
         catch (TimeoutException) { throw; }
         catch (ModelLimitReachedException) { throw; }
-        catch (ProviderFailureException) { throw; }
+        catch (CodexCliProviderFailureException) { throw; }
         catch (Exception) { throw Failure("process"); }
         finally
         {
@@ -236,9 +236,7 @@ public sealed class CodexCliChatClient(IProcessRunner runner, CodexCliOptions se
             : image.MediaType == "image/png" && bytes.Length >= 8
                 && bytes[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
     }
-    private static ProviderFailureException Failure(string category) => new(category);
-    private sealed class ProviderFailureException(string category)
-        : InvalidOperationException($"codex-cli unavailable ({category}).");
+    private static CodexCliProviderFailureException Failure(string category) => new(category);
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
         ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public object? GetService(Type serviceType, object? serviceKey = null) => null;

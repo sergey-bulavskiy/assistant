@@ -32,6 +32,7 @@ public class BotPollingCoordinator : IHostedService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<BotPollingCoordinator> _logger;
     private readonly IVetPhotoBackgroundLoop? _photoLoop;
+    private readonly Assistant.Infrastructure.Reminders.ReminderBackgroundLoop? _reminderLoop;
     private readonly ConcurrentDictionary<long, WorkerHandle> _workers = new();
     private readonly object _workerLifecycleSync = new();
     private readonly Dictionary<long, Task> _workerStops = new();
@@ -45,7 +46,8 @@ public class BotPollingCoordinator : IHostedService
         PollingWorkerSettings settings,
         PollingHealth pollingHealth,
         IClock clock,
-        ILoggerFactory loggerFactory, IVetPhotoBackgroundLoop? photoLoop = null)
+        ILoggerFactory loggerFactory, IVetPhotoBackgroundLoop? photoLoop = null,
+        Assistant.Infrastructure.Reminders.ReminderBackgroundLoop? reminderLoop = null)
     {
         _scopeFactory = scopeFactory;
         _clientFactory = clientFactory;
@@ -56,6 +58,7 @@ public class BotPollingCoordinator : IHostedService
         _clock = clock;
         _loggerFactory = loggerFactory;
         _photoLoop = photoLoop;
+        _reminderLoop = reminderLoop;
         _logger = loggerFactory.CreateLogger<BotPollingCoordinator>();
     }
 
@@ -166,22 +169,23 @@ public class BotPollingCoordinator : IHostedService
         var worker = new BotPollingWorker(receivingBot, client, allowedUpdates, _scopeFactory, _settings, _pollingHealth, _clock, logger, token);
 
         var cts = new CancellationTokenSource();
-        var runTask = Task.Run(() => BotRoles.IsVet(receivingBot.Role) && _photoLoop != null
-            ? RunVetPairAsync(worker, receivingBot, client, cts)
-            : worker.RunAsync(cts.Token), CancellationToken.None);
+        var runTask = Task.Run(() => RunBotTasksAsync(worker, receivingBot, client, cts), CancellationToken.None);
         return new WorkerHandle(runTask, cts);
     }
 
-    private async Task RunVetPairAsync(BotPollingWorker worker, ReceivingBot bot, ITelegramClient client,
+    private async Task RunBotTasksAsync(BotPollingWorker worker, ReceivingBot bot, ITelegramClient client,
         CancellationTokenSource lifetime)
     {
-        var polling = worker.RunAsync(lifetime.Token);
-        var photos = _photoLoop!.RunAsync(bot, client, lifetime.Token);
-        try { await Task.WhenAny(polling, photos); }
+        var tasks = new List<Task> { worker.RunAsync(lifetime.Token) };
+        if (BotRoles.IsVet(bot.Role) && _photoLoop != null)
+            tasks.Add(_photoLoop.RunAsync(bot, client, lifetime.Token));
+        if (bot.FamilyId != null && _reminderLoop != null && bot.Role is "general" or "health" or "vet")
+            tasks.Add(_reminderLoop.RunAsync(bot, client, lifetime.Token));
+        try { await Task.WhenAny(tasks); }
         finally
         {
             try { await lifetime.CancelAsync(); }
-            finally { await Task.WhenAll(polling, photos); }
+            finally { await Task.WhenAll(tasks); }
         }
     }
 

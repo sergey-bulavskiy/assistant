@@ -126,6 +126,24 @@ test family; every message is invented. Use separate bots from CD: one poller pe
    A hand-created role bot needs operator registration in the disposable database; creating
    it alone does not register it with this app.
 
+   Before ordinary mention, reply-to-all or passive-recording probes, the private operator
+   must verify `getMe.can_read_all_group_messages == true`, or verify that the dedicated bot
+   is an administrator in that exact group. If privacy was changed after joining, remove
+   and re-add the bot. A typed `@username` alone does not establish delivery to a
+   privacy-enabled non-admin bot. [Telegram documents targeted commands, replies and
+   via-bot messages as its supported privacy-mode paths](https://core.telegram.org/bots/faq#what-messages-will-my-bot-get).
+
+   When privacy remains enabled, a separately authorized minimal group control may send
+   `/version@<test-bot-username>` and then reply to that bot's exact version answer with a
+   synthetic arithmetic question. Freeze both inputs, the actual-answer dependency and the
+   shared attempt budget before sending; a failed version control blocks the question.
+   This tests command delivery and a model answer through the reply path, not ordinary
+   mentions or passive recording. Respect an owner's stricter reply deadline and report a
+   late answer as a latency failure; it cannot pass by extending the deadline. Keep sender,
+   source, whole-chat coverage, private isolation proof and cleanup requirements in force.
+   An empty application message table alone is insufficient to prove non-delivery: place
+   and user approval gates run before message storage.
+
 ## Reuse machine-local smoke configuration
 
 Before asking for credentials or creating a new test database, check the private tools root
@@ -170,7 +188,9 @@ its container is stopped. Reusing it still requires the private isolation proof 
 any Health or Vet input: the dedicated app must be bound to this isolated database and every
 retained profile/source must be synthetic. Retention does not grant permission to remove
 unknown rows or bypass a case's fresh-baseline requirement. Use a fresh run-scoped synthetic
-family/profile or an explicitly authorized, recorded reset of the prior synthetic fixtures;
+family/profile, an explicitly authorized and recorded reset of prior synthetic fixtures, or a
+verified retained synthetic baseline when the owner authorizes reuse. Preserve historical evidence,
+original deadlines and spent-attempt ledgers in every case;
 never substitute a shared production database. Stop on unexpected data.
 
 Persisted setup is not evidence of a working live executor, configured dedicated bot tokens or
@@ -228,6 +248,19 @@ uses the v1 API, so adapt against the installed version's official docs rather t
 Follow [Live session ownership and bounded runs](#live-session-ownership-and-bounded-runs)
 before starting or using any connector. A connection-check request authorizes initialization/tool
 listing, not reads or synthetic sends.
+
+For Codex-backed tests, verify writable CLI runtime storage before sending. A whole `CODEX_HOME`
+mounted read-only fails initialization even with ephemeral execution; a `sqlite_home` override
+alone is insufficient. If the approved authentication source must remain read-only, a private
+operator can use an empty writable runtime home with an `auth.json` symbolic link to that same
+read-only source. Prove this arrangement first with a synthetic fixture and networking disabled:
+runtime initialization must succeed and writes through the link must fail. Create only link
+metadata; never read, copy or print credential contents, change source permissions, or retry a
+rejected credential-copy action through another method. Authentication refresh can still fail
+against a read-only source; startup success does not prove model access. The pinned CLI source
+shows [installation state writes](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/core/src/installation_id.rs)
+and [file authentication storage](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/login/src/auth/storage.rs).
+
 For an authorized smoke run, send only invented messages within the user-approved test scope.
 Resolve the dedicated allowed chat from private local config in runtime memory only. The private launcher loads `.env`; never display it. A private helper
 may read only allowlist/handle values into memory without printing them or copying them here.

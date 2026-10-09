@@ -355,6 +355,440 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                     b.ToTable("debug_trace_events", (string)null);
                 });
 
+            modelBuilder.Entity("Assistant.Domain.Expectations.Expectation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("BotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<string>("ChatType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("chat_type");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("CurrentVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_version");
+
+                    b.Property<DateTimeOffset?>("DraftExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("draft_expires_at");
+
+                    b.Property<DateTimeOffset?>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("event_type");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<DateOnly?>("FirstDate")
+                        .HasColumnType("date")
+                        .HasColumnName("first_date");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<Guid?>("LastAttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_attempt_id");
+
+                    b.Property<DateOnly?>("LastDate")
+                        .HasColumnType("date")
+                        .HasColumnName("last_date");
+
+                    b.Property<string>("LastOutcome")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("last_outcome");
+
+                    b.Property<int?>("LastTelegramMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_telegram_message_id");
+
+                    b.Property<int>("LastVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_version");
+
+                    b.Property<DateOnly?>("NextDate")
+                        .HasColumnType("date")
+                        .HasColumnName("next_date");
+
+                    b.Property<int?>("NextVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("next_version");
+
+                    b.Property<int>("OffsetMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("offset_minutes");
+
+                    b.Property<long>("ProfileId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("profile_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("role");
+
+                    b.Property<DateOnly?>("SkippedFrom")
+                        .HasColumnType("date")
+                        .HasColumnName("skipped_from");
+
+                    b.Property<DateOnly?>("SkippedThrough")
+                        .HasColumnType("date")
+                        .HasColumnName("skipped_through");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_expectations");
+
+                    b.HasIndex("FamilyId", "BotDbId", "Status", "DueAt")
+                        .HasDatabaseName("ix_expectations_family_id_bot_db_id_status_due_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "ChatId", "TopicId", "ActorUserId")
+                        .HasDatabaseName("ix_expectations_family_id_bot_db_id_chat_id_topic_id_actor_use");
+
+                    b.HasIndex("FamilyId", "BotDbId", "BotId", "Role", "ChatId", "TopicId", "ProfileId", "EventType")
+                        .IsUnique()
+                        .HasDatabaseName("ix_expectations_family_id_bot_db_id_bot_id_role_chat_id_topic_")
+                        .HasFilter("status IN ('draft', 'active', 'paused')");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("FamilyId", "BotDbId", "BotId", "Role", "ChatId", "TopicId", "ProfileId", "EventType"), false);
+
+                    b.ToTable("expectations", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ExpectationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expectation_id");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<DateOnly>("LocalDate")
+                        .HasColumnType("date")
+                        .HasColumnName("local_date");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("outcome");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("role");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<int?>("TelegramMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("telegram_message_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_expectation_attempts");
+
+                    b.HasIndex("ExpectationId", "LocalDate")
+                        .IsUnique()
+                        .HasDatabaseName("ix_expectation_attempts_expectation_id_local_date");
+
+                    b.HasIndex("FamilyId", "Role", "StartedAt")
+                        .HasDatabaseName("ix_expectation_attempts_family_id_role_started_at");
+
+                    b.ToTable("expectation_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationDraft", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DeadlineMinute")
+                        .HasColumnType("integer")
+                        .HasColumnName("deadline_minute");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date")
+                        .HasColumnName("effective_from");
+
+                    b.Property<Guid>("ExpectationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expectation_id");
+
+                    b.Property<int>("ExpectedCurrentVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("expected_current_version");
+
+                    b.Property<long>("ExpectedRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("expected_revision");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<int>("GraceMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("grace_minutes");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("kind");
+
+                    b.Property<int?>("PreviewMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("preview_message_id");
+
+                    b.Property<bool>("PreviewStarted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("preview_started");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_expectation_drafts");
+
+                    b.HasIndex("ExpectationId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_expectation_drafts_expectation_id")
+                        .HasFilter("status = 'pending'");
+
+                    b.HasIndex("FamilyId", "UpdatedAt")
+                        .HasDatabaseName("ix_expectation_drafts_family_id_updated_at");
+
+                    b.ToTable("expectation_drafts", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationOccurrence", b =>
+                {
+                    b.Property<Guid>("ExpectationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expectation_id");
+
+                    b.Property<DateOnly>("LocalDate")
+                        .HasColumnType("date")
+                        .HasColumnName("local_date");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<long?>("MatchedEventId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("matched_event_id");
+
+                    b.Property<string>("MatchedEventKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("matched_event_kind");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("outcome");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.Property<DateTimeOffset>("WindowStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("window_start");
+
+                    b.HasKey("ExpectationId", "LocalDate")
+                        .HasName("pk_expectation_occurrences");
+
+                    b.HasIndex("ExpectationId", "Version")
+                        .HasDatabaseName("ix_expectation_occurrences_expectation_id_version");
+
+                    b.HasIndex("FamilyId", "UpdatedAt")
+                        .HasDatabaseName("ix_expectation_occurrences_family_id_updated_at");
+
+                    b.ToTable("expectation_occurrences", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationReceipt", b =>
+                {
+                    b.Property<long>("BotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<int>("SourceMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_message_id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("DraftId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("draft_id");
+
+                    b.Property<Guid?>("ExpectationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expectation_id");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<string>("Result")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("result");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.HasKey("BotId", "ChatId", "SourceMessageId")
+                        .HasName("pk_expectation_receipts");
+
+                    b.HasIndex("FamilyId", "CreatedAt")
+                        .HasDatabaseName("ix_expectation_receipts_family_id_created_at");
+
+                    b.ToTable("expectation_receipts", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationVersion", b =>
+                {
+                    b.Property<Guid>("ExpectationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("expectation_id");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer")
+                        .HasColumnName("number");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DeadlineMinute")
+                        .HasColumnType("integer")
+                        .HasColumnName("deadline_minute");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date")
+                        .HasColumnName("effective_from");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<int>("GraceMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("grace_minutes");
+
+                    b.HasKey("ExpectationId", "Number")
+                        .HasName("ak_expectation_version_expectation_id_number");
+
+                    b.ToTable("expectation_versions", (string)null);
+                });
+
             modelBuilder.Entity("Assistant.Domain.Families.Family", b =>
                 {
                     b.Property<long>("Id")
@@ -1610,6 +2044,237 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                     NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("BotId", "ChatId", "TopicId"), false);
 
                     b.ToTable("places", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Reminders.Reminder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<long>("BotDbId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_db_id");
+
+                    b.Property<long>("BotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<string>("ChatType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("chat_type");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int?>("DailyMinute")
+                        .HasColumnType("integer")
+                        .HasColumnName("daily_minute");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<string>("LastOutcome")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("last_outcome");
+
+                    b.Property<int?>("LastTelegramMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_telegram_message_id");
+
+                    b.Property<int>("OffsetMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("offset_minutes");
+
+                    b.Property<int?>("PreviewMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("preview_message_id");
+
+                    b.Property<bool>("PreviewStarted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("preview_started");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("role");
+
+                    b.Property<int>("SourceMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_message_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("text");
+
+                    b.Property<int?>("TopicId")
+                        .HasColumnType("integer")
+                        .HasColumnName("topic_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_reminders");
+
+                    b.HasIndex("BotId", "ChatId", "SourceMessageId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_reminders_bot_id_chat_id_source_message_id");
+
+                    b.HasIndex("FamilyId", "BotDbId", "Status", "DueAt")
+                        .HasDatabaseName("ix_reminders_family_id_bot_db_id_status_due_at");
+
+                    b.HasIndex("FamilyId", "BotDbId", "ChatId", "TopicId", "ActorUserId")
+                        .HasDatabaseName("ix_reminders_family_id_bot_db_id_chat_id_topic_id_actor_user_id");
+
+                    b.ToTable("reminders", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Reminders.ReminderAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<DateTimeOffset>("OccurrenceDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurrence_due_at");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("outcome");
+
+                    b.Property<Guid>("ReminderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reminder_id");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("role");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<int?>("TelegramMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("telegram_message_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_reminder_attempts");
+
+                    b.HasIndex("ReminderId", "OccurrenceDueAt")
+                        .IsUnique()
+                        .HasDatabaseName("ix_reminder_attempts_reminder_id_occurrence_due_at");
+
+                    b.HasIndex("FamilyId", "Role", "StartedAt")
+                        .HasDatabaseName("ix_reminder_attempts_family_id_role_started_at");
+
+                    b.ToTable("reminder_attempts", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Reminders.ReminderPreference", b =>
+                {
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<int>("OffsetMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("offset_minutes");
+
+                    b.Property<int>("QuietEndMinute")
+                        .HasColumnType("integer")
+                        .HasColumnName("quiet_end_minute");
+
+                    b.Property<int>("QuietStartMinute")
+                        .HasColumnType("integer")
+                        .HasColumnName("quiet_start_minute");
+
+                    b.HasKey("FamilyId", "ActorUserId")
+                        .HasName("pk_reminder_preferences");
+
+                    b.ToTable("reminder_preferences", (string)null);
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Reminders.ReminderSettingsReceipt", b =>
+                {
+                    b.Property<long>("BotId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("bot_id");
+
+                    b.Property<long>("ChatId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("chat_id");
+
+                    b.Property<int>("SourceMessageId")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_message_id");
+
+                    b.Property<long>("ActorUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("FamilyId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("family_id");
+
+                    b.HasKey("BotId", "ChatId", "SourceMessageId")
+                        .HasName("pk_reminder_settings_receipts");
+
+                    b.HasIndex("FamilyId", "CreatedAt")
+                        .HasDatabaseName("ix_reminder_settings_receipts_family_id_created_at");
+
+                    b.ToTable("reminder_settings_receipts", (string)null);
                 });
 
             modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoAttempt", b =>
@@ -3688,6 +4353,53 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_debug_trace_events_debug_traces_trace_id");
                 });
 
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationAttempt", b =>
+                {
+                    b.HasOne("Assistant.Domain.Expectations.ExpectationOccurrence", null)
+                        .WithMany()
+                        .HasForeignKey("ExpectationId", "LocalDate")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expectation_attempts_expectation_occurrences_expectation_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationDraft", b =>
+                {
+                    b.HasOne("Assistant.Domain.Expectations.Expectation", null)
+                        .WithMany()
+                        .HasForeignKey("ExpectationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expectation_drafts_expectations_expectation_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationOccurrence", b =>
+                {
+                    b.HasOne("Assistant.Domain.Expectations.Expectation", null)
+                        .WithMany()
+                        .HasForeignKey("ExpectationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expectation_occurrences_expectations_expectation_id");
+
+                    b.HasOne("Assistant.Domain.Expectations.ExpectationVersion", null)
+                        .WithMany()
+                        .HasForeignKey("ExpectationId", "Version")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expectation_occurrences_expectation_version_expectation_id_");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Expectations.ExpectationVersion", b =>
+                {
+                    b.HasOne("Assistant.Domain.Expectations.Expectation", null)
+                        .WithMany()
+                        .HasForeignKey("ExpectationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expectation_versions_expectations_expectation_id");
+                });
+
             modelBuilder.Entity("Assistant.Domain.Health.HealthDocument", b =>
                 {
                     b.HasOne("Assistant.Domain.Health.HealthDocumentAdmission", null)
@@ -3773,6 +4485,16 @@ namespace Assistant.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_safety_rules_health_profiles_profile_id");
+                });
+
+            modelBuilder.Entity("Assistant.Domain.Reminders.ReminderAttempt", b =>
+                {
+                    b.HasOne("Assistant.Domain.Reminders.Reminder", null)
+                        .WithMany()
+                        .HasForeignKey("ReminderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_reminder_attempts_reminder_reminder_id");
                 });
 
             modelBuilder.Entity("Assistant.Domain.Vet.Photos.VetPhotoAttempt", b =>

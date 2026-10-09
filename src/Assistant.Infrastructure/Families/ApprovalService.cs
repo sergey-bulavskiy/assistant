@@ -105,8 +105,11 @@ public class ApprovalService : IApprovalService
             return ApprovalResolution.AlreadyResolved;
         }
 
+        var authorityFamily = await _db.Bots.IgnoreQueryFilters().Where(x => x.Id == place.BotId)
+            .Select(x => x.FamilyId).SingleAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Authority mutation scope unavailable.");
         place.Status = approve ? PlaceStatus.Approved : PlaceStatus.Denied;
-        await _db.SaveChangesAsync(cancellationToken);
+        await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, authorityFamily, _clock.UtcNow, cancellationToken);
 
         await UpdateSentMessagesAsync(("place", placeId), approve ? "Одобрено ✅" : "Отклонено ❌", cancellationToken);
         return ApprovalResolution.Applied;
@@ -192,7 +195,7 @@ public class ApprovalService : IApprovalService
 
         member.Status = approve ? FamilyMemberStatus.Approved : FamilyMemberStatus.Denied;
         member.UpdatedAt = _clock.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, member.FamilyId, _clock.UtcNow, cancellationToken);
 
         await UpdateSentMessagesAsync(("member", familyMemberId), approve ? "Разрешено ✅" : "Отклонено ❌", cancellationToken);
         return ApprovalResolution.Applied;

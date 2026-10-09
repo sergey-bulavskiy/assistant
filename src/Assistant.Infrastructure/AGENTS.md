@@ -166,6 +166,50 @@
   never reconstruct content or infer switch-state periods or causes from missing traces. Exported timelines do
   not claim exhaustive callback/reaction capture or guaranteed 60-day coverage.
 
+## User reminders and expected events (`Reminders/`, `Expectations/`)
+
+- Reminder rows, preferences, attempts and settings receipts fail closed on unset CurrentFamily.
+  Recheck family, active bot/role, approved creator and exact chat/topic for each mutation; private
+  destinations require creator chat identity and no topic. Listing/cancellation are creator-only.
+- Every reminder mutation locks dedicated family advisory namespace 61008 first, then the existing
+  per-bot transaction lock. This serializes preferences and the family/role cap across actors and
+  bot IDs. `NonurgentRules` counts reminder and expectation attempts together, including unknown
+  outcomes, against 10 per family/role/UTC day. Combined admission is 20 per creator/exact bot/place
+  and 200 per internal bot; active reminders, unexpired drafts and active/paused expectations count.
+- Preview dispatch is fenced before transport; Save requires the actual bound delivered preview
+  message. Due dispatch commits unique unknown attempt and future-only recurrence advancement
+  before Telegram send. No external network call runs under a database transaction. Never retry an
+  unknown send automatically, including after send succeeded but completion persistence failed.
+- The coordinator joins polling, reminder background loop and Vet photos under one cancellation
+  lifetime. `ReminderBackgroundLoop` dispatches both kinds through `INonurgentDispatchStore`.
+  Reuse its existing client; each claim and completion uses a fresh family scope. Select at most
+  200 mixed candidates ordered by due time/kind/id, with at most five sends,
+  15-second send timeout and 30-second pass interval. Pre-offset reminder/expectation persistence failures
+  bypass poison-update skipping. Quiet hours use current preferences; recurrence offset is frozen.
+- Terminal rows and attempts are retained 60 days; clean old active-reminder attempts separately
+  while preserving the latest outcome on Reminder. Logs use fixed text and exception type only.
+- Expectations require an existing Health profile or named Vet profile; commands never create one.
+  Exact creator/place authority and delivered-preview binding apply to creation/edit/resume.
+  Duplicate identity is family/profile/bot/place/type across creators. Version changes begin tomorrow
+  in the frozen offset; drafts expire by that midnight or 24 hours. Pause/cancel invalidate drafts.
+- `ExpectedEventOrder` namespace 61009 orders confirmed Health/Vet mutations and expectation claims
+  by family/internal bot/role. Take it after existing Health source-row or Vet locks and never acquire
+  those locks afterward. Nonurgent claims take family 61008, Telegram bot lock, then 61009. Keep all
+  locks transaction-local; no model, parsing or Telegram call under them. Pending Health acceptance
+  reuses its transaction; document source deletion and Vet action mutations participate too.
+- Match only active confirmed exact family/profile/internal-or-Telegram bot/chat/nullable-topic/type
+  facts by inclusive UTC occurrence bounds derived from the saved local day. Do not match ingestion
+  time, pending proposals, unit/product/dose or another authorized place. Serialize query and durable
+  attempt commitment with fact mutations. `satisfied` is terminal even after fact deletion/edit.
+- Check only today's eligible day; summarize older skipped dates. Current quiet preferences/shared
+  cap defer until exclusive next-midnight expiry. Commit `dispatch-unknown` before transport, then
+  advance recurrence; completion may mark sent but cannot redispatch. Preserve latest outcomes and
+  skipped ranges while cleaning old child attempts/occurrences/drafts/versions before parent rows,
+  in bounded batches of 100. Protect current/scheduled live versions and linked evidence.
+- Manager approval/place revocation and bot removal use `AuthorityMutation` under family 61008 to
+  retire affected expectations/drafts and suppress pending occurrences atomically. Reapproval never
+  revives them. Bot disable stops its joined lifetime; claims recheck current authority and subject.
+
 ## Bot polling (`Bots/`)
 
 - Each bot (manager and every role bot) stores its own update offset in `bots.last_update_id`,
@@ -271,7 +315,9 @@
 - `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
   must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and
   `CODEX_HOME` are optional absolute local paths; production defaults are `/usr/local/bin/codex`
-  and `/home/app/.codex`. Never read/log credential files or pass API credentials to CLI children.
+  and `/home/app/.codex`. The CLI home must allow runtime initialization writes, including
+  `installation_id`; neither ephemeral execution nor a writable `sqlite_home` removes that requirement.
+  Never read/log credential files or pass API credentials to CLI children.
 - Each Codex call uses a fresh temporary workspace, ephemeral execution, ignored user config/rules,
   replaced system/model instructions and a reduced pinned model catalog. Shell, MCP/plugin/app,
   web, collaboration and other unwanted capabilities must remain disabled. A read-only sandbox
@@ -287,6 +333,9 @@
   Failed final accounting refuses the answer. Uncertain dispatches become OutcomeUnknown, and
   reusing a key never dispatches again; another scope/model is refused. Guards create no attempt
   row. Legacy text keys remain null; there is no second photo-specific usage ledger.
+- Codex failures expose only `CodexCliProviderFailureException.Category`, normalized to a fixed
+  allowlist. The gateway logs that category and the exception type, never exception messages,
+  attached data or raw process output. Unknown categories become `process`.
 - Codex final output must agree with `--output-last-message`; only final answer, token usage and
   sanitized failure categories leave the adapter. `LLM_MAX_OUTPUT_TOKENS` is an instruction target
   for this pinned CLI, not a verified hard generation limit. Final text is rejected above

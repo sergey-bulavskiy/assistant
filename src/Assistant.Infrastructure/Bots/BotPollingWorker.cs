@@ -122,6 +122,10 @@ public class BotPollingWorker
         {
             throw; // Valid document admission/transport has not crossed its durable offset boundary.
         }
+        catch (Assistant.Application.Reminders.ReminderPersistenceException)
+        {
+            throw; // Pre-offset reminder admission/callback persistence must never poison-skip.
+        }
         catch (VetIntakePersistenceException)
         {
             // Without admission/transport persistence there is no recoverable role input. Advancing

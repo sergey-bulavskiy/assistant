@@ -4,12 +4,14 @@ using Assistant.Application.Llm;
 using Assistant.Application.Telegram;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Llm;
+using Assistant.Infrastructure.Llm.CodexCli;
 using Assistant.Infrastructure.Persistence;
 using Assistant.IntegrationTests.Host;
 using Assistant.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Shouldly;
 
 namespace Assistant.IntegrationTests.Llm;
@@ -73,7 +75,8 @@ public class LlmGatewayTests : IntegrationTestBase
         Assistant.Application.Common.IClock? clock = null,
         AssistantDbContext? db = null,
         ConcurrentCallGate? concurrencyGate = null,
-        ITraceSession? trace = null) =>
+        ITraceSession? trace = null,
+        ILogger<LlmGateway>? logger = null) =>
         new(
             config,
             new ModelCatalog(config),
@@ -84,7 +87,7 @@ public class LlmGatewayTests : IntegrationTestBase
             concurrencyGate ?? new ConcurrentCallGate(config.MaxConcurrentCalls),
             new BudgetGuard(config, db ?? Db, clock ?? new SystemClock()),
             new NoopBudgetNoticeDispatcher(),
-            NullLogger<LlmGateway>.Instance,
+            logger ?? NullLogger<LlmGateway>.Instance,
             trace);
 
     private LlmGateway CreateGatewayWithProviders(
@@ -367,6 +370,46 @@ public class LlmGatewayTests : IntegrationTestBase
         rows.Count.ShouldBe(1);
         rows[0].Outcome.ShouldBe(LlmCallOutcome.Failed);
         rows[0].Model.ShouldBe(ModelA);
+    }
+
+    private sealed class CapturingFailureLogger : ILogger<LlmGateway>
+    {
+        public List<string> Entries { get; } = new();
+        public List<Exception?> Exceptions { get; } = new();
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(formatter(state, exception));
+            Exceptions.Add(exception);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProviderFailureLogsOnlyClosedCategoryAndNeverRawException(bool codexFailure)
+    {
+        var logger = new CapturingFailureLogger();
+        Exception failure = codexFailure
+            ? new CodexCliProviderFailureException("authentication")
+            : new InvalidOperationException("synthetic-secret provider message");
+        failure.Data["provider-output"] = "synthetic-secret process output";
+        var client = new ScriptedChatClient();
+        client.EnqueueException(failure);
+        var gateway = CreateGateway(MakeConfig(), client, logger: logger);
+
+        var result = await gateway.CompleteAsync(MakeRequest(familyId: 114), CancellationToken.None);
+
+        result.RefusalReason.ShouldBe(LlmRefusalReason.Failed);
+        var failedLogs = logger.Entries.Where(e => e.Contains("failed:", StringComparison.Ordinal)).ToArray();
+        failedLogs.Length.ShouldBe(1);
+        if (codexFailure) failedLogs[0].ShouldContain("authentication");
+        else failedLogs[0].ShouldNotContain("authentication");
+        string.Join("\n", logger.Entries).ShouldNotContain("synthetic-secret");
+        logger.Exceptions.ShouldAllBe(e => e == null);
+        (await Db.LlmCalls.CountAsync(c => c.FamilyId == 114 && c.Outcome == LlmCallOutcome.Failed)).ShouldBe(1);
     }
 
     [Fact]
