@@ -581,7 +581,14 @@ new `app` image every 5 minutes and restarts it automatically — Postgres is ne
 Bots created with `/newbot` have Telegram's Group Privacy mode on, so in groups they only see
 commands and replies, not ordinary messages. Before adding a role bot to a group: in BotFather,
 `/mybots` → the role bot → Bot Settings → **Group Privacy** → **Turn off**. (Making the bot a group
-admin also works.)
+admin also works.) If the bot was already in the group when you changed this setting,
+remove it and add it again for the change to take effect.
+
+An ordinary `@mention` is not a documented delivery path for a non-admin bot with privacy
+mode enabled: the application cannot answer a message Telegram never delivers. Targeted
+commands such as `/version@<bot-username>` and replies to that bot's actual messages work
+with privacy mode enabled. Those checks establish command and reply handling; they do not
+verify ordinary mentions or passive recording. See [Telegram's privacy-mode documentation](https://core.telegram.org/bots/features#privacy-mode).
 
 ## 6. Set up the General assistant (optional)
 
