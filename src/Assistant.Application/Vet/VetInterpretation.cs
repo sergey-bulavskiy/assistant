@@ -40,6 +40,7 @@ public static class VetInterpretationParser
             if (!root.TryGetProperty("events", out var events) || events.ValueKind != JsonValueKind.Array || events.GetArrayLength() > 20)
                 return null;
             var candidates = new List<VetCandidate>();
+            var seen = new HashSet<VetCandidate>();
             var ordinals = new Dictionary<string, int>();
             foreach (var e in events.EnumerateArray())
             {
@@ -47,12 +48,15 @@ public static class VetInterpretationParser
                 var type = String(e, "type", 30) ?? "unknown";
                 var intent = String(e, "intent", 30);
                 if (intent is not ("record" or "question_only" or "unsure")) intent = "unsure";
-                var ordinal = ordinals.GetValueOrDefault(type);
-                ordinals[type] = ordinal + 1;
-                candidates.Add(new(type, intent, NumberText(e, type == "insulin" ? "dose" : "value") ?? NumberText(e, "value"),
+                var candidate = new VetCandidate(type, intent, NumberText(e, type == "insulin" ? "dose" : "value") ?? NumberText(e, "value"),
                     String(e, "unit", 30), String(e, "product", 100), String(e, "date", 40),
                     String(e, "time", 40), String(e, "offset", 10), String(e, "time_evidence", 30) ?? "unknown",
-                    ordinal, Long(e, "event_id")));
+                    0, Long(e, "event_id"));
+                // Exact decoded semantics only; model ordinals cannot turn one fact into two candidates.
+                if (!seen.Add(candidate)) continue;
+                var ordinal = ordinals.GetValueOrDefault(type);
+                ordinals[type] = ordinal + 1;
+                candidates.Add(candidate with { Ordinal = ordinal });
             }
             var unclear = new List<string>();
             if (root.TryGetProperty("unclear", out var u))

@@ -1,4 +1,5 @@
-﻿using Assistant.Application.Vet;
+using System.Text.Json.Nodes;
+using Assistant.Application.Vet;
 using Assistant.Domain.Vet;
 
 namespace Assistant.UnitTests.Vet;
@@ -6,6 +7,48 @@ namespace Assistant.UnitTests.Vet;
 public sealed class VetInterpretationTests
 {
     private static readonly DateTimeOffset Sent = DateTimeOffset.Parse("2031-05-12T23:45:00Z");
+
+    [Fact]
+    public void Exact_duplicate_candidates_ignore_model_ordinals_without_gaps_or_reordering()
+    {
+        var parsed = VetInterpretationParser.Parse("""
+            {"events":[
+              {"type":"glucose","intent":"record","value":"6.4","time_evidence":"current","ordinal":0},
+              {"type":"insulin","intent":"record","dose":"0.3","time_evidence":"current"},
+              {"type":"glucose","intent":"record","value":"6.4","time_evidence":"current","ordinal":9},
+              {"type":"glucose","intent":"record","value":"6.8","time_evidence":"current"}
+            ]}
+            """).ShouldNotBeNull();
+        parsed.Events.Select(e => e.EventType).ShouldBe(new[] { "glucose", "insulin", "glucose" });
+        parsed.Events.Select(e => e.RawValue).ShouldBe(new[] { "6.4", "0.3", "6.8" });
+        parsed.Events.Select(e => e.Ordinal).ShouldBe(new[] { 0, 0, 1 });
+    }
+
+    [Theory]
+    [InlineData("type", "insulin")]
+    [InlineData("intent", "question_only")]
+    [InlineData("intent", "unsure")]
+    [InlineData("value", "6.40")]
+    [InlineData("unit", "mg/dL")]
+    [InlineData("product", "synthetic product")]
+    [InlineData("date", "2031-05-13")]
+    [InlineData("time", "09:01")]
+    [InlineData("offset", "+01:00")]
+    [InlineData("time_evidence", "unknown")]
+    [InlineData("event_id", "222")]
+    public void Different_decoded_semantic_fields_are_not_duplicate_candidates(string field, string value)
+    {
+        var first = JsonNode.Parse("""
+            {"type":"glucose","intent":"record","value":"6.4","unit":"mmol/L","product":null,
+             "date":"2031-05-12","time":"09:00","offset":"+00:00","time_evidence":"stated","event_id":111}
+            """)!;
+        var second = first.DeepClone();
+        second[field] = field == "event_id" ? JsonValue.Create(222L) : JsonValue.Create(value);
+        var root = new JsonObject { ["events"] = new JsonArray(first, second) };
+        var parsed = VetInterpretationParser.Parse(root.ToJsonString()).ShouldNotBeNull();
+        parsed.Events.Count.ShouldBe(2);
+        parsed.Events.Select(e => e.Ordinal).ShouldBe(field == "type" ? new[] { 0, 0 } : new[] { 0, 1 });
+    }
 
     [Theory]
     [InlineData("0.125", "0.125")]
