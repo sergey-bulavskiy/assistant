@@ -290,6 +290,11 @@ input. Honor the original reply deadline using observed local arrival latency, n
 server timestamp; read-only recovery must fit inside that same deadline. Expand only after this
 path passes, in small bounded batches. Acknowledgement and eventual document/photo completion
 are separate assertions; Vet acknowledgements are text, not required reactions.
+Capture a monotonic local arrival time at the incoming-event callback, before parsing or
+source queries. Measure from the actual outward dispatch boundary; record text replies and
+reaction metadata as separate arrivals. The later time when a polling loop inspects a cached
+answer is inspection timing and cannot prove first-arrival latency. Preserve an arrival
+receipt before interpreting it, and keep late replies classified against the original deadline.
 
 Telegram user-session message IDs in a bot DM can differ from the Bot API's ingress message
 IDs. Keep transport input/reply IDs for Telegram routing separate from persisted Bot API IDs
@@ -318,6 +323,15 @@ private query adapter against the verified isolated database, for example
 production connection, chat read or credential output is needed. A failed preflight blocks
 sends. If encoding fails after a charged send, retain that failure and reconcile the existing
 unique source read-only; never resend a successful input to repair an observation.
+
+UTF-8 query pipes do not repair input already corrupted while generating a Python script.
+PowerShell piping non-ASCII source through a legacy code page can alter the intended synthetic
+command before Python runs. Prefer editing and directly executing an explicit UTF-8 source
+file, or ASCII-only source with Unicode escapes. Before any send, compare the exact frozen
+outward payload with an independently retained authoritative UTF-8 synthetic fixture. Do not
+regenerate both expected and actual values through the same suspect pipe. A mismatch blocks
+sending before the attempt is charged; if discovered after dispatch, retain the failure and
+reconcile the existing source read-only without resending.
 
 A private adapter can import the checked-out module without copying its source. Its receipt
 paths, credentials, source verification and cleanup callbacks remain private. For example,
