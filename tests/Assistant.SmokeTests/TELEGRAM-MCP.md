@@ -307,6 +307,28 @@ bot answer and match that exact scoped active fact/source before use.
 Preserve the original failed harness receipt and append the unique source reconciliation;
 successful product persistence does not retroactively turn a failed observation into a pass.
 
+Use evidence appropriate to the handler rather than requiring the same persistence shape for
+all bots. Manager commands do not create ordinary conversation `messages` rows. Verify the
+exact scoped settings-card multiset or accounting result, the dedicated bot sender and durable
+bot cursor advancement; a missing conversation row is not a failure, and cursor advancement
+alone does not prove the result or a particular update ID.
+
+For Health source edits, the authenticated user's outward edit event is transport evidence,
+not a bot acknowledgement. Bind the edited canonical source/revision and wait for its terminal
+source-linked interpretation outcome and atomic record replacement. Changed message text or
+an advanced polling cursor alone cannot prove extraction, replacement or successful undo.
+Retain failed observations if cleanup interrupts an unfinished interpretation.
+
+Restore the verified synthetic business baseline while retaining legitimate revision, actor
+and updated-at audit metadata. Define those assertions separately before sending; do not erase
+audit history to make a byte-for-byte snapshot comparison pass. If an overly broad comparison
+fails, preserve that failure and append exact business-state reconciliation under the locks.
+
+On a release change, bind historical owned-resource receipts to their original immutable image
+pin and source proof. Separately prove the current runtime's new immutable image and baked SHA.
+An old stopped container is not expected to match the new release; neither a historical receipt
+nor its mismatch establishes which release is running now. Stop only positively owned resources.
+
 On Windows, private Python/PowerShell process pipes may default to a legacy code page while
 the database client expects UTF-8. A correct Cyrillic bot acknowledgement can therefore be
 followed by a failed source query. This is a harness observation failure, not proof that the
