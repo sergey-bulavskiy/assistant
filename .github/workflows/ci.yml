@@ -24,6 +24,59 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore -warnaserror
 
+      - name: Prepare test database image
+        run: |
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("/etc/docker/daemon.json")
+          config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+          mirrors = config.get("registry-mirrors", [])
+          if not isinstance(mirrors, list) or any(not isinstance(item, str) for item in mirrors):
+              raise ValueError("Docker registry-mirrors must be a list of strings")
+          mirror = "https://mirror.gcr.io"
+          config["registry-mirrors"] = [mirror] + [item for item in mirrors if item != mirror]
+          path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+          PY
+          sudo systemctl restart docker
+          docker info --format '{{json .RegistryConfig.Mirrors}}'
+          test_image="pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+          pulled_image="$test_image"
+          if ! timeout 120s docker pull "$test_image"; then
+            sudo journalctl -u docker --since '-2 minutes' --no-pager -n 80 > "$RUNNER_TEMP/test-image-daemon.private.log"
+            python3 - "$RUNNER_TEMP/test-image-daemon.private.log" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          hosts = ("mirror.gcr.io", "registry-1.docker.io", "index.docker.io")
+          reasons = ("toomanyrequests", "unauthorized", "denied", "manifest unknown",
+                     "connection refused", "timeout", "tls", "certificate", "next endpoint",
+                     "unexpected status", "400", "401", "403", "404", "429", "500", "502")
+          for line in Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines():
+              lower = line.lower()
+              endpoints = [host for host in hosts if host in lower]
+              categories = [reason for reason in reasons if reason in lower]
+              if endpoints or categories:
+                  print(json.dumps({"docker_endpoints": endpoints, "failure_categories": categories}))
+          PY
+            pulled_image="mirror.gcr.io/$test_image"
+            timeout 120s docker pull "$pulled_image"
+          fi
+          pulled_id=$(docker image inspect "$pulled_image" --format '{{.Id}}')
+          docker tag "$pulled_image" pgvector/pgvector:pg17
+          test "$(docker image inspect pgvector/pgvector:pg17 --format '{{.Id}}')" = "$pulled_id"
+          docker image inspect pgvector/pgvector:pg17 --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}'
+          # Testcontainers 4.15 pins its cleanup image; preserve that exact digest.
+          ryuk_image="testcontainers/ryuk:0.14.0@sha256:7c1a8a9a47c780ed0f983770a662f80deb115d95cce3e2daa3d12115b8cd28f0"
+          if ! timeout 120s docker pull "$ryuk_image"; then
+            ryuk_image="mirror.gcr.io/testcontainers/ryuk@sha256:7c1a8a9a47c780ed0f983770a662f80deb115d95cce3e2daa3d12115b8cd28f0"
+            timeout 120s docker pull "$ryuk_image"
+            echo "TESTCONTAINERS_RYUK_CONTAINER_IMAGE=$ryuk_image" >> "$GITHUB_ENV"
+          fi
+          docker image inspect "$ryuk_image" --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}'
+
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
 

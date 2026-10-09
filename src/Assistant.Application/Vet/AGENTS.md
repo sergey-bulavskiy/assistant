@@ -30,3 +30,9 @@
 - One fast interpretation supplies independent candidate intent and needs_reply. Clear saves,
   pending review and eligible answers are independent. One smart answer uses bounded raw confirmed
   facts with truthful coverage, never pending facts, diagnostic content or a retrieval loop.
+- Natural photo operations require bounded exact current-source prefix evidence beginning with
+  a supported explicit action. Historical photo handles supply targets, never action intent.
+  Missing, noncurrent or unsupported evidence, including requests starting with negation, cannot
+  dispatch photo operations; retain
+  raw interpretation and process independently clear current diary records. With no records,
+  request explicit current action. Typed commands and revisioned callbacks retain their fences.

@@ -329,6 +329,12 @@ separate from the member who saves, corrects or reverses it. Explicit actual ins
 caption follows the separate text diary once; planned doses do not record, and image reprocessing
 cannot repeat an administration or create a second caption glucose reading.
 
+Natural photo actions must begin the current message with an explicit supported request, such
+as “исправь это…” or “сохрани…”. Earlier photo discussions can identify the target but cannot
+repeat an action on a new reading. Missing or unsupported current action evidence leaves clear
+diary records independent; otherwise the bot asks for an explicit request. Commands and reviewed
+confirmation buttons keep their existing behavior.
+
 The same operations are available conversationally, using exact displayed batch/source/item/action
 handles when needed. Ambiguous references ask for a specific target. Shortcuts are:
 

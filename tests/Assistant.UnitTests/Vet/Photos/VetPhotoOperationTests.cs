@@ -16,6 +16,57 @@ public sealed class VetPhotoOperationTests
     private static string Json(object value) => JsonSerializer.Serialize(value);
 
     [Theory]
+    [InlineData(null, "Current glucose 6.4")]
+    [InlineData("", "Current glucose 6.4")]
+    [InlineData("Current glucose 6.4", "Current glucose 6.4")]
+    [InlineData("correct the photo", "Current glucose 6.4")]
+    [InlineData("correct the photo", "do not correct the photo")]
+    [InlineData("исправь фото", "не исправь фото")]
+    [InlineData("исправь фото", "если понадобится, исправь фото")]
+    [InlineData("change", "changed glucose 6.4")]
+    public void Missing_nonaction_history_negated_or_partial_word_evidence_cannot_ground_photo_action(string? evidence, string source)
+    {
+        var op = Parse(Json(new { kind = "correct", action_evidence = evidence }))!.PhotoOperation!;
+        VetPhotoActionEvidence.Matches(op, source).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("start", "start collecting photos")]
+    [InlineData("close", "done uploading")]
+    [InlineData("show", "show the older batch")]
+    [InlineData("review", "review the photo")]
+    [InlineData("correct", "исправь это на 6.4")]
+    [InlineData("exclude", "exclude this photo")]
+    [InlineData("save", "save the clear rows")]
+    [InlineData("cancel", "cancel the remainder")]
+    [InlineData("assumptions", "set the batch year")]
+    [InlineData("undo", "undo the import")]
+    [InlineData("reverse", "reverse the selected import")]
+    [InlineData("reprocess", "reprocess the originals")]
+    [InlineData("delete_originals", "delete the originals")]
+    [InlineData("accept", "yes")]
+    [InlineData("decline", "no")]
+    [InlineData("add_late", "add this late photo")]
+    [InlineData("duplicate", "consider this a duplicate")]
+    [InlineData("continue", "continue the next window")]
+    public void Explicit_current_action_can_use_contextual_targets_without_putting_ids_in_request(string kind, string evidence)
+    {
+        var op = Parse(Json(new { kind, action_evidence = evidence, source_ids = new[] { Source } }))!.PhotoOperation!;
+        VetPhotoActionEvidence.Matches(op, "  " + evidence + "; administered insulin 0.125 U").ShouldBeTrue();
+        op.SourceIds.Single().ShouldBe(Source);
+        op.ActionEvidence.ShouldBe(evidence);
+    }
+
+    [Fact]
+    public void Action_evidence_is_bounded_typed_and_does_not_authorize_another_operation_kind()
+    {
+        Parse(Json(new { kind = "correct", action_evidence = new string('x', 501) })).ShouldBeNull();
+        Parse(Json(new { kind = "correct", action_evidence = 123 })).ShouldBeNull();
+        var op = Parse(Json(new { kind = "delete_originals", action_evidence = "correct this photo" }))!.PhotoOperation!;
+        VetPhotoActionEvidence.Matches(op, "correct this photo").ShouldBeFalse();
+    }
+
+    [Theory]
     [InlineData("start")]
     [InlineData("close")]
     [InlineData("show")]
