@@ -164,6 +164,115 @@ Never kill another agent's client. Handoff explicitly: finish cleanup, close the
 verify exit, then release the lock. The next owner acquires it before startup; never release it
 while an owned connector remains active.
 
+The common run lock alone cannot exclude a connector automatically restarted by an MCP client.
+Direct Telethon clients must also acquire the connector's credential-derived exclusive session
+lock **before connecting**, using the same default lock directory and identity derivation.
+The pinned connector's `telegram_mcp.singleton` module supplies the API below; import that
+module only, since runtime/runner imports can initialize account clients and enumerate dialogs.
+Given an already constructed, unconnected `client`, while holding the common run lock:
+
+```python
+from telegram_mcp.singleton import SessionLock as ConnectorSessionLock, session_identity
+
+connector_lock = ConnectorSessionLock("default", session_identity(client))
+connector_lock.acquire(grace_seconds=5, shared=False)
+try:
+    await client.connect()
+    # Run only the authorized bounded diagnostic batch and join owned children.
+    # Complete owned-runtime cleanup while both locks are still held.
+finally:
+    await client.disconnect()
+    connector_lock.release()
+```
+
+The private adapter must retain ownership if child joining or disconnect fails; do not release
+either lock while its client is still connected. Never log, save or print `session_identity`
+or a serialized session. Passing the raw session directly hashes a different identity and does
+not exclude the connector. Do not override the lock directory, delete lock files, use shared
+mode or terminate an automatically restarted unrelated connector to bypass a busy session.
+Check the dedicated private allowlist before connecting or sending. Prefer incoming-message
+events and targeted resolution of a known dedicated bot username/entity. A saved StringSession
+may lack a group's access hash; do not warm or list all account dialogs to recover it. Obtain
+the dedicated group entity through an authorized targeted lookup, or use an already authorized
+dedicated bot DM and report group coverage separately.
+
+### Transferable offline runner primitives
+
+[`supervised_run.py`](supervised_run.py) supplies small standard-library primitives for private
+adapters, with synthetic offline regressions in CI. It does not connect, send, acquire the
+connector's credential-derived lock, prove database isolation or implement a complete runner.
+Integration into a private adapter must be inspected and separately validated; tests of these
+primitives alone are not evidence that a live executor uses them.
+
+- Acquire `SessionLock` at the shared private **run** lock path before creating any ledger or
+  connector. Create the ledger once with `Ledger.create`; an existing file is never replaced.
+  Keep all ledger, lock and receipt paths distinct and outside repositories.
+- Each `Ledger.spend` durably records an unknown charged attempt before outward dispatch.
+  Resolve it only from exact source-linked input/reply and application evidence. Unknown or
+  failed attempts block new sends; recovery is read-only. Failed/ambiguous sends are not resent.
+- Resume using the previously recorded digest and one or two unique unspent case labels.
+  The cumulative passed source/cleanup evidence, attempt cap and original absolute deadline
+  stay unchanged. An expired run cannot be renewed. The five-second cleanup reserve is part
+  of the original deadline. This primitive deliberately requires prior cleanup proof before
+  every additional spend; adapters must not substitute an unverified boolean for real cleanup.
+- One supervisor owns `Cleanup`: join children first, then stop only owned runtime resources
+  and restore verified synthetic changes once. Workers never also invoke cleanup. A failed join
+  prevents resource cleanup; keep both locks until owned client/children exit is verified.
+- Save exact bounded raw tool receipts with `capture_then_parse` before parsing, even on error;
+  keep them private. Classify typed FloodWait separately from malformed payloads. Prefer events;
+  if history is needed, every destination shares one `HistoryCadence` with at least three
+  seconds between reads, including recovery. Respect FloodWait beyond this minimum cadence.
+
+Start with a targeted `/version` then reply to its actual answer with one synthetic arithmetic
+input. Inspect persisted inbound source and source-linked LLM outcome immediately after each
+input. Honor the original reply deadline using observed local arrival latency, not Telegram's
+server timestamp; read-only recovery must fit inside that same deadline. Expand only after this
+path passes, in small bounded batches. Acknowledgement and eventual document/photo completion
+are separate assertions; Vet acknowledgements are text, not required reactions.
+
+Telegram user-session message IDs in a bot DM can differ from the Bot API's ingress message
+IDs. Keep transport input/reply IDs for Telegram routing separate from persisted Bot API IDs
+and internal `messages.id` for database/LLM linkage. Do not assume the equal-ID behavior observed
+in a group holds in DMs. Bind a source privately using one unique complete synthetic input,
+approved actor/family/bot/exact chat/topic and matching posted-time evidence; require exactly
+one persisted source. Missing or ambiguous binding is inconclusive, not permission to guess,
+query unrelated conversations or resend. A dynamic `/forget` target must come from the actual
+bot answer and match that exact scoped active fact/source before use.
+Preserve the original failed harness receipt and append the unique source reconciliation;
+successful product persistence does not retroactively turn a failed observation into a pass.
+
+A private adapter can import the checked-out module without copying its source. Its receipt
+paths, credentials, source verification and cleanup callbacks remain private. For example,
+after both locks and isolation proof have been established:
+
+```python
+from supervised_run import Ledger, Cleanup, capture_then_parse
+
+ledger = Ledger(private_ledger_path, held_run_lock)
+labels = ledger.resume(previous_checkpoint_digest, ["next-synthetic-case"])
+ledger.spend(labels[0])  # Durable charge must precede the adapter's send.
+raw = await adapter.send_and_observe(labels[0])
+result = capture_then_parse(private_receipt_path, raw, adapter.parse)
+# Adapter proves canonical source, answer, LLM outcome and synthetic cleanup.
+source = await adapter.verify_source_and_cleanup(result)
+ledger.resolve(labels[0], "pass", source, cleaned=True)
+# Only the supervisor, while both locks remain held:
+Cleanup().run(adapter.join_children, adapter.stop_owned_runtime_and_restore)
+```
+
+`adapter` and the private path/checkpoint/lock variables above are application-specific contracts,
+not shipped APIs. Keep one `Cleanup` instance per run, not one per worker or retry. Run blocking
+callbacks outside the event loop where necessary; they must actually join/verify owned processes.
+Every failure remains charged/unknown until verified; the example does not authorize blind
+retry, arbitrary passing evidence or a newly created deadline. Use `Ledger.create` only once
+for a genuinely new owner-authorized run under the held common lock.
+
+Run the offline tests without Telegram or credentials:
+
+```powershell
+python -B -m unittest discover -s tests/Assistant.SmokeTests -p test_supervised_run.py -v
+```
+
 Set a hard overall send budget and timeout before each run. Defaults are at most 20 attempted
 sends and 15 minutes; stricter user limits take precedence. Count every attempted send, including
 failed attempts and reruns, and never reset the cap to evade it. Permit at most two retries per

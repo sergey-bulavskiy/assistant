@@ -765,6 +765,10 @@ Optional [supervised local Telegram MCP checks](tests/Assistant.SmokeTests/TELEG
 use an existing account with dedicated test bots/chats and synthetic messages; they do not change
 the automated suite or CD gate. Follow the linked runbook for shared session ownership,
 bounded runs, and required connector cleanup when multiple agents work in parallel.
+Credential-free [offline runner primitives](tests/Assistant.SmokeTests/TELEGRAM-MCP.md#transferable-offline-runner-primitives)
+preserve spent attempts and original deadlines between bounded batches; private integration
+and live validation remain separate. Direct user clients also require the connector's own
+credential-derived session lock to exclude automatically restarted connectors.
 They include settings/topic isolation, restart observations and optional Health record/removal
 checks; Health inputs require proof of an isolated disposable database and dedicated bot/profile.
 Explicitly authorized document/photo checks can use the runbook's synthetic upload extension:

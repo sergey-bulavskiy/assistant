@@ -94,6 +94,11 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 
 ## Smoke test (`Assistant.SmokeTests`)
 
+- The credential-free supervised-run primitives have focused offline Python standard-library
+  regressions: `python -B -m unittest discover -s tests/Assistant.SmokeTests -p test_supervised_run.py -v`.
+  Run them when editing `supervised_run.py`; CI runs them separately from the .NET suite.
+  They do not connect to Telegram or certify a private adapter's integration.
+
 - Opt-in: every test uses `[SmokeFact]`, skipped unless `SMOKE=1`. Never remove that gate: a plain
   `dotnet test` must not start containers or log in to Telegram. Run it with
   `SMOKE=1 dotnet test tests/Assistant.SmokeTests -c Release` (setup and secrets:

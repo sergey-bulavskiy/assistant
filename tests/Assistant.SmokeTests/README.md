@@ -16,6 +16,9 @@ It covers supervised settings, reply-to-all/topic isolation and restart observat
 optional synthetic Health recording, `/today` and verified removal. Health inputs require
 private proof of a dedicated bot/profile bound to an isolated disposable database first;
 a dedicated test group alone is insufficient. These checks do not extend the automated gate.
+The runbook also describes the credential-free supervised-run primitives and their separate
+offline Python regressions; using them still requires a validated private adapter and both
+run and connector session locks for direct Telethon access.
 
 ## Enabling the CD gate
 
