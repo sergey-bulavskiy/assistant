@@ -79,6 +79,30 @@ class SupervisedRunTests(unittest.TestCase):
                 self.ledger.resume(self.ledger.digest(), ["next"])
         self.assertEqual(200.0, self.ledger.read()["deadline"])
         self.assertEqual([], self.ledger.read()["operations"])
+        self.now = 100.0
+        reopened = Ledger(self.ledger.path, self.lock, lambda: self.now)
+        with self.assertRaises(Refused):
+            reopened.resume(reopened.digest(), ["next"])
+        self.assertTrue(reopened.read()["expired"])
+
+    def test_monotonic_elapsed_time_and_wall_rollback_cannot_extend_run(self):
+        mono = [0.0]
+        guarded = Ledger(self.ledger.path, self.lock, lambda: self.now, lambda: mono[0])
+        mono[0] = 95.0
+        with self.assertRaises(Refused):
+            guarded.spend("late")
+        self.assertEqual([], guarded.read()["operations"])
+        self.assertTrue(guarded.read()["expired"])
+        self.now = 100.0
+        second = Ledger(self.root / "rollback.json", self.lock, lambda: self.now, lambda: 0.0)
+        second.create("synthetic-rollback", 300.0, 3)
+        self.now = 150.0
+        second.resume(second.digest(), ["first"])
+        self.now = 100.0
+        with self.assertRaises(Refused):
+            second.spend("first")
+        self.assertTrue(second.read()["expired"])
+        self.assertEqual([], second.read()["operations"])
 
     def test_invalid_deadline_and_corrupt_operation_fail_closed(self):
         with self.assertRaises(Refused):
@@ -129,10 +153,18 @@ class SupervisedRunTests(unittest.TestCase):
         calls = []
         def fail():
             raise TimeoutError("synthetic child still active")
+        recovery_lock = SessionLock(self.root / "recovery.lock")
+        self.addCleanup(recovery_lock.release)
         with self.assertRaises(TimeoutError):
-            Cleanup().run(fail, lambda: calls.append("stop"))
+            with recovery_lock:
+                Cleanup().run(fail, lambda: calls.append("stop"))
         self.assertEqual([], calls)
-        self.lock.require_held()
+        script = "from supervised_run import SessionLock; import sys; SessionLock(sys.argv[1]).__enter__()"
+        result = subprocess.run([sys.executable, "-B", "-c", script, str(recovery_lock.path)],
+                                cwd=Path(__file__).parent, capture_output=True, timeout=10)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(b"Session lock is busy", result.stderr)
+        recovery_lock.require_held()
 
     def test_raw_receipt_survives_parser_failure_and_cannot_be_overwritten(self):
         path = self.root / "receipt.bin"

@@ -228,13 +228,17 @@ from telegram_mcp.singleton import SessionLock as ConnectorSessionLock, session_
 
 connector_lock = ConnectorSessionLock("default", session_identity(client))
 connector_lock.acquire(grace_seconds=5, shared=False)
+cleanup_verified = False
 try:
     await client.connect()
     # Run only the authorized bounded diagnostic batch and join owned children.
     # Complete owned-runtime cleanup while both locks are still held.
+    cleanup_verified = True  # Set only after those checks actually succeeded.
 finally:
-    await client.disconnect()
-    connector_lock.release()
+    if cleanup_verified:
+        await client.disconnect()  # Failure here deliberately retains the lock.
+        connector_lock.release()
+    # Otherwise retain client/lock handles for owned recovery; never release here.
 ```
 
 The private adapter must retain ownership if child joining or disconnect fails; do not release
@@ -259,13 +263,18 @@ primitives alone are not evidence that a live executor uses them.
 - Acquire `SessionLock` at the shared private **run** lock path before creating any ledger or
   connector. Create the ledger once with `Ledger.create`; an existing file is never replaced.
   Keep all ledger, lock and receipt paths distinct and outside repositories.
+  `SessionLock` retains its handle when a supervised `with` body fails. Keep a reference to
+  the lock object and finish owned recovery before explicitly calling `release`; normal
+  successful context exit releases it. Neither garbage collection nor process exit is cleanup.
 - Each `Ledger.spend` durably records an unknown charged attempt before outward dispatch.
   Resolve it only from exact source-linked input/reply and application evidence. Unknown or
   failed attempts block new sends; recovery is read-only. Failed/ambiguous sends are not resent.
 - Resume using the previously recorded digest and one or two unique unspent case labels.
   The cumulative passed source/cleanup evidence, attempt cap and original absolute deadline
   stay unchanged. An expired run cannot be renewed. The five-second cleanup reserve is part
-  of the original deadline. This primitive deliberately requires prior cleanup proof before
+  of the original deadline. Monotonic elapsed time cannot extend it when wall time stalls;
+  observed wall-clock rollback or expiration is durably recorded and refuses reactivation.
+  This primitive deliberately requires prior cleanup proof before
   every additional spend; adapters must not substitute an unverified boolean for real cleanup.
 - One supervisor owns `Cleanup`: join children first, then stop only owned runtime resources
   and restore verified synthetic changes once. Workers never also invoke cleanup. A failed join

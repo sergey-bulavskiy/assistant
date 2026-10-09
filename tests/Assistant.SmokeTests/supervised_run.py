@@ -45,16 +45,24 @@ class SessionLock:
         if self.file is None or self.file.closed:
             raise Refused("Session lock must be held.")
 
-    def __exit__(self, *_):
+    def release(self):
         if self.file is not None:
             # Closing the handle releases the OS lock; never unlink its path.
             self.file.close()
             self.file = None
 
+    def __exit__(self, exc_type=None, *_):
+        # A supervisor failure may leave a connected client/child. Its owner must
+        # finish verified recovery before explicitly releasing this handle.
+        if exc_type is None:
+            self.release()
+
 
 class Ledger:
-    def __init__(self, path, lock, clock=time.time):
+    def __init__(self, path, lock, clock=time.time, monotonic=time.monotonic):
         self.path, self.lock, self.clock = Path(path), lock, clock
+        self.monotonic = monotonic
+        self.wall_start, self.mono_start = clock(), monotonic()
         self.batch = None
 
     def create(self, run_id, deadline, cap):
@@ -63,7 +71,8 @@ class Ledger:
                 or not isinstance(deadline, (float, int)) or not math.isfinite(deadline)
                 or deadline <= self.clock()):
             raise Refused("Invalid run limits.")
-        state = {"run_id": run_id, "deadline": deadline, "cap": cap, "operations": []}
+        state = {"run_id": run_id, "deadline": deadline, "cap": cap, "operations": [],
+                 "observed": self.clock(), "expired": False}
         # Exclusive creation cannot replace a spent or expired run.
         with self.path.open("x", encoding="utf-8") as stream:
             json.dump(state, stream, sort_keys=True)
@@ -74,10 +83,13 @@ class Ledger:
     def read(self):
         self.lock.require_held()
         state = json.loads(self.path.read_text(encoding="utf-8"))
-        if (set(state) != {"run_id", "deadline", "cap", "operations"}
+        if (set(state) != {"run_id", "deadline", "cap", "operations", "observed", "expired"}
                 or not isinstance(state["run_id"], str) or not state["run_id"]
                 or not isinstance(state["deadline"], (float, int))
                 or not math.isfinite(state["deadline"])
+                or type(state["expired"]) is not bool
+                or not isinstance(state["observed"], (float, int))
+                or not math.isfinite(state["observed"])
                 or type(state["cap"]) is not int or state["cap"] <= 0
                 or not isinstance(state["operations"], list)
                 or len(state["operations"]) > state["cap"]):
@@ -115,8 +127,14 @@ class Ledger:
 
     def _ready(self, state):
         # Reserve cleanup time; continuation never moves the original deadline.
-        if self.clock() >= state["deadline"] - 5:
+        wall = self.clock()
+        now = max(wall, self.wall_start + self.monotonic() - self.mono_start)
+        if state["expired"] or wall < state["observed"] or now >= state["deadline"] - 5:
+            state["expired"] = True
+            self._save(state)
             raise Refused("Original run deadline reached.")
+        state["observed"] = wall
+        self._save(state)
         if any(op["outcome"] != "pass" or not op["source"] or not op["cleaned"]
                for op in state["operations"]):
             raise Refused("Prior charged operation is unresolved.")
