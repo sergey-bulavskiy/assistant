@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
 using Assistant.Domain.Llm;
@@ -9,6 +10,46 @@ namespace Assistant.IntegrationTests.Vet;
 
 public sealed class VetWorkflowTests : VetTestBase
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exact_duplicate_model_candidates_save_once_but_distinct_times_and_sources_remain(bool distinctTimes)
+    {
+        await SeedAsync(); await using var s = Open();
+        var json = JsonSerializer.Serialize(new { needs_reply = false, events = new[]
+        {
+            new { type = "glucose", intent = "record", value = "6.4", unit = "mmol/L",
+                date = "2031-05-12", time = "09:00", offset = "+00:00", time_evidence = "stated" },
+            new { type = "glucose", intent = "record", value = "6.4", unit = "mmol/L",
+                date = "2031-05-12", time = distinctTimes ? "09:01" : "09:00", offset = "+00:00", time_evidence = "stated" }
+        } });
+        s.Chat.EnqueueResponse(json);
+        var update = new IncomingUpdate(1, Text("synthetic explicit measurement"));
+        await s.Handler.HandleAsync(Bot, s.Telegram, update, CancellationToken.None);
+        var saved = await s.Context.VetEvents.AsNoTracking().OrderBy(e => e.OccurredAt).ToArrayAsync();
+        saved.Length.ShouldBe(distinctTimes ? 2 : 1);
+        saved.Select(e => e.Value).ShouldBe(distinctTimes ? new[] { 6.4m, 6.4m } : new[] { 6.4m });
+        saved.Select(e => e.OccurredAt).ShouldBe(distinctTimes
+            ? new[] { DateTimeOffset.Parse("2031-05-12T09:00:00Z"), DateTimeOffset.Parse("2031-05-12T09:01:00Z") }
+            : new[] { DateTimeOffset.Parse("2031-05-12T09:00:00Z") });
+        saved.Select(e => e.CandidateOrdinal).ShouldBe(distinctTimes ? new[] { 0, 1 } : new[] { 0 });
+        JsonNode.DeepEquals(JsonNode.Parse((await s.Context.VetExtractionResults.AsNoTracking().SingleAsync()).Json), JsonNode.Parse(json)).ShouldBeTrue();
+        await s.Handler.HandleAsync(Bot, s.Telegram, update, CancellationToken.None);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(saved.Length);
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(1);
+        (await s.Context.LlmCalls.CountAsync()).ShouldBe(1);
+        s.Chat.EnqueueResponse(json);
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(2, Text("synthetic independent measurement", 1001)), CancellationToken.None);
+        (await s.Context.VetEvents.CountAsync()).ShouldBe(saved.Length * 2);
+        (await s.Context.VetEvents.Select(e => e.SourceId).Distinct().CountAsync()).ShouldBe(2);
+        var retained = await s.Context.VetExtractionResults.Select(e => e.Json).ToArrayAsync();
+        retained.Length.ShouldBe(2);
+        foreach (var result in retained)
+            JsonNode.DeepEquals(JsonNode.Parse(result), JsonNode.Parse(json)).ShouldBeTrue();
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(2);
+        (await s.Context.LlmCalls.CountAsync()).ShouldBe(2);
+    }
+
     [Fact]
     public async Task Targetless_clarification_cannot_replace_both_same_type_pending_candidates()
     {

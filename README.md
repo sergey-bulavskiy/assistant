@@ -244,7 +244,9 @@ unset timezone and units once, using `/settz UTC`, `/setunit mmol/L` and `/setin
 or an explicit natural-language profile change. No care facts are built into the prompt.
 
 Ordinary approved text makes one `fast` interpretation with independent reply intent and intent
-for every glucose/insulin fact. Actual measured glucose and insulin already administered are
+for every glucose/insulin fact. Exact repeated candidates within that interpretation are processed
+once; candidates with different times, values, units, intent or targets remain distinct.
+Actual measured glucose and insulin already administered are
 recorded, including exact fractional decimals; hypothetical doses remain discussion. Missing
 historical time, unsupported units and ambiguous intent get a review. Clear siblings can save
 while others remain pending. Current reports without a clock use the original message time;

@@ -13,6 +13,10 @@
   are immutable; edits append input revisions. Provider calls require original messages.id linkage.
   Persist a successful interpretation and exact work plan before mutation. Unknown dispatches pause;
   only an explicit bounded retry permits a new call. Recovery rechecks current member/place approval.
+- Within one interpretation, remove exact decoded duplicate candidates before assigning per-type
+  ordinals. Equality includes all candidate semantics except ordinal; distinct times, raw values,
+  units, products, intents, targets and uncertainty remain distinct. Never deduplicate across sources
+  or rewrite retained extraction JSON. Source-edit matching retains its existing identity rules.
 - Candidate identity includes deleted events. Match unchanged facts before source edits, preserve
   stable IDs, and never guess ambiguous mapping or overwrite an independently advanced revision.
 - Confirm only the exact frozen review revision/subset. New clarification evidence gets its own
