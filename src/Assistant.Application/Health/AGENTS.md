@@ -1,5 +1,12 @@
 # Health consultation invariants
 
+- Shared reminder/expectation commands are intercepted before Health interpretation. Expected-event
+  commands require an existing profile and never create clinical records. Only active confirmed
+  glucose/insulin/meal/symptom/weight/blood-pressure facts in the exact subject/bot/place count, using
+  inclusive occurrence-time bounds from saved fixed-offset midnight through deadline plus grace.
+  Confirmations, source edits/deletes and document-caption mutations participate in the Infrastructure
+  expected-event ordering gate. A satisfied day never reopens after a correction or deletion.
+
 - One interpretation determines event intents and independent `needs_reply`. Application eligibility
   is private/addressed/exact-approved-place; `is_question` never authorizes an answer. Edits never consult.
 - Validate/save clear reports, send deterministic and quick-scan alerts, then attempt the consultation,

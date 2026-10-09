@@ -30,6 +30,7 @@ internal sealed class VetStoreGuard(AssistantDbContext db, ICurrentFamily curren
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended('vet:' || CAST({botDbId} AS text), 0))", ct);
         await BotAsync(familyId, botDbId, null, ct);
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockAsync(db, familyId, botDbId, "vet", ct);
     }
 
     public async Task<bool> ActorAsync(VetDiaryScope scope, long actor, CancellationToken ct) =>

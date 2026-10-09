@@ -377,6 +377,7 @@ public sealed class HealthDocumentStore(
         await using var transaction = await db.Database.BeginTransactionAsync(token);
         if (sourceId is not null && !await HealthDocumentSourceLock.LockAsync(db, scope.FamilyId, sourceId.Value, token))
             return HealthDocumentSourceDeletion.None;
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockAsync(db, scope.FamilyId, scope.BotDbId, "health", token);
         var now = clock.UtcNow.ToUniversalTime();
         var deleted = await Admissions(scope).Where(a => a.Id == row.Id && a.DeletedAt == null
                 && (a.SourceMessageId == null || a.SourceMessageId == sourceId))

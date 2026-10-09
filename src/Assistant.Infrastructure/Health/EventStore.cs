@@ -37,7 +37,7 @@ public class EventStore : IEventStore
 
         var subjectTag = await GetSubjectTagAsync(familyId, profileId, cancellationToken);
         var documentSource = await HealthDocumentSourceLock.IsDocumentSourceAsync(_db, familyId, profileId, source.MessageDbId, cancellationToken);
-        await using var sourceTransaction = documentSource && _db.Database.CurrentTransaction is null
+        await using var sourceTransaction = _db.Database.CurrentTransaction is null
             ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
         if (documentSource && source.MessageDbId is { } documentMessageId)
         {
@@ -45,6 +45,7 @@ public class EventStore : IEventStore
                 || await HealthDocumentSourceLock.IsDeletedAsync(_db, familyId, profileId, documentMessageId, cancellationToken))
                 throw new InvalidOperationException("Document source is no longer active.");
         }
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, profileId, cancellationToken);
         var now = _clock.UtcNow;
         var rows = events.Select(e => NewRow(familyId, profileId, subjectTag, source, e, now)).ToList();
 
@@ -116,6 +117,10 @@ public class EventStore : IEventStore
             throw new ArgumentException("An edited message needs its messages.id.", nameof(source));
         }
 
+        await using var mutationTransaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, profileId, cancellationToken);
+
         // Checked first, also when nothing is added: another family's profile is refused before any change.
         var subjectTag = await GetSubjectTagAsync(familyId, profileId, cancellationToken);
 
@@ -170,6 +175,7 @@ public class EventStore : IEventStore
             throw;
         }
 
+        if (mutationTransaction is not null) await mutationTransaction.CommitAsync(cancellationToken);
         return new ReplacedEvents(current.Select(ToInfo).ToArray(), events.Count - added.Count, unmatched.Select(ToInfo).ToArray());
     }
 
@@ -192,6 +198,12 @@ public class EventStore : IEventStore
         long familyId, long profileId, long botId, long chatId, int? topicId, long userId, DateTimeOffset createdAfter, string reason,
         CancellationToken cancellationToken)
     {
+        EnsureFamilyScope(familyId);
+        if (!await _db.HealthProfiles.AnyAsync(x => x.FamilyId == familyId && x.Id == profileId, cancellationToken))
+            return DeletedEvents.None;
+        await using var mutationTransaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, profileId, cancellationToken);
         var latestSource = await FindLatestSourceMessageOfUserAsync(
             familyId, profileId, botId, chatId, topicId, userId, createdAfter, cancellationToken);
         if (latestSource is null)
@@ -202,7 +214,9 @@ public class EventStore : IEventStore
         var rows = await _db.Events
             .Where(e => e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null && e.SourceMessageId == latestSource)
             .ToListAsync(cancellationToken);
-        return await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        var deleted = await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        if (mutationTransaction is not null) await mutationTransaction.CommitAsync(cancellationToken);
+        return deleted;
     }
 
     public async Task<DeletedEvents> DeleteBySourceTelegramMessageAsync(
@@ -210,7 +224,12 @@ public class EventStore : IEventStore
         DateTimeOffset? createdAfter = null)
     {
         EnsureFamilyScope(familyId);
+        if (!await _db.HealthProfiles.AnyAsync(x => x.FamilyId == familyId && x.Id == profileId, cancellationToken))
+            return DeletedEvents.None;
 
+        await using var mutationTransaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, profileId, cancellationToken);
         // messages.bot_id is the Telegram bot id, like events.bot_id.
         var sourceIds = _db.Messages
             .Where(m => m.BotId == botId && m.ChatId == chatId && m.TelegramMessageId == telegramMessageId)
@@ -220,17 +239,26 @@ public class EventStore : IEventStore
                 && e.SourceMessageId != null && sourceIds.Contains(e.SourceMessageId.Value)
                 && (createdAfter == null || e.CreatedAt >= createdAfter))
             .ToListAsync(cancellationToken);
-        return await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        var deleted = await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        if (mutationTransaction is not null) await mutationTransaction.CommitAsync(cancellationToken);
+        return deleted;
     }
 
     public async Task<DeletedEvents> DeleteByIdAsync(long familyId, long profileId, long eventId, string reason, CancellationToken cancellationToken)
     {
         EnsureFamilyScope(familyId);
+        if (!await _db.HealthProfiles.AnyAsync(x => x.FamilyId == familyId && x.Id == profileId, cancellationToken))
+            return DeletedEvents.None;
 
+        await using var mutationTransaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken) : null;
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, profileId, cancellationToken);
         var rows = await _db.Events
             .Where(e => e.Id == eventId && e.FamilyId == familyId && e.ProfileId == profileId && e.DeletedAt == null)
             .ToListAsync(cancellationToken);
-        return await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        var deleted = await SoftDeleteAsync(familyId, rows, reason, cancellationToken);
+        if (mutationTransaction is not null) await mutationTransaction.CommitAsync(cancellationToken);
+        return deleted;
     }
 
     private async Task<DeletedEvents> SoftDeleteAsync(long familyId, List<HealthEvent> rows, string reason, CancellationToken cancellationToken)
