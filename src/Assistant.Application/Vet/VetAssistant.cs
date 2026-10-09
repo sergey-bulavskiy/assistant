@@ -188,6 +188,15 @@ public sealed partial class VetAssistant : IVetAssistant
             source = (await _diary.GetSourceAsync(scope, source.Source.Id, ct))!;
         }
         var interpretation = VetInterpretationParser.Parse(persisted!.Json)!;
+        if (interpretation.PhotoOperation is { } requestedPhoto
+            && !VetPhotoActionEvidence.Matches(requestedPhoto, source.Revision.Text))
+        {
+            // Filter execution, not the immutable model result. Clear current diary facts remain independent.
+            // A rejected photo request cannot regain dispatch through its alternate operation field.
+            interpretation = interpretation with { PhotoOperation = null, Operation = null };
+            if (interpretation.Events.All(candidate => candidate.Intent == "question_only"))
+                await _replies.SendAsync(client, message, "Укажите явное действие с фотографиями в начале текущего сообщения; прежний запрос не повторён.", ct);
+        }
         // Keep the immutable unfiltered result for caption context before filtering duplicate TEXT glucose.
         if (_photos != null)
             interpretation = await _photos.FilterCaptionAsync(scope, source.Source.TelegramMessageId, interpretation, ct);

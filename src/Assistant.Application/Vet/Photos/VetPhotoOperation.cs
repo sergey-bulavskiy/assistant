@@ -10,13 +10,16 @@ public sealed record VetPhotoOperation(string Kind, Guid? BatchId, Guid? ReviewI
     IReadOnlyList<Guid> SourceIds, IReadOnlyList<Guid> CandidateIds, int? ReviewRevision,
     IReadOnlyList<int> ItemNumbers, long? ActionId, long? TargetEventId, string? SelectionMode,
     string? FromDate, string? UntilDate, string? DateAxis, string? DuplicateChoice,
-    VetPhotoOperationAssumptions? Assumptions, IReadOnlyList<VetPhotoOperationCorrection> Corrections);
+    VetPhotoOperationAssumptions? Assumptions, IReadOnlyList<VetPhotoOperationCorrection> Corrections)
+{
+    public string? ActionEvidence { get; init; }
+}
 
 public static class VetPhotoOperationParser
 {
     private static readonly string[] Fields = ["kind", "batch_id", "review_id", "run_id", "source_ids", "candidate_ids",
         "review_revision", "item_numbers", "action_id", "target_event_id", "selection_mode", "from_date", "until_date",
-        "date_axis", "duplicate_choice", "assumptions", "corrections"];
+        "date_axis", "duplicate_choice", "assumptions", "corrections", "action_evidence"];
     private static readonly string[] Kinds = ["start", "close", "show", "review", "correct", "exclude", "save", "cancel",
         "assumptions", "undo", "reverse", "reprocess", "delete_originals", "accept", "decline", "add_late", "duplicate", "continue"];
 
@@ -75,7 +78,7 @@ public static class VetPhotoOperationParser
             }
             return new(kind, batch, review, run, sources, candidates, revision, items.AsReadOnly(),
                 Long(root, "action_id"), Long(root, "target_event_id"), mode, from, until, axis, duplicate,
-                assumptions, corrections.AsReadOnly());
+                assumptions, corrections.AsReadOnly()) { ActionEvidence = Text(root, "action_evidence", 500) };
         }
         catch (JsonException) { return null; }
         catch (InvalidOperationException) { return null; }

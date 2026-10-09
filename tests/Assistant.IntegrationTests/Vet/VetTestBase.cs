@@ -6,6 +6,7 @@ using Assistant.Application.Manager;
 using Assistant.Application.Messages;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
+using Assistant.Application.Vet.Photos;
 using Assistant.Domain.Bots;
 using Assistant.Domain.Families;
 using Assistant.Domain.Messages;
@@ -61,8 +62,9 @@ public abstract class VetTestBase : IntegrationTestBase
     }
 
     protected VetTestSession Open(long? familyId = null, IInterceptor? interceptor = null,
-        VetRuntimeOptions? runtimeOptions = null, ITraceSession? trace = null, ILogger<VetAssistant>? logger = null)
-        => new(ConnectionString, familyId ?? FamilyId, Bot, Clock, interceptor, runtimeOptions, trace, logger);
+        VetRuntimeOptions? runtimeOptions = null, ITraceSession? trace = null, ILogger<VetAssistant>? logger = null,
+        IVetPhotoAssistant? photos = null)
+        => new(ConnectionString, familyId ?? FamilyId, Bot, Clock, interceptor, runtimeOptions, trace, logger, photos);
     protected VetTestSession Unscoped() => new(ConnectionString, null, Bot, Clock);
     protected static IncomingMessage Text(string text, int id = 1000, long actor = 111, int topic = 7) =>
         new(-100, "supergroup", "synthetic topic", topic, id, actor, "synthetic_user", text,
@@ -111,7 +113,7 @@ public abstract class VetTestBase : IntegrationTestBase
         public ScriptedChatClient Chat { get; } = new();
         public VetTestSession(string connectionString, long? familyId, ReceivingBot bot, IClock clock,
             IInterceptor? interceptor = null, VetRuntimeOptions? runtimeOptions = null,
-            ITraceSession? trace = null, ILogger<VetAssistant>? logger = null)
+            ITraceSession? trace = null, ILogger<VetAssistant>? logger = null, IVetPhotoAssistant? photos = null)
         {
             Current.Set(familyId);
             var options = new DbContextOptionsBuilder<AssistantDbContext>();
@@ -139,7 +141,7 @@ public abstract class VetTestBase : IntegrationTestBase
             var build = new BuildInfo("abcdef1", null, Now);
             Assistant = new(Profiles, Diary, approvals, ownership, Messages, gateway,
                 new RolePrompts(typeof(RolePrompts).Assembly), clock, build, runtimeOptions ?? new(true, 20, 32000),
-                logger ?? NullLogger<VetAssistant>.Instance, trace);
+                logger ?? NullLogger<VetAssistant>.Instance, trace, photos);
             Handler = new(Messages, approvals, Current, new NoopManager(), new NoopGeneral(), new NoopHealth(),
                 botOptions, build, clock, NullLogger<UpdateHandler>.Instance, trace, vetAssistant: Assistant);
         }

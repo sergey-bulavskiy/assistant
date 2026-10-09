@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Assistant.Application;
 using Assistant.Application.Common;
 using Assistant.Application.Families;
@@ -161,8 +162,17 @@ public sealed class VetPhotoHostWorkflowTests : VetTestBase
     }
     private async Task PhotoNatural(Runtime runtime, object operation, long actor = 111, int? reply = null)
     {
-        runtime.Images.Text.Enqueue(JsonSerializer.Serialize(new { needs_reply = false, events = Array.Empty<object>(), unclear = Array.Empty<string>(), photo_operation = operation }, Json));
-        await Send(runtime, Text("synthetic natural photo operation", ++message, actor) with { ReplyToMessageId = reply });
+        var photo = JsonSerializer.SerializeToNode(operation, Json)!;
+        var request = photo["kind"]!.GetValue<string>() switch
+        {
+            "correct" => "correct this synthetic photo",
+            "duplicate" => "consider this synthetic photo a separate measurement",
+            "accept" => "confirm this synthetic photo review",
+            _ => throw new InvalidOperationException("Provide an explicit synthetic current action for this fixture.")
+        };
+        photo["action_evidence"] = request;
+        runtime.Images.Text.Enqueue(JsonSerializer.Serialize(new { needs_reply = false, events = Array.Empty<object>(), unclear = Array.Empty<string>(), photo_operation = photo }, Json));
+        await Send(runtime, Text(request, ++message, actor) with { ReplyToMessageId = reply });
     }
     private static object Glucose(string value, long? eventId = null, string? time = null) => new
     { type = "glucose", intent = "record", value, unit = "mmol/L", date = (string?)null, time, offset = (string?)null, time_evidence = "unknown", event_id = eventId };

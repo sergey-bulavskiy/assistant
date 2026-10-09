@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Assistant.Application.Telegram;
 using Assistant.Application.Vet;
+using Assistant.Application.Vet.Photos;
+using Assistant.Application.Messages;
 using Assistant.Domain.Llm;
 using Assistant.Domain.Vet;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +12,78 @@ namespace Assistant.IntegrationTests.Vet;
 
 public sealed class VetWorkflowTests : VetTestBase
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("undo")]
+    [InlineData("correct")]
+    [InlineData("accept")]
+    public async Task Stale_photo_operation_cannot_suppress_current_reading_or_dispatch_history_action(string? alternateOperation)
+    {
+        await SeedAsync(); var photos = new ObservedPhotos(); await using var s = Open(photos: photos);
+        var root = JsonNode.Parse("""{"needs_reply":false,"events":[{"type":"glucose","intent":"record","value":"6.4","time_evidence":"current"}],"photo_operation":{"kind":"correct","corrections":[{"value":"8.2"}]}}""")!;
+        if (alternateOperation is not null) root["operation"] = new JsonObject { ["kind"] = alternateOperation };
+        var json = root.ToJsonString();
+        s.Chat.EnqueueResponse(json);
+        var update = new IncomingUpdate(1, Text("Current glucose 6.4 mmol/L"));
+        await s.Handler.HandleAsync(Bot, s.Telegram, update, CancellationToken.None);
+        photos.Dispatched.ShouldBeEmpty();
+        var saved = await s.Context.VetEvents.AsNoTracking().SingleAsync();
+        saved.Value.ShouldBe(6.4m); saved.OccurredAt.ShouldBe(Now);
+        saved.TelegramMessageId.ShouldBe(update.Message!.MessageId);
+        JsonNode.DeepEquals(JsonNode.Parse((await s.Context.VetExtractionResults.SingleAsync()).Json), JsonNode.Parse(json)).ShouldBeTrue();
+        await s.Handler.HandleAsync(Bot, s.Telegram, update, CancellationToken.None);
+        photos.Dispatched.ShouldBeEmpty(); (await s.Context.VetEvents.CountAsync()).ShouldBe(1);
+        (await s.Context.LlmCalls.CountAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Grounded_contextual_photo_correction_preserves_independent_administered_insulin()
+    {
+        await SeedAsync(); var photos = new ObservedPhotos(); await using var s = Open(photos: photos);
+        var target = Guid.Parse("44444444-4444-4444-8444-444444444444");
+        s.Chat.EnqueueResponse(JsonSerializer.Serialize(new { needs_reply = false, events = new[]
+        { new { type = "insulin", intent = "record", dose = "0.125", time_evidence = "current" } },
+            photo_operation = new { kind = "correct", action_evidence = "correct this photo to 6.4", source_ids = new[] { target } } }));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("correct this photo to 6.4; administered insulin 0.125 U")), CancellationToken.None);
+        photos.Dispatched.Single().SourceIds.Single().ShouldBe(target);
+        var insulin = await s.Context.VetEvents.AsNoTracking().SingleAsync();
+        insulin.EventType.ShouldBe("insulin"); insulin.Value.ShouldBe(0.125m); insulin.OccurredAt.ShouldBe(Now);
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(1);
+        (await s.Context.LlmCalls.CountAsync()).ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ungrounded_photo_action_without_current_records_clarifies_without_mutation(bool questionCandidate)
+    {
+        await SeedAsync(); var photos = new ObservedPhotos(); await using var s = Open(photos: photos);
+        s.Chat.EnqueueResponse(JsonSerializer.Serialize(new { needs_reply = false,
+            events = questionCandidate ? new[] { new { type = "glucose", intent = "question_only", value = "6.4" } } : [],
+            photo_operation = new { kind = "correct", action_evidence = "correct the historical photo" } }));
+        await s.Handler.HandleAsync(Bot, s.Telegram, new(1, Text("synthetic neutral current message")), CancellationToken.None);
+        photos.Dispatched.ShouldBeEmpty(); (await s.Context.VetEvents.CountAsync()).ShouldBe(0);
+        (await s.Context.VetDiaryActions.CountAsync()).ShouldBe(0);
+        s.Telegram.SentMessages.Single().Text.ShouldContain("прежний запрос не повторён");
+        (await s.Context.VetTextSourceRevisions.SingleAsync()).State.ShouldBe("completed");
+    }
+
+    private sealed class ObservedPhotos : IVetPhotoAssistant
+    {
+        public List<VetPhotoOperation> Dispatched { get; } = [];
+        public Task<bool> OperationAsync(ReceivingBot b, ITelegramClient c, IncomingMessage m, VetPhotoOperation o, Guid key, CancellationToken ct)
+        { Dispatched.Add(o); return Task.FromResult(true); }
+        public Task<string> DescribeAsync(VetDiaryScope s, long actor, CancellationToken ct) => Task.FromResult("Historical source 44444444-4444-4444-8444-444444444444, correction: 8.2; reference only.");
+        public Task<VetInterpretation> FilterCaptionAsync(VetDiaryScope s, int id, VetInterpretation i, CancellationToken ct) => Task.FromResult(i);
+        public Task<VetPhotoAdmission?> AdmitAsync(ReceivingBot b, IncomingMessage m, long id, VetAdmittedSource? a, CancellationToken ct) => Task.FromResult<VetPhotoAdmission?>(null);
+        public Task BindAsync(ReceivingBot b, IncomingMessage m, StoreResult s, VetPhotoAdmission? a, CancellationToken ct) => Task.CompletedTask;
+        public Task HandleAdmissionAsync(ReceivingBot b, ITelegramClient c, IncomingMessage m, StoreResult s, VetPhotoAdmission? a, CancellationToken ct) => Task.CompletedTask;
+        public Task<bool> CommandAsync(ReceivingBot b, ITelegramClient c, IncomingMessage m, string command, string? args, Guid key, CancellationToken ct) => Task.FromResult(false);
+        public Task<bool> HandleCallbackAsync(ReceivingBot b, ITelegramClient c, CallbackQueryInfo q, CancellationToken ct) => Task.FromResult(false);
+        public Task ResumeAsync(ReceivingBot b, ITelegramClient c, CancellationToken ct) => Task.CompletedTask;
+        public Task WorkFinishedAsync(ReceivingBot b, ITelegramClient c, VetPhotoWork w, VetPhotoProcessResult r, CancellationToken ct) => Task.CompletedTask;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
