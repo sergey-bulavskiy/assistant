@@ -306,6 +306,12 @@ query unrelated conversations or resend. A dynamic `/forget` target must come fr
 bot answer and match that exact scoped active fact/source before use.
 Preserve the original failed harness receipt and append the unique source reconciliation;
 successful product persistence does not retroactively turn a failed observation into a pass.
+If a case fails before that ID mapping completes, cleanup must first hydrate its exact canonical
+inbound source from source-linked diagnostics or a proven own-sender/peer, complete text or photo,
+posted-time and uniquely scoped source match. Never substitute a user-session message ID for a
+Bot API source ID and claim database cleanup succeeded. Verify independently that no active
+owned facts remain after cleanup; preserve a failed cleanup receipt and append the exact repair
+proof rather than replacing it. Ambiguous provenance blocks deletion of candidate rows.
 
 Use evidence appropriate to the handler rather than requiring the same persistence shape for
 all bots. Manager commands do not create ordinary conversation `messages` rows. Verify the
