@@ -9,7 +9,7 @@ namespace Assistant.Application.Health;
 /// the text from the first '{' to the last '}' (drops a code fence or prose around it). Numbers may
 /// be JSON numbers or strings with a comma or dot. Unknown fields are dropped; an event of an
 /// unknown type becomes an unclear item with reason "type". Every event's intent is resolved
-/// (ExtractionIntents.Resolve); "undo" defaults to false. Anything else that does not fit returns null (invalid_output).</summary>
+/// (ExtractionIntents.Resolve); exact known candidate duplicates are removed; "undo" defaults to false. Anything else that does not fit returns null (invalid_output).</summary>
 public static class ExtractionParser
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -54,7 +54,8 @@ public static class ExtractionParser
             .OfType<ExtractedEvent>()
             .Select(e => e with { Type = e.Type?.Trim().ToLowerInvariant(), Intent = ExtractionIntents.Resolve(e.Intent, isQuestion) })
             .ToArray();
-        var events = typed.Where(e => e.Type is not null && HealthEventTypes.All.Contains(e.Type)).ToArray();
+        var events = typed.Where(e => e.Type is not null && HealthEventTypes.All.Contains(e.Type))
+            .Distinct(ExactCandidateComparer.Instance).ToArray();
 
         // An event of an unknown type is not silently lost: the person is asked about it.
         var unclear = (dto.Unclear ?? new List<ExtractedUnclear?>()).OfType<ExtractedUnclear>()
@@ -62,6 +63,31 @@ public static class ExtractionParser
                 .Select(_ => new ExtractedUnclear { Fragment = null, Reason = UnclearReasons.Type }))
             .ToArray();
         return new ExtractionOutput(events, unclear, isQuestion, dto.Undo ?? false, dto.NeedsReply ?? false);
+    }
+
+    // Record equality covers every scalar field; tags need ordered structural equality.
+    private sealed class ExactCandidateComparer : IEqualityComparer<ExtractedEvent>
+    {
+        public static readonly ExactCandidateComparer Instance = new();
+
+        public bool Equals(ExtractedEvent? x, ExtractedEvent? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null) return false;
+            return (x with { Tags = null }) == (y with { Tags = null })
+                && (x.Tags is null ? y.Tags is null : y.Tags is not null
+                    && x.Tags.SequenceEqual(y.Tags, StringComparer.Ordinal));
+        }
+
+        public int GetHashCode(ExtractedEvent value)
+        {
+            var hash = new HashCode();
+            hash.Add(value with { Tags = null });
+            hash.Add(value.Tags is not null);
+            if (value.Tags is not null)
+                foreach (var tag in value.Tags) hash.Add(tag, StringComparer.Ordinal);
+            return hash.ToHashCode();
+        }
     }
 
     private sealed class OutputDto

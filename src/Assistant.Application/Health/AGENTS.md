@@ -9,6 +9,10 @@
 
 - One interpretation determines event intents and independent `needs_reply`. Application eligibility
   is private/addressed/exact-approved-place; `is_question` never authorizes an answer. Edits never consult.
+- Within one parse, deduplicate exact known candidates after existing type/intent normalization.
+  All scalar fields and ordinal tag sequences participate; preserve null versus empty tags and tag
+  order/case. Never merge different times, values, units, intents or uncertainty, deduplicate across
+  sources, rewrite raw model output or change unknown-type clarification and control flags.
 - Validate/save clear reports, send deterministic and quick-scan alerts, then attempt the consultation,
   then pending confirmation. A consultation handles uncertainty without a second fixed clarification.
 - `HealthConsultationContext` is the single answer snapshot/budget seam. System/runtime plus all

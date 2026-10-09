@@ -1,9 +1,95 @@
+using System.Text.Json.Nodes;
 using Assistant.Application.Health;
 
 namespace Assistant.UnitTests.Application.Health;
 
 public class ExtractionParserTests
 {
+    [Fact]
+    public void Identical_known_candidates_with_separately_decoded_tags_keep_first_occurrence_only()
+    {
+        var output = ExtractionParser.Parse("""
+            {"events":[
+              {"type":"glucose","intent":"record","value":6.4,"unit":"mmol/L","day":0,"time":"09:30"},
+              {"type":"note","intent":"record","text":"synthetic observation","tags":["Walk","Energy"]},
+              {"type":"glucose","intent":"record","value":6.4,"unit":"mmol/L","day":0,"time":"09:30"},
+              {"type":"note","intent":"record","text":"synthetic observation","tags":["Walk","Energy"]}
+            ]}
+            """).ShouldNotBeNull();
+        output.Events.Select(e => e.Type).ShouldBe(new[] { "glucose", "note" });
+        output.Events[0].Value.ShouldBe(6.4m); output.Events[0].Time.ShouldBe("09:30");
+        output.Events[1].Text.ShouldBe("synthetic observation");
+        output.Events[1].Tags.ShouldBe(new[] { "Walk", "Energy" });
+    }
+
+    [Theory]
+    [InlineData("type", "insulin")]
+    [InlineData("intent", "question_only")]
+    [InlineData("intent", "unsure")]
+    [InlineData("day", "1")]
+    [InlineData("time", "09:31")]
+    [InlineData("value", "6.5")]
+    [InlineData("unit", "mg/dL")]
+    [InlineData("context", "after_meal_1h")]
+    [InlineData("units", "0.4")]
+    [InlineData("kind", "synthetic second kind")]
+    [InlineData("name", "synthetic second name")]
+    [InlineData("meal_kind", "dinner")]
+    [InlineData("description", "synthetic second description")]
+    [InlineData("code", "synthetic second code")]
+    [InlineData("text", "synthetic second text")]
+    [InlineData("kg", "64.6")]
+    [InlineData("systolic", "121")]
+    [InlineData("diastolic", "81")]
+    [InlineData("pulse", "71")]
+    public void Different_decoded_health_scalar_fields_remain_distinct(string field, string value)
+    {
+        var first = JsonNode.Parse("""
+            {"type":"glucose","intent":"record","day":0,"time":"09:30","value":6.4,"unit":"mmol/L",
+             "context":"fasting","units":0.3,"kind":"synthetic kind","name":"synthetic name",
+             "meal_kind":"lunch","description":"synthetic description","code":"synthetic code",
+             "text":"synthetic text","kg":64.5,"systolic":120,"diastolic":80,"pulse":70}
+            """)!;
+        var second = first.DeepClone();
+        second[field] = field is "day" or "value" or "units" or "kg" or "systolic" or "diastolic" or "pulse"
+            ? JsonNode.Parse(value) : JsonValue.Create(value);
+        var output = ExtractionParser.Parse(new JsonObject { ["events"] = new JsonArray(first, second) }.ToJsonString())
+            .ShouldNotBeNull();
+        output.Events.Count.ShouldBe(2);
+        output.Events[0].Time.ShouldBe("09:30");
+        output.Events[0].Value.ShouldBe(6.4m);
+    }
+
+    [Theory]
+    [InlineData("null", "[]")]
+    [InlineData("""["Walk","Energy"]""", """["Energy","Walk"]""")]
+    [InlineData("""["Walk"]""", """["walk"]""")]
+    [InlineData("""["Walk"]""", """["Energy"]""")]
+    public void Tag_nullness_order_case_and_content_are_not_fuzzy_duplicates(string first, string second)
+    {
+        JsonObject Note(string tags) => new()
+        { ["type"] = "note", ["text"] = "synthetic note", ["tags"] = JsonNode.Parse(tags) };
+        var output = ExtractionParser.Parse(new JsonObject
+        { ["events"] = new JsonArray(Note(first), Note(second)) }.ToJsonString()).ShouldNotBeNull();
+        output.Events.Count.ShouldBe(2);
+        output.Events.Select(e => e.Text).ShouldBe(new[] { "synthetic note", "synthetic note" });
+    }
+
+    [Fact]
+    public void Known_candidate_dedup_preserves_uncertainty_unknown_type_reports_and_control_flags()
+    {
+        var output = ExtractionParser.Parse("""
+            {"events":[{"type":"glucose","value":6.4},{"type":"glucose","value":6.4},
+                       {"type":"unknown"},{"type":"unknown"}],
+             "unclear":[{"fragment":"synthetic unclear value","reason":"unit"}],
+             "is_question":true,"undo":true,"needs_reply":true}
+            """).ShouldNotBeNull();
+        output.Events.ShouldHaveSingleItem().Intent.ShouldBe("unsure");
+        output.Unclear.Select(e => e.Reason).ShouldBe(new[] { "unit", "type", "type" });
+        output.Unclear[0].Fragment.ShouldBe("synthetic unclear value");
+        output.IsQuestion.ShouldBeTrue(); output.Undo.ShouldBeTrue(); output.NeedsReply.ShouldBeTrue();
+    }
+
     [Theory]
     [InlineData("", false)]
     [InlineData(",\"needs_reply\":null", false)]
