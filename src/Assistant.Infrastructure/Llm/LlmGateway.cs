@@ -5,6 +5,7 @@ using Assistant.Application.Diagnostics;
 using Assistant.Application.Llm;
 using Assistant.Domain.Llm;
 using Assistant.Infrastructure.Persistence;
+using Assistant.Infrastructure.Llm.CodexCli;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -500,7 +501,11 @@ public class LlmGateway : ILlmGateway
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError("LLM call to {Model} failed: {ExceptionType}", candidate.Name, ex.GetType().Name);
+            if (ex is CodexCliProviderFailureException codexFailure)
+                _logger.LogError("LLM call to {Model} failed: {ExceptionType} {FailureCategory}",
+                    candidate.Name, ex.GetType().Name, codexFailure.Category);
+            else
+                _logger.LogError("LLM call to {Model} failed: {ExceptionType}", candidate.Name, ex.GetType().Name);
             await RecordAndTraceAsync(request, candidate, HasImages(request) ? LlmCallOutcome.OutcomeUnknown : LlmCallOutcome.Failed, null, null, null, estimate, stopwatch.ElapsedMilliseconds,
                 attemptId, "provider_failure");
             return (LlmResult.Refused(HasImages(request) ? LlmRefusalReason.OutcomeUnknown : LlmRefusalReason.Failed) with { TraceAttemptId = attemptId }, null);

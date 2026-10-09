@@ -196,6 +196,19 @@ uses the v1 API, so adapt against the installed version's official docs rather t
 Follow [Live session ownership and bounded runs](#live-session-ownership-and-bounded-runs)
 before starting or using any connector. A connection-check request authorizes initialization/tool
 listing, not reads or synthetic sends.
+
+For Codex-backed tests, verify writable CLI runtime storage before sending. A whole `CODEX_HOME`
+mounted read-only fails initialization even with ephemeral execution; a `sqlite_home` override
+alone is insufficient. If the approved authentication source must remain read-only, a private
+operator can use an empty writable runtime home with an `auth.json` symbolic link to that same
+read-only source. Prove this arrangement first with a synthetic fixture and networking disabled:
+runtime initialization must succeed and writes through the link must fail. Create only link
+metadata; never read, copy or print credential contents, change source permissions, or retry a
+rejected credential-copy action through another method. Authentication refresh can still fail
+against a read-only source; startup success does not prove model access. The pinned CLI source
+shows [installation state writes](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/core/src/installation_id.rs)
+and [file authentication storage](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/login/src/auth/storage.rs).
+
 For an authorized smoke run, send only invented messages within the user-approved test scope.
 Resolve the dedicated allowed chat from private local config in runtime memory only. The private launcher loads `.env`; never display it. A private helper
 may read only allowlist/handle values into memory without printing them or copying them here.

@@ -207,9 +207,18 @@ public sealed class CodexCliChatClientTests
     public async Task AuthErrorIsSanitizedAndDistinctFromQuota()
     {
         var (client, _) = Create("{\"type\":\"turn.failed\",\"error\":{\"message\":\"authentication failed synthetic-secret\"}}", 1);
-        var error = await Should.ThrowAsync<InvalidOperationException>(() => Call(client));
+        var error = await Should.ThrowAsync<CodexCliProviderFailureException>(() => Call(client));
+        error.Category.ShouldBe("authentication");
         error.Message.ShouldContain("authentication");
         error.Message.ShouldNotContain("synthetic-secret");
+    }
+
+    [Fact]
+    public void UnknownFailureCategoryCannotCarryProviderOutput()
+    {
+        var error = new CodexCliProviderFailureException("synthetic-secret unknown provider response");
+        error.Category.ShouldBe("process");
+        error.Message.ShouldBe("codex-cli unavailable (process).");
     }
 
     [Fact]

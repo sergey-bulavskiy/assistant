@@ -315,7 +315,9 @@
 - `codex-cli` uses supported ChatGPT file authentication, not API-key access. Its native executable
   must be exactly `0.160.1`; every call checks `--version` before execution. `CODEX_CLI_PATH` and
   `CODEX_HOME` are optional absolute local paths; production defaults are `/usr/local/bin/codex`
-  and `/home/app/.codex`. Never read/log credential files or pass API credentials to CLI children.
+  and `/home/app/.codex`. The CLI home must allow runtime initialization writes, including
+  `installation_id`; neither ephemeral execution nor a writable `sqlite_home` removes that requirement.
+  Never read/log credential files or pass API credentials to CLI children.
 - Each Codex call uses a fresh temporary workspace, ephemeral execution, ignored user config/rules,
   replaced system/model instructions and a reduced pinned model catalog. Shell, MCP/plugin/app,
   web, collaboration and other unwanted capabilities must remain disabled. A read-only sandbox
@@ -331,6 +333,9 @@
   Failed final accounting refuses the answer. Uncertain dispatches become OutcomeUnknown, and
   reusing a key never dispatches again; another scope/model is refused. Guards create no attempt
   row. Legacy text keys remain null; there is no second photo-specific usage ledger.
+- Codex failures expose only `CodexCliProviderFailureException.Category`, normalized to a fixed
+  allowlist. The gateway logs that category and the exception type, never exception messages,
+  attached data or raw process output. Unknown categories become `process`.
 - Codex final output must agree with `--output-last-message`; only final answer, token usage and
   sanitized failure categories leave the adapter. `LLM_MAX_OUTPUT_TOKENS` is an instruction target
   for this pinned CLI, not a verified hard generation limit. Final text is rejected above
