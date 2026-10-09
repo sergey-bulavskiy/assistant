@@ -42,4 +42,9 @@ This repo is public; workflows run on code from anyone who opens a PR.
   Both failures stop CI before fixtures. Verify the fixture alias has the pulled image ID. Keep
   raw daemon diagnostics in runner temporary storage, outside published artifacts/logs.
   Docker Hub mirrors do not route the separate GHCR IntegreSQL image. No credentials are used.
+  Preload Testcontainers' pinned Ryuk cleanup image too. Its canonical reference includes a
+  digest, so a tag alias cannot satisfy it: after a failed canonical pull, pull the identical
+  immutable digest from the verified cache and set `TESTCONTAINERS_RYUK_CONTAINER_IMAGE` only
+  for subsequent CI steps. This supported Testcontainers configuration changes the registry
+  route, not the pinned image bytes; Ryuk stays enabled. Cache failure still stops the gate.
 - Dependabot PRs: review and merge together with the owner, not automatically.

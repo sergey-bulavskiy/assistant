@@ -68,6 +68,14 @@ jobs:
           docker tag "$pulled_image" pgvector/pgvector:pg17
           test "$(docker image inspect pgvector/pgvector:pg17 --format '{{.Id}}')" = "$pulled_id"
           docker image inspect pgvector/pgvector:pg17 --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}'
+          # Testcontainers 4.15 pins its cleanup image; preserve that exact digest.
+          ryuk_image="testcontainers/ryuk:0.14.0@sha256:7c1a8a9a47c780ed0f983770a662f80deb115d95cce3e2daa3d12115b8cd28f0"
+          if ! timeout 120s docker pull "$ryuk_image"; then
+            ryuk_image="mirror.gcr.io/testcontainers/ryuk@sha256:7c1a8a9a47c780ed0f983770a662f80deb115d95cce3e2daa3d12115b8cd28f0"
+            timeout 120s docker pull "$ryuk_image"
+            echo "TESTCONTAINERS_RYUK_CONTAINER_IMAGE=$ryuk_image" >> "$GITHUB_ENV"
+          fi
+          docker image inspect "$ryuk_image" --format '{{.Id}} {{.Os}}/{{.Architecture}} {{json .RepoDigests}}'
 
       - name: Test
         run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
