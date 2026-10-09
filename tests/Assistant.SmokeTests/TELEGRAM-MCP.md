@@ -306,6 +306,12 @@ query unrelated conversations or resend. A dynamic `/forget` target must come fr
 bot answer and match that exact scoped active fact/source before use.
 Preserve the original failed harness receipt and append the unique source reconciliation;
 successful product persistence does not retroactively turn a failed observation into a pass.
+If a case fails before that ID mapping completes, cleanup must first hydrate its exact canonical
+inbound source from source-linked diagnostics or a proven own-sender/peer, complete text or photo,
+posted-time and uniquely scoped source match. Never substitute a user-session message ID for a
+Bot API source ID and claim database cleanup succeeded. Verify independently that no active
+owned facts remain after cleanup; preserve a failed cleanup receipt and append the exact repair
+proof rather than replacing it. Ambiguous provenance blocks deletion of candidate rows.
 
 Use evidence appropriate to the handler rather than requiring the same persistence shape for
 all bots. Manager commands do not create ordinary conversation `messages` rows. Verify the
@@ -318,6 +324,26 @@ not a bot acknowledgement. Bind the edited canonical source/revision and wait fo
 source-linked interpretation outcome and atomic record replacement. Changed message text or
 an advanced polling cursor alone cannot prove extraction, replacement or successful undo.
 Retain failed observations if cleanup interrupts an unfinished interpretation.
+
+For Vet text revisions, `completed` with `answer_state=none` is a valid processing terminal:
+verify the source-linked result and facts, but assert acknowledgement separately. `completed`
+with `answer_state=sent` records answer delivery; local arrival evidence still decides whether
+the reply met its original deadline. Treat `failed` or `paused` as unsuccessful outcomes.
+`admitted`, `ready`, `written`, `dispatching` and `answer_ready` remain unresolved; changed source
+text or a successful model call alone cannot replace the terminal revision assertion.
+
+Late replies from an earlier owned photo job may arrive during a new text case. Exclude only
+outputs proven to belong to that exact owned source/batch: scoped persisted review-page message
+IDs and text hashes must match, with verified user-session/Bot API ID mapping. Do not suppress
+all photo-shaped replies or all replies from the expected bot. Preserve these late-output
+receipts separately; unknown outputs remain flagged rather than assigned to the new input.
+
+A captionless photo needs an explicitly authorized fixture path in the private adapter. Bind
+its exact actor, posted-time evidence, photo attachment and approved family/bot/chat/topic to
+one persisted source, retaining separate transport and Bot API IDs. Require the explicit
+captionless-photo case flag; never fall back from a failed caption/text match or accept an
+ambiguous source. A successful image call or acknowledgement does not prove numeric accuracy:
+check the displayed value against the authorized fixture and preserve any quality failure.
 
 Restore the verified synthetic business baseline while retaining legitimate revision, actor
 and updated-at audit metadata. Define those assertions separately before sending; do not erase
