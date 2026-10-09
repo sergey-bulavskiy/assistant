@@ -47,8 +47,9 @@ of just storing messages.
 - `/new` starts a fresh conversation in that chat/topic (earlier messages stop being sent as
   context). `/model` shows the configured models and lets you pin this chat to one (`/model auto`
   returns to the default). `/version` as usual.
-- Needs `LLM_MODELS` and `CLAUDE_CODE_OAUTH_TOKEN` configured (see "Set up the General assistant"
-  below) — without them it replies "Ассистент пока не настроен." and every other bot keeps working
+- Needs a valid `LLM_MODELS` chain and the selected provider's supported authentication (see
+  "Set up the General assistant" below). Without model configuration it replies
+  "Ассистент пока не настроен." and every other bot keeps working
   normally.
 
 - General keeps a bounded, fallible summary of older conversation in the exact current chat/topic.
@@ -140,9 +141,10 @@ Pending Да/Нет confirmation follows the answer and is omitted when a value 
 The answer uses the profile, stage week, context note, sourced thresholds, raw active readings from
 30 days and notes from 90 days, plus at most ten recent text messages from this bot/chat/topic. The
 profile's emergency phone is excluded from answer context. One `LLM_MAX_INPUT_CHARS` bound covers
-instructions, runtime and conversation: oldest readings, notes and conversation are omitted in that
-order, with coverage notices. Only if protected context plus the current turn alone exceeds the
-bound is current text explicitly truncated; an unusably small bound returns the normal failure
+instructions, runtime, conversation and documents: oldest readings, notes, conversation, document
+text and document inventory metadata are omitted in that order, with coverage notices. Only if
+protected context plus the current turn alone exceeds the bound is current text explicitly truncated;
+an unusably small bound returns the normal failure
 notice without a model call. The model derives trends from raw data and acknowledges missing coverage.
 Profile/diary/conversation are untrusted background, never instructions or permission to write.
 
@@ -388,18 +390,66 @@ General, Health and Vet support durable reminders in the current approved chat/t
 - `напомни через 10 минут synthetic task`
 - `напомни 09.10.2026 в 14:30 synthetic task`
 - `напоминай каждый день в 14:30 synthetic task`
-- `/reminders` lists your current-place reminders and recent outcomes with Cancel buttons.
-- `/reminder_settings +03:00 22:00 08:00` sets your fixed UTC offset and quiet hours.
+- `/reminders` lists your own current-place reminders and recent outcomes with Cancel buttons.
+- `/reminder_settings` shows your preferences; `/reminder_settings +03:00 22:00 08:00` sets your
+  fixed UTC offset and quiet hours, shared across your family's role bots.
 
 Creation shows a preview; Save schedules it, Cancel stops future occurrences. Defaults are
 UTC+00:00 and quiet 22:00–08:00. Fixed offsets do not adjust for daylight saving time. Schedule
-offset/time is frozen per reminder; current settings govern quiet hours. There is a family-wide
-limit of 10 dispatch attempts per role per UTC day. Drafts expire after 24h; Save rejects passed
+offset/time is frozen per reminder; current settings govern quiet hours. Offsets range from −12:00
+to +14:00; quiet-hour endpoints must differ. Only the creator can list or cancel their reminders.
+Reminders and expected-event checks share limits of 20 live entries per creator/bot/place and 200
+per bot, and a family-wide limit of 10 dispatch attempts per role per UTC day, including unknown
+outcomes. Paused checks count toward capacity. Drafts expire after 24h; Save rejects passed
 times. Jobs 24h late are skipped; daily jobs advance to the next future occurrence. Delivery with
 an unknown result is never automatically repeated; cancellation cannot recall a started send.
 Supported conversational forms work in private chat, when replying to the bot or in places with
-reply-to-all enabled. Other phrasing beginning with напомни/напоминай shows help. This slice
-excludes expected-event checks, medical schedule automation and arbitrary language interpretation.
+reply-to-all enabled. Other phrasing beginning with напомни/напоминай shows help. Arbitrary language
+interpretation and medical schedule automation are not supported.
+
+## Daily expected-event checks
+
+Health and Vet can check whether a confirmed diary record exists in the current approved chat/topic.
+These deterministic commands make no model call and never create a profile or a diary record:
+
+| Command | What |
+|---|---|
+| `/expect glucose daily 09:00 grace 30` | Previews a daily check for an existing subject profile. |
+| `/expectations` | Lists your checks here, their IDs, schedule, status, latest outcome and skipped dates. |
+| `/expect_edit <id> daily 09:00 grace 30` | Previews a replacement schedule for an active check. |
+| `/expect_pause <id>` | Pauses an active check immediately. |
+| `/expect_resume <id>` | Previews restarting a paused check. |
+| `/expect_cancel <id>` | Cancels future checks or a creation proposal. |
+
+Use the displayed 32-character ID. Health supports `glucose`, `insulin`, `meal`, `symptom`, `weight`
+and `blood_pressure`; Vet supports `glucose` and `insulin` and requires a named cat profile.
+Grace is 0–180 minutes, and deadline plus grace must remain before midnight. One live check of a
+type is allowed per profile/place, including drafts and paused checks, regardless of creator.
+Management and Save are creator-only in the exact bot/chat/topic; an owner's status does not grant
+access to someone else's checks. Editing the original command does not change its schedule; use
+the management commands. `/expectations` shows up to 20 live or recent terminal entries here.
+
+Creation, editing and resuming change nothing until Save on the delivered preview. They take effect
+tomorrow in the check's saved fixed UTC offset; previews expire at that local midnight or after
+24 hours, whichever comes first. Editing keeps today's version. Resume requires fresh confirmation
+and does not replay paused days. Changing reminder preferences or the profile's IANA timezone does
+not move an existing check; current reminder preferences still govern quiet hours.
+
+At deadline plus grace, the check looks for an active confirmed record of that type for the exact
+family/profile/bot/chat/topic, with occurrence time from local midnight through deadline plus grace
+inclusive. The record can have been entered by another approved member. Pending or hypothetical
+values do not count. A confirmed meter-photo glucose import can count in its source place. There is
+no dose, product or unit matching, and a missing record does not prove an action was not performed.
+The notice reports missing documentation; it gives no treatment advice.
+
+A matched day becomes `satisfied` and never reopens after correcting or deleting its record.
+Quiet hours or the shared dispatch cap defer an unmatched check only until the next local midnight.
+Older missed dates are marked skipped, without a burst of catch-up notices. Every started send,
+including `dispatch-unknown`, consumes the shared cap and is never automatically repeated.
+Pause/cancel cannot recall a started send. Revoking a creator's approval, disabling/removing a place
+or removing its bot retires affected checks; reapproval does not restore them. A disabled bot cannot
+send, and stale dates are skipped when it resumes. Terminal detail is retained for bounded cleanup
+for 60 days; latest outcomes remain on live checks.
 
 ## Privacy
 
@@ -684,6 +734,14 @@ When the supervised smoke owner tests reminders in an isolated synthetic environ
 create → preview → Save → `/reminders` → Cancel in one exact place. Test a short due reminder
 outside configured quiet hours and confirm one delivery. Unknown sends need separate controlled
 failure evidence; registry promotion alone proves neither reminder delivery nor home runtime.
+
+For expected-event checks, use an isolated synthetic Health/Vet profile and exact approved place.
+Verify create → preview → Save → `/expectations`, then edit, pause, fresh-confirmed resume and cancel.
+Confirm a matching active record suppresses a notice and another topic's record does not; verify
+pending values do not satisfy a check. Check a missing-record notice, quiet-hour deferral, the shared
+reminder/check dispatch cap and restart behavior without repeating an unknown send. Verify deletion
+after `satisfied` does not reopen the day. These checks require dedicated evidence before claiming
+live delivery; they do not authorize production data changes or share another smoke owner's session.
 
 An automated smoke test drives real Telegram through one throwaway account: once the repository
 variable `SMOKE_ENABLED` is `true`, CD runs it on every merge to `main` and moves `latest` (what

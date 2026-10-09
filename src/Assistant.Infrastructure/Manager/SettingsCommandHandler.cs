@@ -176,7 +176,7 @@ public class SettingsCommandHandler
                 }
 
                 bot.Status = action == "bot_enable" ? BotStatus.Active : BotStatus.Disabled;
-                await _db.SaveChangesAsync(cancellationToken);
+                await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, bot.FamilyId.Value, _clock.UtcNow, cancellationToken);
                 if (action == "bot_enable")
                 {
                     await _coordinator.StartBotAsync(id, cancellationToken);
@@ -204,7 +204,7 @@ public class SettingsCommandHandler
                 var places = await _db.Places.IgnoreQueryFilters().Where(p => p.BotId == id).ToListAsync(cancellationToken);
                 _db.Places.RemoveRange(places);
                 _db.Bots.Remove(bot);
-                await _db.SaveChangesAsync(cancellationToken);
+                await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, bot.FamilyId.Value, _clock.UtcNow, cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Бот удалён.", cancellationToken);
                 return;
             }
@@ -222,7 +222,7 @@ public class SettingsCommandHandler
                 }
 
                 place.Status = action == "settingsplace_enable" ? PlaceStatus.Approved : PlaceStatus.Disabled;
-                await _db.SaveChangesAsync(cancellationToken);
+                await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, placeFamilyId.Value, _clock.UtcNow, cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Готово.", cancellationToken);
                 return;
             }
@@ -239,7 +239,7 @@ public class SettingsCommandHandler
                 }
 
                 _db.Places.Remove(place);
-                await _db.SaveChangesAsync(cancellationToken);
+                await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, placeFamilyId.Value, _clock.UtcNow, cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Место удалено.", cancellationToken);
                 return;
             }
@@ -293,7 +293,7 @@ public class SettingsCommandHandler
 
                 member.Status = action == "member_enable" ? FamilyMemberStatus.Approved : FamilyMemberStatus.Denied;
                 member.UpdatedAt = _clock.UtcNow;
-                await _db.SaveChangesAsync(cancellationToken);
+                await Assistant.Infrastructure.Expectations.AuthorityMutation.SaveAsync(_db, member.FamilyId, _clock.UtcNow, cancellationToken);
                 await telegramClient.AnswerCallbackAsync(callback.CallbackQueryId, "Готово.", cancellationToken);
                 return;
             }

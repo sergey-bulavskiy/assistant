@@ -75,6 +75,8 @@ public sealed class VetPhotoHostWorkflowTests : VetTestBase
         services.AddSingleton(new BuildInfo("abcdef1", null, Now));
         services.AddScoped<IMessageStore>(sp => new MessageStore(sp.GetRequiredService<AssistantDbContext>(), Clock, NullLogger<MessageStore>.Instance));
         services.AddScoped<Assistant.Application.Reminders.IReminderStore, Assistant.Infrastructure.Reminders.ReminderStore>();
+            services.AddScoped<Assistant.Application.Expectations.IExpectationStore, Assistant.Infrastructure.Expectations.ExpectationStore>();
+            services.AddScoped<Assistant.Application.Expectations.INonurgentDispatchStore, Assistant.Infrastructure.Expectations.NonurgentDispatchStore>();
         services.AddScoped<IFamilyOwnership, FamilyOwnership>(); services.AddSingleton<ITelegramClientFactory>(new Clients(telegram));
         services.AddScoped<IApprovalService, ApprovalService>(); services.AddSingleton<IRolePrompts>(new RolePrompts(typeof(RolePrompts).Assembly));
         services.RemoveAll<IGeneralAssistant>(); services.AddScoped<IGeneralAssistant>(_ => new NoopGeneral());

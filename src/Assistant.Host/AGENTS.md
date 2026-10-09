@@ -5,7 +5,8 @@
   `TOKEN_ENCRYPTION_KEY` (base64, 32 bytes — encrypts role-bot tokens at rest),
   `ConnectionStrings__Assistant`, optional `Database__MigrationMaxAttempts` /
   `Database__MigrationRetryDelaySeconds`, and the optional `LLM_*` variables plus
-  `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_CLI_VERSION` for the General assistant (all optional;
+  `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_CLI_VERSION` for deliberate Claude rollback. General, Health and
+  Vet share gateway configuration and family call counters (all model settings optional;
   empty/invalid `LLM_*` means LLM is off, logged once at startup, never a crash — see
   `src/Assistant.Infrastructure/AGENTS.md`'s LLM section; `CLAUDE_CLI_VERSION` falls back to this
   build's pinned default). ChatGPT subscription auth uses the private Codex home volume, not an
@@ -48,3 +49,7 @@
 - Photo extraction derives subscription-only eligibility from existing LLM chains and pins
   `gpt-6.1-sol` image capability. `CODEX_IMAGE_INPUT_ENABLED=false` is the existing local disable
   switch; no new Vet-photo configuration variable or paid-provider fallback exists.
+- The coordinator-owned `ReminderBackgroundLoop` dispatches reminders and expected-event checks
+  alongside polling and Vet photos under the same joined cancellation lifetime. It reuses the existing
+  client and fresh family scopes, never another poller. Expectations add no environment option or
+  provider dependency; `/health` does not certify nonurgent queue progress or notice delivery.

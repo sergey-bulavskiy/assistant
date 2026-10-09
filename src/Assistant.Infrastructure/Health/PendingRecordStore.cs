@@ -141,6 +141,7 @@ public class PendingRecordStore : IPendingRecordStore
                 || await HealthDocumentSourceLock.IsDeletedAsync(_db, familyId, pending.ProfileId, sourceId, cancellationToken))
                 return false;
         }
+        await Assistant.Infrastructure.Expectations.ExpectedEventOrder.LockHealthAsync(_db, familyId, pending.ProfileId, cancellationToken);
         var changed = await PendingRecordTransitions.ResolveAsync(_db, familyId, id, status, resolvedByUserId, now, cancellationToken);
         if (changed != 1)
         {
