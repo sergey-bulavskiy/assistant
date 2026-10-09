@@ -101,6 +101,9 @@
   Each original is bounded 10 MiB and decoded JPEG/PNG 25 MP; preserve exact archived bytes.
 - Claim and persisted dispatch are separate fences. Freeze GUID AttemptKey, actor/source/input/ref
   snapshots and lease before a call; M3 records the same key/source message before provider dispatch.
+  Normalize issued image leases to PostgreSQL microsecond precision before persistence and returning
+  the claim; original reads require the exact persisted lease as well as the claim GUID and actor.
+  Do not relax equality to accommodate .NET submicrosecond ticks.
   Claimed-but-unstarted work may resume; expired dispatched work is unknown and remains charged.
   Successful immutable results replay without a second call. Lost ownership/edit/revocation may
   retain old evidence but cannot install it as current. Cancellation blocks new automatic calls,

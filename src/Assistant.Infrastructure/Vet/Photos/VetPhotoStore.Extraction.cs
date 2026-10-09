@@ -79,7 +79,9 @@ public sealed partial class VetPhotoStore : IVetPhotoExtractionStore
         }
         attempt.ActorUserId = actor;
         attempt.ClaimToken = Guid.NewGuid();
-        attempt.LeaseUntil = clock.UtcNow.AddMinutes(5);
+        // PostgreSQL stores microseconds; return exactly the lease persisted for original-reader fencing.
+        var leaseUntil = clock.UtcNow.AddMinutes(5);
+        attempt.LeaseUntil = new DateTimeOffset(leaseUntil.UtcTicks - leaseUntil.UtcTicks % 10, TimeSpan.Zero);
         attempt.ReservedResultSlot = true;
         attempt.State = "claimed";
         attempt.UpdatedAt = clock.UtcNow;

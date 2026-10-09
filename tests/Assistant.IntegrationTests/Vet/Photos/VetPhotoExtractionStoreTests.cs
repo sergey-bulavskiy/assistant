@@ -523,6 +523,72 @@ public sealed class VetPhotoExtractionStoreTests : VetTestBase
         (await unset.Context.Set<VetPhotoExtraction>().CountAsync()).ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(false, 9)]
+    [InlineData(true, 1)]
+    [InlineData(true, 9)]
+    public async Task Image_claim_with_submicrosecond_clock_reads_retained_original_after_database_roundtrip(bool scheduled, int ticks)
+    {
+        await SeedAsync();
+        VetPhotoImageClaim claim;
+        await using (var seed = Open())
+        {
+            var input = await PreparedAsync(seed);
+            var queued = scheduled ? await ScheduleAsync(seed, input) : null;
+            Clock.UtcNow = Now.AddTicks(ticks);
+            var result = scheduled
+                ? await Store(seed).ClaimScheduledImageAsync(Scope, queued!.Attempt.Id, 111, Ct)
+                : await Store(seed).ClaimCurrentImageAsync(Scope, input.Source!.Id, input.Input!.Id, 111, Ct);
+            result.Status.ShouldBe(VetPhotoImageStatus.Claimed);
+            claim = result.Claim.ShouldNotBeNull();
+        }
+        await using var reader = Open();
+        var read = await Store(reader).ReadOriginalAsync(Scope, claim.InputRevisionId, 111,
+            claim.AttemptKey, claim.ClaimToken, claim.LeaseUntil, Ct);
+        read.ShouldNotBeNull().Original.ShouldBe(Original);
+        var persisted = await reader.Context.Set<VetPhotoAttempt>().AsNoTracking()
+            .SingleAsync(a => a.Id == claim.AttemptKey);
+        persisted.LeaseUntil.ShouldBe(claim.LeaseUntil);
+        var readerLease = await reader.Context.Set<VetPhotoReaderLease>().AsNoTracking().SingleAsync();
+        readerLease.Id.ShouldBe(read!.ReaderLeaseId);
+        readerLease.AttemptId.ShouldBe(claim.AttemptKey);
+        readerLease.ClaimToken.ShouldBe(claim.ClaimToken);
+        readerLease.ExpiresAt.ShouldBe(claim.LeaseUntil);
+    }
+
+    [Fact]
+    public async Task Image_original_read_preserves_exact_claim_ownership_and_expiry_guards()
+    {
+        await SeedAsync();
+        VetPhotoImageClaim claim;
+        await using (var seed = Open())
+        {
+            var input = await PreparedAsync(seed);
+            Clock.UtcNow = Now.AddTicks(1);
+            claim = (await Store(seed).ClaimCurrentImageAsync(Scope, input.Source!.Id,
+                input.Input!.Id, 111, Ct)).Claim.ShouldNotBeNull();
+        }
+        await using var reader = Open();
+        var store = Store(reader);
+        (await store.ReadOriginalAsync(Scope, claim.InputRevisionId, 111, claim.AttemptKey,
+            claim.ClaimToken, claim.LeaseUntil.AddTicks(1), Ct)).ShouldBeNull();
+        (await store.ReadOriginalAsync(Scope, claim.InputRevisionId, 111, claim.AttemptKey,
+            Guid.NewGuid(), claim.LeaseUntil, Ct)).ShouldBeNull();
+        (await store.ReadOriginalAsync(Scope, claim.InputRevisionId, 222, claim.AttemptKey,
+            claim.ClaimToken, claim.LeaseUntil, Ct)).ShouldBeNull();
+        (await store.ReadOriginalAsync(Scope, Guid.NewGuid(), 111, claim.AttemptKey,
+            claim.ClaimToken, claim.LeaseUntil, Ct)).ShouldBeNull();
+        (await reader.Context.Set<VetPhotoReaderLease>().CountAsync()).ShouldBe(0);
+        Clock.UtcNow = claim.LeaseUntil.AddTicks(-1);
+        (await store.ReadOriginalAsync(Scope, claim.InputRevisionId, 111, claim.AttemptKey,
+            claim.ClaimToken, claim.LeaseUntil, Ct)).ShouldNotBeNull().Original.ShouldBe(Original);
+        Clock.UtcNow = claim.LeaseUntil;
+        (await store.ReadOriginalAsync(Scope, claim.InputRevisionId, 111, claim.AttemptKey,
+            claim.ClaimToken, claim.LeaseUntil, Ct)).ShouldBeNull();
+        (await reader.Context.Set<VetPhotoReaderLease>().CountAsync()).ShouldBe(1);
+    }
+
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private T ScopedFixture<T>(VetTestSession s, T value) where T : class
     {
