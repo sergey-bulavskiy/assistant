@@ -319,6 +319,26 @@ source-linked interpretation outcome and atomic record replacement. Changed mess
 an advanced polling cursor alone cannot prove extraction, replacement or successful undo.
 Retain failed observations if cleanup interrupts an unfinished interpretation.
 
+For Vet text revisions, `completed` with `answer_state=none` is a valid processing terminal:
+verify the source-linked result and facts, but assert acknowledgement separately. `completed`
+with `answer_state=sent` records answer delivery; local arrival evidence still decides whether
+the reply met its original deadline. Treat `failed` or `paused` as unsuccessful outcomes.
+`admitted`, `ready`, `written`, `dispatching` and `answer_ready` remain unresolved; changed source
+text or a successful model call alone cannot replace the terminal revision assertion.
+
+Late replies from an earlier owned photo job may arrive during a new text case. Exclude only
+outputs proven to belong to that exact owned source/batch: scoped persisted review-page message
+IDs and text hashes must match, with verified user-session/Bot API ID mapping. Do not suppress
+all photo-shaped replies or all replies from the expected bot. Preserve these late-output
+receipts separately; unknown outputs remain flagged rather than assigned to the new input.
+
+A captionless photo needs an explicitly authorized fixture path in the private adapter. Bind
+its exact actor, posted-time evidence, photo attachment and approved family/bot/chat/topic to
+one persisted source, retaining separate transport and Bot API IDs. Require the explicit
+captionless-photo case flag; never fall back from a failed caption/text match or accept an
+ambiguous source. A successful image call or acknowledgement does not prove numeric accuracy:
+check the displayed value against the authorized fixture and preserve any quality failure.
+
 Restore the verified synthetic business baseline while retaining legitimate revision, actor
 and updated-at audit metadata. Define those assertions separately before sending; do not erase
 audit history to make a byte-for-byte snapshot comparison pass. If an overly broad comparison
