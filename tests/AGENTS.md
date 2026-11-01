@@ -94,6 +94,15 @@ Every test must be able to fail for a real bug. No tests that check nothing.
 
 ## Smoke test (`Assistant.SmokeTests`)
 
+- Before extending live scenario coverage, prove one minimal useful scenario from a fresh,
+  isolated setup using the documented setup path, without an unpublished private adapter.
+  Identify the exact source revision and image/build under test. Check both the Telegram result
+  and actual database state for persisted behaviour; a plausible reply alone is insufficient.
+  Prove the runner detects a controlled fault in the tested behaviour (for example, disabled
+  persistence), then restore it and run the passing scenario. Changing an expected value alone
+  does not prove the application path is covered. Report failed, skipped and
+  unexecuted checks explicitly; a skip or connection check is not a scenario pass. Keep private
+  run evidence outside both repositories under the existing live runbook's reporting rules.
 - The credential-free supervised-run primitives have focused offline Python standard-library
   regressions: `python -B -m unittest discover -s tests/Assistant.SmokeTests -p test_supervised_run.py -v`.
   Run them when editing `supervised_run.py`; CI runs them separately from the .NET suite.

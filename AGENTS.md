@@ -21,6 +21,18 @@ command only as an example next to a generic fallback.
 - **Iterative delivery.** Foundation and delivery pipeline first, then features, one milestone at
   a time. Write a milestone's spec (in the specs repo) when the milestone starts, get the owner's
   approval, then write the plan.
+- **Prove the simplest path first.** Before expanding feature scope, demonstrate one small,
+  useful end-to-end scenario through real Telegram, including persisted state where relevant.
+  Use its observed result to decide the next increment; testing rules live in `tests/AGENTS.md`.
+- **Periodic simplification review.** At each milestone boundary, before planning the next,
+  challenge the current requirements, specs, decisions and implementation against actual usage
+  and current need. Review earlier when proposing a new subsystem or dependency. Include this
+  in the existing change review when possible; it is not another per-PR review gate. Look for
+  speculative requirements, model-generated overengineering, unused paths and simpler existing
+  mechanisms. For up to three highest-impact findings, record the evidence, smaller alternative
+  and owner's decision to keep, simplify, retire or defer. Keep product-specific findings and
+  decisions in `../assistant-specs`. Findings do not authorize deleting behaviour/data or
+  expanding scope; obtain the owner's decision before implementation unless already authorized.
 - **Plans for weaker implementers.** Plans are executed by fresh, less capable models with zero
   context: exact file paths, complete code, exact package versions, exact commands with expected
   output, a verification after each step, feature-specific pitfalls named. No "etc.", "similar to
