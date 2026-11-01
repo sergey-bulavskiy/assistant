@@ -49,6 +49,7 @@ class RecipeScenarioTests(unittest.TestCase):
         receipt = self.exercise()
         self.assertEqual('pass', receipt['outcome'])
         self.assertEqual(ROW, receipt['selected_recipe'])
+        self.assertEqual(SW['reply_text'], receipt['shopping_expected_reply'])
         self.assertEqual([PREF], receipt['preference_before_restart'])
         self.assertEqual([PREF], receipt['preference_after_restart'])
 
