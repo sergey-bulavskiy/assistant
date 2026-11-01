@@ -19,7 +19,9 @@ static HashSet<long> IdSet(string name)
     return result;
 }
 
-try
+using var stop = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+Environment.ExitCode = await ExitBoundary.RunAsync(async () =>
 {
     var token = Required("TELEGRAM_BOT_TOKEN");
     var key = Required("OPENAI_API_KEY");
@@ -32,8 +34,6 @@ try
     var options = new DbContextOptionsBuilder<ObservationDb>().UseNpgsql(connection).Options;
     using var telegram = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
     using var openai = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-    using var stop = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
 
     // Resolve the bot before polling. Never print its response or URL.
     using var meResponse = await telegram.PostAsJsonAsync($"https://api.telegram.org/bot{token}/getMe", new { }, stop.Token);
@@ -51,10 +51,4 @@ try
         (offset, cancellation) => bot.CallAsync("getUpdates",
             new { offset, timeout = 25, allowed_updates = new[] { "message" } }, cancellation),
         bot.HandleAsync, TimeSpan.FromSeconds(2), stop.Token);
-}
-catch (OperationCanceledException) { }
-catch (Exception error)
-{
-    Console.Error.WriteLine($"Startup failure: {error.GetType().Name}");
-    Environment.ExitCode = 1;
-}
+}, stop.Token);
