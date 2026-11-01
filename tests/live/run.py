@@ -23,7 +23,7 @@ FROM observations ORDER BY "Id") t;'''
 
 def run(args, timeout=20):
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          text=True, timeout=timeout).stdout.strip()
+                          text=True, encoding='utf-8', timeout=timeout).stdout.strip()
 
 
 def receipt_value(value):

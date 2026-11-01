@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -30,6 +31,13 @@ class Child:
 
 
 class RecipeScenarioTests(unittest.TestCase):
+    def test_subprocess_output_is_decoded_as_utf8(self):
+        expected = 'Курица с лимоном'
+        payload = expected.encode('utf-8').hex()
+        actual = runner.run([sys.executable, '-c',
+                             'import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))', payload])
+        self.assertEqual(expected, actual)
+
     def exercise(self, extra_request=False, semantic='pass'):
         queries = iter([[], [], [PREF], [PREF], [ROW]])
         witnesses = iter([PW, RW, {'semantic_check': semantic}, SW])
