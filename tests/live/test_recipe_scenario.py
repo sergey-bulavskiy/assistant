@@ -80,6 +80,22 @@ class RecipeScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(VerificationFailure, 'semantic inspection'):
             self.exercise(semantic='fail')
 
+    def test_mismatched_recipe_saves_query_evidence_before_failing(self):
+        queries = iter([[], [], [PREF], [PREF], [ROW]])
+        wrong = dict(RW, reply_text=RW['reply_text'].replace('80 г', '81 г'))
+        witnesses = iter([PW, wrong])
+        snapshots = []
+        receipt = {}
+        with self.assertRaisesRegex(VerificationFailure, 'recipe reply differs'):
+            recipe_scenario.execute('owned', SUBJECT, Child(), lambda: Child(),
+                lambda args: json.dumps(next(queries)), lambda prompt: next(witnesses), receipt,
+                lambda: snapshots.append(deepcopy(receipt)))
+        self.assertEqual([], snapshots[-1]['initial_preferences'])
+        self.assertEqual([], snapshots[-1]['initial_recipes'])
+        self.assertEqual([ROW], snapshots[-1]['recipe_rows'])
+        self.assertEqual(wrong, snapshots[-1]['recipe_witness'])
+        self.assertEqual(RW['reply_text'], snapshots[-1]['recipe_expected_reply'])
+
     def test_marker_is_counted_after_output_reader_finishes(self):
         process = mock.Mock()
         process.poll.return_value = 0
@@ -133,6 +149,56 @@ class RecipeScenarioTests(unittest.TestCase):
             receipt = json.loads(next(Path(directory).glob('foundation-*.json')).read_text(encoding='utf-8'))
             self.assertEqual(('fail', 'synthetic failure', 'recipe'),
                              (receipt['outcome'], receipt['reason'], receipt['scenario']))
+
+    def test_mismatched_recipe_receipt_survives_cleanup_with_exact_evidence(self):
+        calls, children = [], []
+        exact = '1.000000000000000000000000001'
+        row = deepcopy(ROW)
+        row['ingredients'][0]['Grams'] = exact
+        raw_row = json.dumps([row]).replace('"' + exact + '"', exact)
+        queries = iter(['[]', '[]', json.dumps([PREF]), json.dumps([PREF]), raw_row])
+        expected = RW['reply_text'].replace('80 г', exact + ' г')
+        wrong = dict(RW, reply_text=expected.replace(exact, '1.000000000000000000000000002'))
+
+        class FakeChild(Child):
+            def __init__(self, environment):
+                super().__init__()
+                children.append(self)
+
+        def fake_run(args, timeout=20):
+            calls.append(args)
+            if args[0] == 'git':
+                return 'abc123' if 'rev-parse' in args else ''
+            if args[:2] == ['docker', 'create']:
+                return 'owned-container-id'
+            if args[:2] == ['docker', 'port']:
+                return '127.0.0.1:15432'
+            if args[:2] == ['docker', 'exec'] and 'psql' in args:
+                return next(queries)
+            return ''
+
+        with tempfile.TemporaryDirectory() as directory:
+            dll = Path(directory) / 'Assistant.dll'
+            dll.write_bytes(b'synthetic-binary')
+            env = {name: 'synthetic' for name in ('TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'OPENAI_MODEL',
+                                                    'ALLOWED_USERS', 'ALLOWED_CHATS')}
+            env.update(SUBJECT_ID=SUBJECT, ASSISTANT_LIVE_SCENARIO='recipe')
+            with mock.patch.dict(os.environ, env), mock.patch.object(runner, 'DLL', dll), \
+                 mock.patch.object(runner, 'private_directory', return_value=Path(directory)), \
+                 mock.patch.object(runner, 'run', side_effect=fake_run), \
+                 mock.patch.object(runner, 'Child', FakeChild), \
+                 mock.patch.object(runner, 'witness', side_effect=[PW, wrong]), \
+                 mock.patch.object(runner.sys, 'argv', ['run.py', directory]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(1, runner.main())
+            self.assertTrue(all(child.stopped for child in children))
+            self.assertEqual([['docker', 'rm', '-f', 'owned-container-id']],
+                             [item for item in calls if item[:2] == ['docker', 'rm']])
+            receipt = json.loads(next(Path(directory).glob('foundation-*.json')).read_text(encoding='utf-8'))
+            self.assertEqual('fail', receipt['outcome'])
+            self.assertEqual(exact, receipt['recipe_rows'][0]['ingredients'][0]['Grams'])
+            self.assertEqual(expected, receipt['recipe_expected_reply'])
+            self.assertEqual(wrong, receipt['recipe_witness'])
 
 
 if __name__ == '__main__':

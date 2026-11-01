@@ -1,7 +1,7 @@
 import json
 from decimal import Decimal
 from verify import VerificationFailure
-from verify_recipe import PREFERENCE, check_preference, check_recipe, check_shopping
+from verify_recipe import PREFERENCE, check_preference, check_recipe, check_shopping, expected_recipe, expected_shopping
 
 PREF_SQL = '''SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json)::text FROM (
 SELECT "SubjectId" AS subject_id, "BotId" AS bot_id, "ChatId" AS chat_id,
@@ -17,7 +17,12 @@ def execute(container, subject, child, restart, run, witness, receipt, save):
         return json.loads(run(['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'runner',
                                '-t', '-A', '-c', sql]), parse_float=Decimal)
 
-    if query(PREF_SQL) or query(RECIPE_SQL):
+    initial_preferences = query(PREF_SQL)
+    initial_recipes = query(RECIPE_SQL)
+    receipt['initial_preferences'] = initial_preferences
+    receipt['initial_recipes'] = initial_recipes
+    save()
+    if initial_preferences or initial_recipes:
         raise VerificationFailure('isolated database was not empty')
     pref = witness('Send /prefer ' + PREFERENCE + ' in the selected General topic; enter source witness JSON:')
     receipt['preference_witness'] = pref
@@ -38,7 +43,15 @@ def execute(container, subject, child, restart, run, witness, receipt, save):
     recipe = witness('Send /recipe in the same topic; enter source witness JSON:')
     receipt['recipe_witness'] = recipe
     child.wait_for('recipe_requested', 10)
-    selected = check_recipe(query(RECIPE_SQL), subject, pref, recipe)
+    recipe_rows = query(RECIPE_SQL)
+    receipt['recipe_rows'] = recipe_rows
+    if len(recipe_rows) == 1:
+        try:
+            receipt['recipe_expected_reply'] = expected_recipe(recipe_rows[0])
+        except (VerificationFailure, KeyError, TypeError, ValueError):
+            receipt['recipe_expected_reply'] = None
+    save()
+    selected = check_recipe(recipe_rows, subject, pref, recipe)
     receipt['selected_recipe'] = selected
     save()
     semantic = witness('Independent verification agent: enter {"semantic_check":"pass"} only after inspecting the saved synthetic recipe against the declared preference and coherence:')
@@ -48,6 +61,7 @@ def execute(container, subject, child, restart, run, witness, receipt, save):
         raise VerificationFailure('independent semantic inspection failed or unavailable')
     shopping = witness('Send /shopping in the same topic; enter linked reply witness JSON:')
     receipt['shopping_witness'] = shopping
+    receipt['shopping_expected_reply'] = expected_shopping(selected)
     save()
     child.stop()
     if child.recipe_requests != 1 or child.requests != 0:

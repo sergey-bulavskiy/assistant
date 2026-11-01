@@ -30,6 +30,22 @@ def check_preference(rows, subject, witness):
         raise VerificationFailure('malformed preference evidence') from error
 
 
+def expected_recipe(row):
+    title, ingredients, steps = row['title'], row['ingredients'], row['steps']
+    if not isinstance(title, str) or not title.strip() or not ingredients or not steps:
+        raise VerificationFailure('empty recipe content')
+    if any(not isinstance(s, str) or not s.strip() for s in steps):
+        raise VerificationFailure('empty preparation step')
+    lines = []
+    for ingredient in ingredients:
+        name = ingredient['Name']
+        if not isinstance(name, str) or not name.strip():
+            raise VerificationFailure('empty ingredient')
+        lines.append(f"- {name}: {quantity(ingredient['Grams'])} г")
+    return (f"Рецепт #{int(row['id'])}\nИсточник: {int(row['bot_id'])}/{int(row['chat_id'])}/{int(row['message_id'])}\n{title}\n"
+            + 'Ингредиенты:\n' + '\n'.join(lines) + '\nПриготовление:\n' + '\n'.join(steps))
+
+
 def check_recipe(rows, subject, pref_witness, witness):
     try:
         if len(rows) != 1:
@@ -40,19 +56,7 @@ def check_recipe(rows, subject, pref_witness, witness):
                 or str(UUID(row['subject_id'])) != str(UUID(subject)) or int(row['bot_id']) != bot
                 or int(row['chat_id']) != chat or int(row['message_id']) != message or row['topic_id'] is not None):
             raise VerificationFailure('recipe source or scope differs')
-        title, ingredients, steps = row['title'], row['ingredients'], row['steps']
-        if not isinstance(title, str) or not title.strip() or not ingredients or not steps:
-            raise VerificationFailure('empty recipe content')
-        if any(not isinstance(s, str) or not s.strip() for s in steps):
-            raise VerificationFailure('empty preparation step')
-        lines = []
-        for ingredient in ingredients:
-            name = ingredient['Name']
-            if not isinstance(name, str) or not name.strip():
-                raise VerificationFailure('empty ingredient')
-            lines.append(f"- {name}: {quantity(ingredient['Grams'])} г")
-        expected = (f"Рецепт #{int(row['id'])}\nИсточник: {bot}/{chat}/{message}\n{title}\n"
-                    + 'Ингредиенты:\n' + '\n'.join(lines) + '\nПриготовление:\n' + '\n'.join(steps))
+        expected = expected_recipe(row)
         if (int(witness['reply_bot_id']) != bot or int(witness['reply_to']) != message
                 or witness['reply_text'] != expected):
             raise VerificationFailure('recipe reply differs from saved source and content')
@@ -61,13 +65,17 @@ def check_recipe(rows, subject, pref_witness, witness):
         raise VerificationFailure('malformed recipe evidence') from error
 
 
+def expected_shopping(row):
+    lines = [f"- {i['Name']}: {quantity(i['Grams'])} г" for i in row['ingredients']]
+    return (f"Список покупок для рецепта #{int(row['id'])}\nИсточник: {int(row['bot_id'])}/{int(row['chat_id'])}/{int(row['message_id'])}\n"
+            + '\n'.join(lines))
+
+
 def check_shopping(row, recipe_witness, witness):
     try:
         bot, chat, source = (int(recipe_witness[k]) for k in ('bot_id', 'chat_id', 'message_id'))
         message = int(witness['message_id'])
-        lines = [f"- {i['Name']}: {quantity(i['Grams'])} г" for i in row['ingredients']]
-        expected = (f"Список покупок для рецепта #{int(row['id'])}\nИсточник: {bot}/{chat}/{source}\n"
-                    + '\n'.join(lines))
+        expected = expected_shopping(row)
         if (int(witness['chat_id']) != chat or int(witness['reply_bot_id']) != bot
                 or int(witness['reply_to']) != message or witness['reply_text'] != expected):
             raise VerificationFailure('shopping differs from selected saved recipe')
