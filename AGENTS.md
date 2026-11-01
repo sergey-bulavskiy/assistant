@@ -39,6 +39,16 @@ command only as an example next to a generic fallback.
   A material scope or architecture change reopens the affected design decision. This checks the
   proposed design; the existing code review checks its implementation. Documentation-only
   corrections do not need a separate design review.
+- **Reviewers must challenge inherited assumptions.** Design and implementation reviewers
+  should be deliberately skeptical and exacting, including about decisions made by earlier
+  models. Compliance with a spec, ADR, plan or existing code is not sufficient: trace important
+  constraints back to a current user need or demonstrated technical limitation. Distinguish
+  owner requirements from model assumptions and derived choices. If an upstream choice is
+  unjustified, identify the dependent decisions it affects and propose a smaller alternative;
+  do not let repeated citations turn that assumption into an unquestionable requirement.
+  Raise material upstream flaws even when the implementation follows the plan correctly.
+  Resolve them with the owner before dependent work proceeds. Findings need concrete evidence
+  and consequences; skepticism is not a quota of complaints or a reason for speculative rewrites.
 - **Periodic simplification review.** At each milestone boundary, before planning the next,
   challenge the current requirements, specs, decisions and implementation against actual usage
   and current need. Review earlier when proposing a new subsystem or dependency. Include this
@@ -199,13 +209,15 @@ Reviewers (human, subagent or CI bot) check, in this order:
    commit messages or PR text? Blocking.
 2. **Secret leakage at runtime**: new log lines, exception messages or HTTP clients that could
    print the bot token, message text or user data (see `src/Assistant.Host/AGENTS.md`). Blocking.
-3. **Correctness**: exactly-once handling of updates, idempotent storage, cancellation, retries.
-4. **Tests**: new behaviour has tests that meet the quality rules in `tests/AGENTS.md` (each
+3. **Necessity and assumptions**: apply the skeptical-review rule above to the changed scope,
+   including inherited requirements and architectural choices, not just adherence to the plan.
+4. **Correctness**: exactly-once handling of updates, idempotent storage, cancellation, retries.
+5. **Tests**: new behaviour has tests that meet the quality rules in `tests/AGENTS.md` (each
    test can fail for a real bug; no tests that check nothing); test data is synthetic.
-5. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
+6. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
    infrastructure types do not leak into Application.
-6. **Workflows**: `.github/AGENTS.md` rules hold.
-7. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
+7. **Workflows**: `.github/AGENTS.md` rules hold.
+8. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
    invariant goes into the matching local `AGENTS.md`.
 
 Report findings as blocking / should-fix / nit. Review comments on the public repo follow the
