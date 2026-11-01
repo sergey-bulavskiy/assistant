@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Family assistant: Telegram role-bots backed by LLMs (C# / .NET 10, PostgreSQL).
+Family assistant replacement: one C# / .NET 10 Telegram executable with PostgreSQL and OpenAI.
 
 Instructions for any coding agent (Claude Code, Codex, Copilot, Cursor, …) working in this repo.
 `AGENTS.md` files are the only instruction files; don't add tool-specific ones (`CLAUDE.md`,
@@ -77,8 +77,7 @@ command only as an example next to a generic fallback.
   [`csharp-refactoring` skill](https://github.com/dotnet/skills/tree/main/plugins/dotnet/skills/csharp-refactoring)
   covers behavior-preserving C# refactors. For framework upgrades, use the applicable skill from
   the [`dotnet-upgrade` plugin](https://github.com/dotnet/skills/tree/main/plugins/dotnet-upgrade);
-  test writing and audits are covered in `tests/AGENTS.md`, and schema migrations in
-  `src/Assistant.Infrastructure/AGENTS.md`. The catalog currently has no dedicated general
+  test writing and audits are covered in `tests/AGENTS.md`. The catalog currently has no dedicated general
   architecture, code review, code style, or EF Core schema migration skill. For these areas, this
   file and the relevant local guide remain the source of project rules. Skills support the
   scheduled review described below; they do not add another review gate. Check the catalog for
@@ -90,22 +89,12 @@ command only as an example next to a generic fallback.
 
 | Path | What | Local guide |
 |---|---|---|
-| `src/Assistant.Domain` | Entities, including durable expectations and their schedule versions/occurrences, no dependencies | `src/Assistant.Domain/AGENTS.md` |
-| `src/Assistant.Application` | Role-bot update handling, reply policy, command parsing, General assistant (`Messages/GeneralAssistant.cs`), shared addressing rule (`Messages/Addressing.cs`), private trace contracts and transport hooks (`Diagnostics/`), scoped General memory (`Memory/`), shared user reminders (`Reminders/`: parser, confirmation and due-dispatch contracts), deterministic expected-event commands and time/management contracts (`Expectations/`), health assistant (`Health/`: `HealthAssistant` dispatches to `HealthCommands`, `HealthMessagePipeline`, `HealthAnswers`, `HealthConfirmations`; `Health/Documents/` handles durable source admission, bounded extraction/recovery, library listing and consultation context); ports (`IMessageStore`, `ITelegramClient`, `IClock`, `IApprovalService`, `ICurrentFamily`, `IManagerUpdateHandler`, `ITokenEncryptor`, `ILlmGateway`, `IChatSettingsStore`, `ILlmUsageQuery`, `IHealthProfileStore`, `IEventStore`, `ISafetyAlertStore`, `IPendingRecordStore`, `IHealthDocumentStore`, `IHealthDocumentLeaseKeeper`, `IFamilyOwnership`, `IRolePrompts`, …) | — |
-| `src/Assistant.Application/Health` | Health interpretation, owner profile fields and consultation; `HealthConsultationContext` builds one bounded diary/profile/conversation/document snapshot; `Documents/` handles admission, extraction/recovery and library/context ports | `src/Assistant.Application/Health/AGENTS.md` |
-| `src/Assistant.Application/Vet` | Cat profile/text diary and `Photos/` meter imports, independent caption/image processing, scoped batch/reprocess/reversal reviews, retained-source ports and revision/action mutations | `src/Assistant.Application/Vet/AGENTS.md` |
-| `src/Assistant.Infrastructure` | EF Core + Npgsql, Telegram.Bot attachment transport, bot polling (`Bots/`), durable reminder store and independent joined shared nonurgent loop (`Reminders/`), expectation store, shared accounting/dispatch and confirmed-event ordering/query (`Expectations/`), manager bot commands (`Manager/`), approvals (`Families/`), token encryption, LLM gateway, native Codex images and CLI/API providers (`Llm/`), health stores, bounded document text extraction and independent lease renewal (`Health/`), private bounded diagnostics (`Diagnostics/`), role prompt loader (`Roles/`) | `src/Assistant.Infrastructure/AGENTS.md` |
-| `src/Assistant.Host` | ASP.NET host, startup (config validation, migrations, claim code), `/health` | `src/Assistant.Host/AGENTS.md` |
-| `src/Assistant.TraceExport` | Read-only local export of private diagnostic timelines to an explicit path outside repositories | `src/Assistant.Infrastructure/AGENTS.md` |
-| `roles/` | Role prompt sources (`roles/<role>/*.md`), generic, embedded into Infrastructure at build time | `src/Assistant.Infrastructure/AGENTS.md` |
-| `tests/` | Unit + integration (IntegreSQL) tests; extraction evals (`Assistant.Evals`: recorded answers replayed in every run, live model run opt-in); opt-in real-Telegram smoke test (`Assistant.SmokeTests`) | `tests/AGENTS.md` |
-| `deploy/` | Production compose, `.env.example` | `deploy/AGENTS.md` |
-| `.github/` | CI/CD workflows, Dependabot | `.github/AGENTS.md` |
+| `src/Assistant` | Telegram bot, OpenAI extraction and PostgreSQL persistence | — |
+| `tests/` | Test rules and future isolated behavioral checks | `tests/AGENTS.md` |
+| `deploy/` | Legacy production compose and example configuration; replacement cutover is not authorized | `deploy/AGENTS.md` |
+| `.github/` | CI classifier and deployment hold | `.github/AGENTS.md` |
 
-Before editing files under a path with a local guide, read that guide. Rules live in exactly one
-file: a rule that applies to one folder goes in that folder's guide, not here. Add a new local
-guide only for knowledge that is not obvious from the code (a gotcha, an invariant, a command),
-and add it to the table above.
+Read the local guide before editing its path. Rules live in exactly one file; add a local guide only for non-obvious knowledge and list it here.
 
 ## Privacy rules (mandatory)
 
@@ -127,79 +116,22 @@ This project handles personal and health data at runtime. None of it may enter t
 ## Build and test
 
 ```bash
-dotnet build -c Release -warnaserror   # same flags as CI; warnings are errors
-dotnet test -c Release                 # integration tests need Docker running
+dotnet build -c Release -warnaserror -v q -nologo
+dotnet test -c Release -v q --logger "console;verbosity=minimal"
 ```
 
-A plain `dotnet test` skips the smoke test and the live extraction evals; both are opt-in (`tests/AGENTS.md`).
-
-Faster local loop and test infrastructure details: `tests/AGENTS.md`.
+CI also builds the Docker image without publishing it when application checks are needed. PostgreSQL integration tests require Docker. Test rules are in `tests/AGENTS.md`.
 
 ## Delivering a change
 
-Every change, including docs, goes through these steps. Do not report a change as done before
-step 9.
-
-The owner is the only developer. Each check runs **once**, where it is cheapest: tests run
-locally and again in CI (CI costs no model tokens), but a change gets **one** model review, not
-one per stage. Keep command output small: read logs only when something failed.
-
-1. **Branch.** Never commit to `main`. Name branches `feat/…`, `fix/…` or `chore/…`.
-2. **Local gate.** Run the build and test commands above with quiet output
-   (`dotnet build -c Release -warnaserror -v q -nologo`,
-   `dotnet test -c Release -v q --logger "console;verbosity=minimal"`); both must pass. If you
-   could not run a step (e.g. Docker unavailable), say so explicitly — never claim it passed.
-   Skip it for changes that touch no code, tests or build files (docs, `AGENTS.md`, workflows):
-   CI runs anyway. After fixing review findings, rerun only the build and the affected tests;
-   CI runs the full suite.
-3. **Docs current.** A PR that adds, changes or removes behaviour updates, in the same PR, every
-   doc that describes it: `README.md` (what the bots do, commands, setup, smoke checklist), the
-   layout table above, the local `AGENTS.md` guides, `deploy/.env.example`, and code comments
-   that name the changed behaviour or config. Don't leave milestone-specific docs behind once the
-   milestone is done. Update `docs/status.md` in `../assistant-specs` after merging.
-4. **Privacy check.** Read `git diff main...HEAD`, the commit messages and the PR text you are
-   about to publish against the privacy rules above. Every commit on the branch is published and
-   stays reachable on GitHub even after a squash merge, so also read `git log -p main..HEAD`:
-   wording that was added and later removed still leaks. If any commit contains something that
-   must not be public, squash or rewrite the branch **before the first push**.
-5. **Review — once, sized to the change.** Against the checklist below, by a fresh reviewer (a
-   subagent or a separate session with no stake in the change). Fix or explicitly answer each
-   blocking and should-fix finding.
-   - Docs, `AGENTS.md`, Dependabot and other chore changes: no model review; step 4 is enough.
-   - Code changes: one review, using the tool's built-in review command if it has one (e.g.
-     `/code-review` in Claude Code), otherwise a fresh subagent given this checklist.
-   - Work executed task by task with per-task reviews (e.g. a subagent-per-task plan executor):
-     those reviews plus one final whole-branch review are the review. Do not run another one.
-   - A dedicated test-quality review (e.g. the `test-quality-auditor` agent from the
-     `dotnet-test` plugin, see `tests/AGENTS.md`) only when the PR adds new test classes or
-     rewrites existing tests, not for small test edits.
-   - Do not rerun a full review after fixing findings; check the fixes yourself.
-6. **PR.** `git push -u origin <branch>`, then `gh pr create` with a neutral title and a body
-   saying what changed and how it was verified.
-7. **CI.** Wait without streaming progress:
-   `gh pr checks <n> --watch --fail-fast > /dev/null; echo "exit=$?"` (if it reports no checks
-   yet, retry after a few seconds). On failure: `gh run view <run-id> --log-failed`, fix, push,
-   wait again. A red or pending check is not done.
-   **AI CI review** (`claude-review` label, `.github/AGENTS.md`) is **not** part of the flow;
-   run it only when the owner asks. Then: `gh pr edit <n> --add-label claude-review`, wait for its run
-   (`gh run list --workflow claude-review.yml --limit 1`,
-   `gh run watch <run-id> --exit-status > /dev/null`), read its summary
-   (`gh pr view <n> --comments`) and inline comments
-   (`gh api repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | .path + ":" + (.line|tostring) + " " + .body'`),
-   and fix or explicitly answer every blocking and should-fix finding.
-8. **Merge.** Squash merge (`gh pr merge --squash --delete-branch`, author email per Git
-   below) only when CI is green and the owner has approved merging in the current session.
-9. **CD.** After merge, `gh run list --workflow cd --limit 1` (CD starts only after the `ci` run
-   on `main` finishes — retry until a run for the merge commit appears), then
-   `gh run watch <run-id> --exit-status > /dev/null; echo "exit=$?"`. CD builds the `sha-<7>`
-   image, runs the real-Telegram smoke test against it (only when the repository variable
-   `SMOKE_ENABLED` is `true`; otherwise `smoke` is skipped and the run warns), and then promotes `latest`.
-   Report the deployed image tag (`sha-<first 7 of the merge commit>`) once `promote` succeeded.
-   If `smoke` fails, `latest` is unchanged (the home PC keeps the previous release): say so and
-   investigate; the change is merged but not delivered. Re-run failed jobs for transient failures (only the newest run promotes).
-
-Outward actions beyond this flow (force pushes, deleting remote branches other than the merged
-one, changing repo settings, publishing packages) need the owner's explicit approval.
+1. Work on a `feat/`, `fix/` or `chore/` branch, never commit to `main`.
+2. Run the local build and tests above for code or build changes; report anything not run. CI classifies documentation-only changes and always runs its gate; code, build and workflow changes run application checks. After review fixes rerun the build and affected tests.
+3. Update applicable README, guides, examples and comments along with behavior. Update private `docs/status.md` after merge.
+4. Before first push, inspect `git diff main...HEAD`, commit messages, PR text and `git log -p main..HEAD` for privacy. Rewrite any private content out of all commits before publication.
+5. Code gets one fresh independent review against the checklist below; fix or answer blocking and should-fix findings. Docs and chore-only changes need the privacy check but no model review. A dedicated test-quality review applies when adding test classes or rewriting tests.
+6. Push and create a neutral PR describing changes and verification; wait for CI and address failures. The always-running `gate` is the intended required check. Repository setting changes need owner approval.
+7. Squash merge only after green CI and explicit owner approval in the current session, using the configured git email. Outward actions beyond this flow need explicit approval.
+8. **Deployment is on hold.** CD publishes and promotes no image. A merged change is not a delivered replacement; cutover and saved-data handling require separate owner authorization and a reviewed plan.
 
 ## Code review checklist
 
@@ -208,14 +140,13 @@ Reviewers (human, subagent or CI bot) check, in this order:
 1. **Privacy**: any personal data, real identifiers, secrets or tokens in code, tests, logs,
    commit messages or PR text? Blocking.
 2. **Secret leakage at runtime**: new log lines, exception messages or HTTP clients that could
-   print the bot token, message text or user data (see `src/Assistant.Host/AGENTS.md`). Blocking.
+   print the bot token, message text or user data (avoid logging secrets and personal data). Blocking.
 3. **Necessity and assumptions**: apply the skeptical-review rule above to the changed scope,
    including inherited requirements and architectural choices, not just adherence to the plan.
 4. **Correctness**: exactly-once handling of updates, idempotent storage, cancellation, retries.
 5. **Tests**: new behaviour has tests that meet the quality rules in `tests/AGENTS.md` (each
    test can fail for a real bug; no tests that check nothing); test data is synthetic.
-6. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
-   infrastructure types do not leak into Application.
+6. **Simplicity**: keep the executable and dependencies proportionate to its actual behavior.
 7. **Workflows**: `.github/AGENTS.md` rules hold.
 8. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
    invariant goes into the matching local `AGENTS.md`.
