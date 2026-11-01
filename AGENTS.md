@@ -18,9 +18,46 @@ command only as an example next to a generic fallback.
 
 ## Planning and working with the owner
 
+- **Everything may be reconsidered with reasons.** Requirements, functionality, architecture
+  and development rules are open to revision, including previously approved specs and ADRs.
+  Briefly present the concrete problem/evidence, proposed alternative, expected benefit and
+  cost or lost behaviour; recommend an option and let the owner decide whether to rework it.
+  Prior approval is not proof that a choice is still justified. Until a replacement is agreed,
+  follow the current decision; do not treat this rule as permission for unilateral scope changes.
 - **Iterative delivery.** Foundation and delivery pipeline first, then features, one milestone at
   a time. Write a milestone's spec (in the specs repo) when the milestone starts, get the owner's
   approval, then write the plan.
+- **Prove the simplest path first.** Before expanding feature scope, demonstrate one small,
+  useful end-to-end scenario through real Telegram, including persisted state where relevant.
+  Use its observed result to decide the next increment; testing rules live in `tests/AGENTS.md`.
+- **Review the design before planning implementation.** A fresh reviewer checks each proposed
+  milestone design before an executable plan or implementation starts. Ask which requirements
+  serve a current user scenario, which can be dropped, and whether existing code or a smaller
+  design is sufficient. Challenge speculative extensibility, new services, dependencies,
+  abstractions, state machines and recovery guarantees; specs and ADRs are not proof of need.
+  Record a concise verdict and resolve blocking and should-fix findings before proceeding.
+  A material scope or architecture change reopens the affected design decision. This checks the
+  proposed design; the existing code review checks its implementation. Documentation-only
+  corrections do not need a separate design review.
+- **Reviewers must challenge inherited assumptions.** Design and implementation reviewers
+  should be deliberately skeptical and exacting, including about decisions made by earlier
+  models. Compliance with a spec, ADR, plan or existing code is not sufficient: trace important
+  constraints back to a current user need or demonstrated technical limitation. Distinguish
+  owner requirements from model assumptions and derived choices. If an upstream choice is
+  unjustified, identify the dependent decisions it affects and propose a smaller alternative;
+  do not let repeated citations turn that assumption into an unquestionable requirement.
+  Raise material upstream flaws even when the implementation follows the plan correctly.
+  Resolve them with the owner before dependent work proceeds. Findings need concrete evidence
+  and consequences; skepticism is not a quota of complaints or a reason for speculative rewrites.
+- **Periodic simplification review.** At each milestone boundary, before planning the next,
+  challenge the current requirements, specs, decisions and implementation against actual usage
+  and current need. Review earlier when proposing a new subsystem or dependency. Include this
+  in the existing change review when possible; it is not another per-PR review gate. Look for
+  speculative requirements, model-generated overengineering, unused paths and simpler existing
+  mechanisms. For up to three highest-impact findings, record the evidence, smaller alternative
+  and owner's decision to keep, simplify, retire or defer. Keep product-specific findings and
+  decisions in `../assistant-specs`. Findings do not authorize deleting behaviour/data or
+  expanding scope; obtain the owner's decision before implementation unless already authorized.
 - **Plans for weaker implementers.** Plans are executed by fresh, less capable models with zero
   context: exact file paths, complete code, exact package versions, exact commands with expected
   output, a verification after each step, feature-specific pitfalls named. No "etc.", "similar to
@@ -172,13 +209,15 @@ Reviewers (human, subagent or CI bot) check, in this order:
    commit messages or PR text? Blocking.
 2. **Secret leakage at runtime**: new log lines, exception messages or HTTP clients that could
    print the bot token, message text or user data (see `src/Assistant.Host/AGENTS.md`). Blocking.
-3. **Correctness**: exactly-once handling of updates, idempotent storage, cancellation, retries.
-4. **Tests**: new behaviour has tests that meet the quality rules in `tests/AGENTS.md` (each
+3. **Necessity and assumptions**: apply the skeptical-review rule above to the changed scope,
+   including inherited requirements and architectural choices, not just adherence to the plan.
+4. **Correctness**: exactly-once handling of updates, idempotent storage, cancellation, retries.
+5. **Tests**: new behaviour has tests that meet the quality rules in `tests/AGENTS.md` (each
    test can fail for a real bug; no tests that check nothing); test data is synthetic.
-5. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
+6. **Layering**: Domain has no dependencies; Application depends only on Domain and abstractions;
    infrastructure types do not leak into Application.
-6. **Workflows**: `.github/AGENTS.md` rules hold.
-7. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
+7. **Workflows**: `.github/AGENTS.md` rules hold.
+8. **Docs**: behaviour changes come with the doc updates from delivery step 3; a gotcha or
    invariant goes into the matching local `AGENTS.md`.
 
 Report findings as blocking / should-fix / nit. Review comments on the public repo follow the
