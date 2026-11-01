@@ -47,7 +47,8 @@ public sealed class TelegramBotTests(PostgresFixture fixture) : IClassFixture<Po
 
     private TelegramBot Create(HttpClient telegram, HttpClient model) => new(telegram, "synthetic-token", 111,
         "example_bot", new HashSet<long> { 101 }, new HashSet<long> { 501 }, Subject,
-        new ReadingExtractor(model, "synthetic-key", "synthetic-model"), new ObservationStore(fixture.Options), fixture.Options);
+        new ReadingExtractor(model, "synthetic-key", "synthetic-model"), new ObservationStore(fixture.Options), fixture.Options,
+        new RecipeGenerator(model, "synthetic-key", "synthetic-model"));
 
     private static (long MessageId, string Text) Reply(string json)
     {
@@ -147,7 +148,8 @@ public sealed class TelegramBotTests(PostgresFixture fixture) : IClassFixture<Po
             .Options;
         var bot = new TelegramBot(telegram, "synthetic-token", 111, "example_bot",
             new HashSet<long> { 101 }, new HashSet<long> { 501 }, Subject,
-            new ReadingExtractor(model, "synthetic-key", "synthetic-model"), new ObservationStore(options), options);
+            new ReadingExtractor(model, "synthetic-key", "synthetic-model"), new ObservationStore(options), options,
+            new RecipeGenerator(model, "synthetic-key", "synthetic-model"));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>

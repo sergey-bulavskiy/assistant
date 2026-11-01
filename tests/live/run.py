@@ -1,5 +1,6 @@
 import json
 import hashlib
+from decimal import Decimal
 import os
 from pathlib import Path
 import queue
@@ -10,6 +11,7 @@ import time
 import uuid
 
 from verify import check, VerificationFailure
+from recipe_scenario import execute as execute_recipe
 
 ROOT = Path(__file__).resolve().parents[2]
 DLL = ROOT / 'src' / 'Assistant' / 'bin' / 'Release' / 'net10.0' / 'Assistant.dll'
@@ -22,6 +24,12 @@ FROM observations ORDER BY "Id") t;'''
 def run(args, timeout=20):
     return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           text=True, timeout=timeout).stdout.strip()
+
+
+def receipt_value(value):
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError('unsupported receipt value')
 
 
 def witness(prompt, timeout=120):
@@ -53,6 +61,7 @@ class Child:
         self.events = queue.Queue()
         self.count = 0
         self.requests = 0
+        self.recipe_requests = 0
         self.stopped = False
         self.process = subprocess.Popen(['dotnet', str(DLL)], cwd=ROOT, env=environment,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -61,7 +70,7 @@ class Child:
             assert self.process.stdout is not None
             for line in self.process.stdout:
                 marker = line.strip()
-                if marker in ('polling_ready', 'extraction_requested', 'extraction_completed'):
+                if marker in ('polling_ready', 'extraction_requested', 'extraction_completed', 'recipe_requested'):
                     self.events.put(marker)
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
@@ -79,6 +88,8 @@ class Child:
                 self.count += 1
             elif current == 'extraction_requested':
                 self.requests += 1
+            elif current == 'recipe_requested':
+                self.recipe_requests += 1
             if current == marker:
                 return
         raise VerificationFailure('application marker timeout')
@@ -93,6 +104,8 @@ class Child:
                 self.count += 1
             elif marker == 'extraction_requested':
                 self.requests += 1
+            elif marker == 'recipe_requested':
+                self.recipe_requests += 1
 
     def stop(self):
         if self.stopped:
@@ -135,6 +148,9 @@ def private_directory(path):
 def main():
     if len(sys.argv) != 2:
         raise VerificationFailure('supply a private evidence directory')
+    scenario = os.environ.get('ASSISTANT_LIVE_SCENARIO', 'reading')
+    if scenario not in ('reading', 'recipe'):
+        raise VerificationFailure('unknown live scenario')
     for name in ('TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'OPENAI_MODEL', 'SUBJECT_ID', 'ALLOWED_USERS', 'ALLOWED_CHATS'):
         if not os.environ.get(name):
             raise VerificationFailure('required application configuration unavailable')
@@ -148,13 +164,13 @@ def main():
         raise VerificationFailure('commit the exact application under test before running')
     run_id = uuid.uuid4().hex
     receipt_path = directory / ('foundation-' + run_id + '.json')
-    receipt = {'run_id': run_id, 'revision': revision, 'outcome': 'unavailable'}
+    receipt = {'run_id': run_id, 'revision': revision, 'scenario': scenario, 'outcome': 'unavailable'}
     container = None
     child = None
 
     def save():
         temp = receipt_path.with_suffix('.tmp')
-        temp.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+        temp.write_text(json.dumps(receipt, ensure_ascii=False, indent=2, default=receipt_value), encoding='utf-8')
         temp.replace(receipt_path)
 
     save()
@@ -189,32 +205,42 @@ def main():
             f'Host=127.0.0.1;Port={port};Database=runner;Username=postgres;Password=synthetic-only'))
         child = Child(environment)
         child.wait_for('polling_ready', 60)
-        if rows(container) != []:
-            raise VerificationFailure('test database was not empty')
-        source = witness('Send /record 7.8 mmol/L in the selected General topic; enter source witness JSON:')
-        receipt['source'] = source
-        save()
-        child.wait_for('extraction_completed', 10)
-        time.sleep(0.2)
-        child.drain()
-        if child.count != 1:
-            raise VerificationFailure('expected exactly one successful extraction')
-        observed_rows = rows(container)
-        receipt['rows'] = observed_rows
-        save()
-        child.stop()
-        if child.count != 1 or child.requests != 1:
-            raise VerificationFailure('expected exactly one extraction request and result')
-        child = Child(environment)
-        child.wait_for('polling_ready', 60)
-        last = witness('Send /last in the same topic; enter linked reply witness JSON:')
-        receipt['last'] = last
-        save()
-        child.stop()
-        if child.requests != 0 or child.count != 0:
-            raise VerificationFailure('last triggered an extraction')
-        check(observed_rows, subject, source, last)
-        receipt.update(outcome='pass', source=source, last=last, rows=observed_rows)
+        def restart():
+            nonlocal child
+            child.stop()
+            child = Child(environment)
+            child.wait_for('polling_ready', 60)
+            return child
+
+        if scenario == 'recipe':
+            execute_recipe(container, subject, child, restart, run, witness, receipt, save)
+        else:
+            if rows(container) != []:
+                raise VerificationFailure('test database was not empty')
+            source = witness('Send /record 7.8 mmol/L in the selected General topic; enter source witness JSON:')
+            receipt['source'] = source
+            save()
+            child.wait_for('extraction_completed', 10)
+            time.sleep(0.2)
+            child.drain()
+            if child.count != 1:
+                raise VerificationFailure('expected exactly one successful extraction')
+            observed_rows = rows(container)
+            receipt['rows'] = observed_rows
+            save()
+            child.stop()
+            if child.count != 1 or child.requests != 1:
+                raise VerificationFailure('expected exactly one extraction request and result')
+            child = Child(environment)
+            child.wait_for('polling_ready', 60)
+            last = witness('Send /last in the same topic; enter linked reply witness JSON:')
+            receipt['last'] = last
+            save()
+            child.stop()
+            if child.requests != 0 or child.count != 0:
+                raise VerificationFailure('last triggered an extraction')
+            check(observed_rows, subject, source, last)
+            receipt.update(outcome='pass', source=source, last=last, rows=observed_rows)
     except KeyboardInterrupt:
         receipt.update(outcome='fail', reason='interrupted')
     except Exception as error:
