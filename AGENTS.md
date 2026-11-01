@@ -18,6 +18,12 @@ command only as an example next to a generic fallback.
 
 ## Planning and working with the owner
 
+- **Everything may be reconsidered with reasons.** Requirements, functionality, architecture
+  and development rules are open to revision, including previously approved specs and ADRs.
+  Briefly present the concrete problem/evidence, proposed alternative, expected benefit and
+  cost or lost behaviour; recommend an option and let the owner decide whether to rework it.
+  Prior approval is not proof that a choice is still justified. Until a replacement is agreed,
+  follow the current decision; do not treat this rule as permission for unilateral scope changes.
 - **Iterative delivery.** Foundation and delivery pipeline first, then features, one milestone at
   a time. Write a milestone's spec (in the specs repo) when the milestone starts, get the owner's
   approval, then write the plan.
