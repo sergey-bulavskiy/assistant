@@ -24,6 +24,15 @@ command only as an example next to a generic fallback.
 - **Prove the simplest path first.** Before expanding feature scope, demonstrate one small,
   useful end-to-end scenario through real Telegram, including persisted state where relevant.
   Use its observed result to decide the next increment; testing rules live in `tests/AGENTS.md`.
+- **Review the design before planning implementation.** A fresh reviewer checks each proposed
+  milestone design before an executable plan or implementation starts. Ask which requirements
+  serve a current user scenario, which can be dropped, and whether existing code or a smaller
+  design is sufficient. Challenge speculative extensibility, new services, dependencies,
+  abstractions, state machines and recovery guarantees; specs and ADRs are not proof of need.
+  Record a concise verdict and resolve blocking and should-fix findings before proceeding.
+  A material scope or architecture change reopens the affected design decision. This checks the
+  proposed design; the existing code review checks its implementation. Documentation-only
+  corrections do not need a separate design review.
 - **Periodic simplification review.** At each milestone boundary, before planning the next,
   challenge the current requirements, specs, decisions and implementation against actual usage
   and current need. Review earlier when proposing a new subsystem or dependency. Include this
