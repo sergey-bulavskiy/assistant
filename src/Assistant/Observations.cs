@@ -19,6 +19,9 @@ public sealed class Observation
 public sealed class ObservationDb(DbContextOptions<ObservationDb> options) : DbContext(options)
 {
     public DbSet<Observation> Observations => Set<Observation>();
+    public DbSet<FoodPreference> FoodPreferences => Set<FoodPreference>();
+    public DbSet<SavedRecipe> SavedRecipes => Set<SavedRecipe>();
+    public DbSet<RecipeAttempt> RecipeAttempts => Set<RecipeAttempt>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -29,6 +32,27 @@ public sealed class ObservationDb(DbContextOptions<ObservationDb> options) : DbC
         observation.Property(x => x.Value).HasColumnType("numeric");
         observation.HasIndex(x => new { x.BotId, x.ChatId, x.MessageId }).IsUnique();
         observation.HasIndex(x => new { x.SubjectId, x.BotId, x.ChatId, x.TopicId, x.Id });
+
+        var preference = model.Entity<FoodPreference>();
+        preference.ToTable("food_preferences");
+        preference.HasKey(x => x.Id);
+        preference.Property(x => x.Text).HasMaxLength(500).IsRequired();
+        preference.HasIndex(x => new { x.BotId, x.ChatId, x.MessageId }).IsUnique();
+        preference.HasIndex(x => new { x.SubjectId, x.BotId, x.ChatId, x.TopicId, x.Id });
+
+        var recipe = model.Entity<SavedRecipe>();
+        recipe.ToTable("saved_recipes");
+        recipe.HasKey(x => x.Id);
+        recipe.Property(x => x.Title).IsRequired();
+        recipe.Property(x => x.IngredientsJson).HasColumnType("jsonb").IsRequired();
+        recipe.Property(x => x.StepsJson).HasColumnType("jsonb").IsRequired();
+        recipe.HasIndex(x => new { x.BotId, x.ChatId, x.MessageId }).IsUnique();
+        recipe.HasIndex(x => new { x.SubjectId, x.BotId, x.ChatId, x.TopicId, x.Id });
+
+        var attempt = model.Entity<RecipeAttempt>();
+        attempt.ToTable("recipe_attempts");
+        attempt.HasKey(x => x.Id);
+        attempt.HasIndex(x => new { x.BotId, x.ChatId, x.MessageId }).IsUnique();
     }
 }
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -8,7 +9,8 @@ namespace Assistant;
 
 public sealed class TelegramBot(HttpClient telegram, string token, long botId, string username,
     IReadOnlySet<long> users, IReadOnlySet<long> chats, Guid subjectId,
-    ReadingExtractor extractor, ObservationStore store, DbContextOptions<ObservationDb> options)
+    ReadingExtractor extractor, ObservationStore store, DbContextOptions<ObservationDb> options,
+    RecipeGenerator recipeGenerator)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -46,7 +48,83 @@ public sealed class TelegramBot(HttpClient telegram, string token, long botId, s
         long? topic = message.TryGetProperty("message_thread_id", out var topicElement) && topicElement.TryGetInt64(out var topicId)
             ? topicId : null;
 
-        if (commandParts[0] == "/last")
+        if (commandParts[0] == "/prefer")
+        {
+            if (split.Length != 2 || string.IsNullOrWhiteSpace(split[1]) || split[1].EnumerateRunes().Count() > 500)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Укажите предпочтение длиной до 500 символов.", cancellationToken);
+                return;
+            }
+            var saved = await new PreferenceStore(options).SaveAsync(new FoodPreference
+            {
+                SubjectId = subjectId, BotId = botId, ChatId = chatId, TopicId = topic,
+                MessageId = messageId, Text = split[1]
+            }, cancellationToken);
+            await ReplyAsync(chatId, messageId, topic,
+                saved ? $"Предпочтение сохранено: {split[1]}" : "Эта команда уже обработана.", cancellationToken);
+        }
+        else if (commandParts[0] == "/recipe" && split.Length == 1)
+        {
+            var recipes = new RecipeStore(options);
+            var existing = await recipes.FindSourceAsync(botId, chatId, messageId, cancellationToken);
+            if (existing is not null)
+            {
+                await ReplyAsync(chatId, messageId, topic, RecipeFormat.Render(existing), cancellationToken);
+                return;
+            }
+            var preference = await new PreferenceStore(options).LatestAsync(subjectId, botId, chatId, topic, cancellationToken);
+            if (preference is null)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Сначала сохраните предпочтение командой /prefer.", cancellationToken);
+                return;
+            }
+            if (!await recipes.StartAttemptAsync(botId, chatId, messageId, cancellationToken))
+            {
+                await ReplyAsync(chatId, messageId, topic, "Эта попытка уже обработана. Отправьте новую команду /recipe.", cancellationToken);
+                return;
+            }
+            RecipeDraft? draft;
+            try { draft = await recipeGenerator.GenerateAsync(preference.Text, cancellationToken); }
+            catch (HttpRequestException)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Сервис временно недоступен. Отправьте новую команду /recipe.", cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Сервис временно недоступен. Отправьте новую команду /recipe.", cancellationToken);
+                return;
+            }
+            if (draft is null)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Не удалось составить рецепт. Отправьте новую команду /recipe.", cancellationToken);
+                return;
+            }
+            var candidate = new SavedRecipe
+            {
+                SubjectId = subjectId, BotId = botId, ChatId = chatId, TopicId = topic, MessageId = messageId,
+                Title = draft.Title, IngredientsJson = JsonSerializer.Serialize(draft.Ingredients),
+                StepsJson = JsonSerializer.Serialize(draft.Steps)
+            };
+            // Reserve the largest positive bigint ID so a generated ID cannot make the sent text longer.
+            candidate.Id = long.MaxValue;
+            var tooLong = RecipeFormat.Render(candidate).Length > 4096 || RecipeFormat.Shopping(candidate).Length > 4096;
+            candidate.Id = 0;
+            if (tooLong)
+            {
+                await ReplyAsync(chatId, messageId, topic, "Рецепт слишком длинный. Отправьте новую команду /recipe.", cancellationToken);
+                return;
+            }
+            var saved = await recipes.SaveAsync(candidate, cancellationToken);
+            await ReplyAsync(chatId, messageId, topic, RecipeFormat.Render(saved), cancellationToken);
+        }
+        else if (commandParts[0] == "/shopping" && split.Length == 1)
+        {
+            var latest = await new RecipeStore(options).LatestAsync(subjectId, botId, chatId, topic, cancellationToken);
+            await ReplyAsync(chatId, messageId, topic,
+                latest is null ? "Сохранённых рецептов пока нет." : RecipeFormat.Shopping(latest), cancellationToken);
+        }
+        else if (commandParts[0] == "/last")
         {
             if (split.Length != 1) return;
             var last = await store.LatestAsync(subjectId, botId, chatId, topic, cancellationToken);
@@ -93,7 +171,7 @@ public sealed class TelegramBot(HttpClient telegram, string token, long botId, s
         _ = await CallAsync("sendMessage", new
         {
             chat_id = chatId, message_thread_id = topic,
-            reply_parameters = new { message_id = messageId }, text
+            reply_parameters = new { message_id = messageId, allow_sending_without_reply = true }, text
         }, cancellationToken);
     }
 }

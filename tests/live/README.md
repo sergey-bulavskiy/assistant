@@ -38,3 +38,19 @@ containers. Record any unresolved cleanup as a failure.
 
 The runner verifies this one synthetic reading and its source, a restart, and deterministic
 readback. It does not establish recipe, photo, medical, or multi-subject behavior.
+
+## Saved-recipe scenario
+
+Set `ASSISTANT_LIVE_SCENARIO=recipe` in the runner environment and run the same command. Use
+the authorized user session to send `/prefer Please avoid sesame in the recipe`; the first JSON
+witness has `bot_id`, `chat_id`, `message_id`, `reply_bot_id`, `reply_to`, and `reply_text`.
+After the runner restarts the process, send `/recipe` and provide the same witness fields for
+that command and its linked reply. The runner writes the selected synthetic recipe to the
+private receipt. The independent verification agent inspects its title, ingredients and steps
+for coherence and for sesame or obvious translations and synonyms, then enters
+`{"semantic_check":"pass"}` only if that specific example passes. Finally send `/shopping` and
+provide `chat_id`, `message_id`, `reply_bot_id`, `reply_to`, and `reply_text` from the observed
+command and linked reply. The runner checks the exact saved recipe, source and ingredient amounts
+and rejects any additional recipe-provider request. It does not directly observe the live provider
+request body; a separate offline database-to-handler test checks that the saved preference is sent.
+This single example does not establish general preference compliance or medical safety.

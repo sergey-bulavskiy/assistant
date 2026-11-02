@@ -45,7 +45,8 @@ Environment.ExitCode = await ExitBoundary.RunAsync(async () =>
     var username = me.GetProperty("username").GetString() ?? throw new InvalidOperationException("Missing bot username.");
     await using (var db = new ObservationDb(options)) await db.Database.MigrateAsync(stop.Token);
     var bot = new TelegramBot(telegram, token, botId, username, users, chats, subject,
-        new ReadingExtractor(openai, key, model), new ObservationStore(options), options);
+        new ReadingExtractor(openai, key, model), new ObservationStore(options), options,
+        new RecipeGenerator(openai, key, model));
     Console.WriteLine("polling_ready");
     await TelegramPolling.RunAsync(
         (offset, cancellation) => bot.CallAsync("getUpdates",

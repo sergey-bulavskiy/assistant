@@ -1,4 +1,5 @@
 import contextlib
+from decimal import Decimal
 import io
 import os
 from pathlib import Path
@@ -31,6 +32,15 @@ class FakeChild:
 
 
 class RunnerCleanupTests(unittest.TestCase):
+    def test_rows_parser_rejects_difference_beyond_float_precision(self):
+        raw = '[{"subject_id":"11111111-1111-1111-1111-111111111111","bot_id":111,' \
+              '"chat_id":222,"message_id":333,"topic_id":null,"value":7.8000000000000001,"unit":"mmol/L"}]'
+        with mock.patch.object(runner, 'run', return_value=raw):
+            rows = runner.rows('synthetic-container')
+        self.assertEqual(Decimal('7.8000000000000001'), rows[0]['value'])
+        with self.assertRaises(VerificationFailure):
+            runner.check(rows, SUBJECT, SOURCE, LAST)
+
     def exercise(self, second_witness, request_during_last=False):
         FakeChild.instances = []
         FakeChild.request_during_last = request_during_last
