@@ -1,3 +1,4 @@
+# Legacy application configuration only. Not compatible with the replacement; deployment is on hold.
 name: assistant
 services:
   postgres:
@@ -32,7 +33,7 @@ services:
       DEBUG_TRACES_MAX_STORAGE_BYTES: ${DEBUG_TRACES_MAX_STORAGE_BYTES:-104857600}
       DEBUG_TRACES_MAX_EVENTS: ${DEBUG_TRACES_MAX_EVENTS:-256}
       # LLM_MODELS has no default: model access stays off until explicitly configured and logged in.
-      # See README "Set up the General assistant". Every *limit*
+      # See the previous release documentation in Git history. Every *limit*
       # below does get a default matching .env.example, since the app itself still requires them
       # (LlmConfigParser turns the whole config off if any limit is missing/invalid) -- an .env that
       # only sets LLM_MODELS still receives valid limits.
