@@ -6,6 +6,8 @@ This repository contains a small .NET 10 Telegram bot under development. An allo
 
 If a recipe attempt fails or its outcome is uncertain, send a new `/recipe` command to try again. Redelivery of the same command will not make another model request, even if the application stopped before making the original request.
 
+Replies are linked to the command when it is available. If that message was deleted, the bot sends the result in the same chat and topic without a reply link.
+
 The application requires `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `DATABASE_CONNECTION`, `SUBJECT_ID` (a nonempty GUID), and comma-separated `ALLOWED_USERS` and `ALLOWED_CHATS`. Keep credentials and real identifiers outside the repository. It applies its EF migrations at startup, so use only a dedicated, isolated database for development and tests. Never point this replacement at the existing home database.
 
 Build and run the checks:

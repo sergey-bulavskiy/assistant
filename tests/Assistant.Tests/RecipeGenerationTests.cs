@@ -37,10 +37,22 @@ public sealed class RecipeGenerationTests(PostgresFixture fixture) : IClassFixtu
     {
         public List<string> Replies { get; } = [];
         public bool Fail { get; set; }
+        public long? MissingSourceId { get; set; }
+        public List<(long Chat, long? Topic, long? ReplyTo, string Text)> Delivered { get; } = [];
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var body = await request.Content!.ReadAsStringAsync(token);
             if (Fail) return new HttpResponseMessage(HttpStatusCode.BadGateway);
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var parameters = root.GetProperty("reply_parameters");
+            var source = parameters.GetProperty("message_id").GetInt64();
+            var missing = source == MissingSourceId;
+            if (missing && (!parameters.TryGetProperty("allow_sending_without_reply", out var allow) || !allow.GetBoolean()))
+                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+            var topic = root.TryGetProperty("message_thread_id", out var thread) ? thread.GetInt64() : (long?)null;
+            Delivered.Add((root.GetProperty("chat_id").GetInt64(), topic, missing ? null : source,
+                root.GetProperty("text").GetString()!));
             Replies.Add(body);
             return new HttpResponseMessage(HttpStatusCode.OK)
                 { Content = new StringContent("{\"ok\":true,\"result\":{}}", Encoding.UTF8, "application/json") };
@@ -111,6 +123,46 @@ public sealed class RecipeGenerationTests(PostgresFixture fixture) : IClassFixtu
         var row = await db.SavedRecipes.AsNoTracking().SingleAsync(x => x.ChatId == 503 && x.MessageId == 811);
         Assert.Equal((811L, $"Рецепт #{row.Id}\nИсточник: 111/503/811\nСуп\nИнгредиенты:\n- Вода: 250 г\n- Тыква: 125.5 г\nПриготовление:\nНарежьте тыкву.\nСварите в воде."), Reply(Assert.Single(tg.Replies)));
         Assert.Equal(1, api.Calls);
+    }
+
+    [Fact]
+    public async Task DeletedSourceFallbackLetsPollingProcessNextUpdateWithoutRegenerating()
+    {
+        const long chat = 516;
+        const long topic = 17;
+        var tg = new TelegramHandler { MissingSourceId = 880 };
+        var api = new ModelHandler();
+        using var telegram = new HttpClient(tg);
+        using var model = new HttpClient(api);
+        var store = new RecipeStore(fixture.Options);
+        var saved = await store.SaveAsync(new SavedRecipe { SubjectId = Subject, BotId = 111, ChatId = chat,
+            TopicId = topic, MessageId = 880, Title = "Saved", IngredientsJson = "[{\"Name\":\"water\",\"Grams\":10}]",
+            StepsJson = "[\"mix\"]" }, CancellationToken.None);
+        var batch = JsonSerializer.SerializeToElement(new[] {
+            new { update_id = 1001, message = Update(chat, 880, "/recipe", topic).GetProperty("message") },
+            new { update_id = 1002, message = Update(chat, 881, "/shopping", topic).GetProperty("message") }
+        });
+        var handled = new List<long>();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Task<JsonElement> Get(long offset, CancellationToken token) => Task.FromResult(batch);
+        async Task Handle(JsonElement update, CancellationToken token)
+        {
+            await Bot(telegram, model, fixture.Options, chat).HandleAsync(update, token);
+            var id = update.GetProperty("update_id").GetInt64();
+            handled.Add(id);
+            if (id == 1002) stop.Cancel();
+        }
+
+        await TelegramPolling.RunAsync(Get, Handle, TimeSpan.Zero, stop.Token);
+
+        Assert.Equal(new long[] { 1001, 1002 }, handled);
+        Assert.Equal(0, api.Calls);
+        Assert.Equal((chat, (long?)topic, (long?)null,
+            $"Рецепт #{saved.Id}\nИсточник: 111/516/880\nSaved\nИнгредиенты:\n- water: 10 г\nПриготовление:\nmix"), tg.Delivered[0]);
+        Assert.Equal((chat, (long?)topic, (long?)881,
+            $"Список покупок для рецепта #{saved.Id}\nИсточник: 111/516/880\n- water: 10 г"), tg.Delivered[1]);
+        await using var db = new ObservationDb(fixture.Options);
+        Assert.Equal(1, await db.SavedRecipes.CountAsync(x => x.BotId == 111 && x.ChatId == chat && x.MessageId == 880));
     }
 
     [Fact]

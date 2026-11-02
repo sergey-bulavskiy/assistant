@@ -171,7 +171,7 @@ public sealed class TelegramBot(HttpClient telegram, string token, long botId, s
         _ = await CallAsync("sendMessage", new
         {
             chat_id = chatId, message_thread_id = topic,
-            reply_parameters = new { message_id = messageId }, text
+            reply_parameters = new { message_id = messageId, allow_sending_without_reply = true }, text
         }, cancellationToken);
     }
 }

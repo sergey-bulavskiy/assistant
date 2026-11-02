@@ -129,7 +129,7 @@ class Child:
 def rows(container):
     result = run(['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'runner',
                   '-t', '-A', '-c', SQL])
-    return json.loads(result)
+    return json.loads(result, parse_float=Decimal)
 
 
 def private_directory(path):
